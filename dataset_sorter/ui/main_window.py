@@ -461,7 +461,11 @@ class MainWindow(QMainWindow):
                     self.manual_overrides.pop(old_tag)
             if old_tag in self.deleted_tags:
                 self.deleted_tags.discard(old_tag)
-                self.deleted_tags.add(new_name)
+                # Only propagate deletion if new_name doesn't already
+                # exist as a non-deleted tag; otherwise the deletion
+                # would silently swallow an unrelated tag.
+                if new_name not in self.tag_counts or new_name in self.deleted_tags:
+                    self.deleted_tags.add(new_name)
         self._after_tag_edit()
         self.override_panel.set_editor_info(f"Renamed ({count} changes).")
 

@@ -210,6 +210,7 @@ class ExportWorker(QThread):
 
             if not is_path_inside(folder_path, self.output_dir):
                 errors += len(b_entries)
+                self.progress.emit(copied + errors, total)
                 continue
 
             folder_path.mkdir(parents=True, exist_ok=True)
