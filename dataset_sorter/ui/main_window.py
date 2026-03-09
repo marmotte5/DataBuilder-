@@ -508,7 +508,9 @@ class MainWindow(QMainWindow):
             new_tag = tag.replace(search, replace).strip()
             if new_tag != tag:
                 del self.manual_overrides[tag]
-                if new_tag:
+                # Only carry over the override if the new key doesn't
+                # already have its own override (avoid silent overwrite).
+                if new_tag and new_tag not in self.manual_overrides:
                     updates[new_tag] = val
         self.manual_overrides.update(updates)
         new_del = set()
@@ -573,15 +575,22 @@ class MainWindow(QMainWindow):
 
         # Load bucket_names (full replace)
         self.bucket_names = {i: "bucket" for i in range(1, MAX_BUCKETS + 1)}
-        for k, v in data.get("bucket_names", {}).items():
-            try:
-                self.bucket_names[int(k)] = sanitize_folder_name(str(v))
-            except (ValueError, KeyError):
-                pass
+        raw_names = data.get("bucket_names", {})
+        if isinstance(raw_names, dict):
+            for k, v in raw_names.items():
+                try:
+                    key = int(k)
+                    if 1 <= key <= MAX_BUCKETS:
+                        self.bucket_names[key] = sanitize_folder_name(str(v))
+                except (ValueError, TypeError):
+                    pass
 
         # Validate deleted_tags
         raw_deleted = data.get("deleted_tags", [])
-        self.deleted_tags = set(raw_deleted) if isinstance(raw_deleted, list) else set()
+        if isinstance(raw_deleted, list):
+            self.deleted_tags = {str(t) for t in raw_deleted if isinstance(t, str)}
+        else:
+            self.deleted_tags = set()
 
         if "source_dir" in data:
             self.source_input.setText(str(data["source_dir"]))

@@ -489,9 +489,7 @@ def recommend(
     if not is_lora:
         if size_cat == "small" and total_images >= 20:
             config.caption_dropout_rate = 0.05
-        elif size_cat in ("medium", "large"):
-            config.caption_dropout_rate = 0.1
-        elif size_cat == "very_large":
+        elif size_cat in ("medium", "large", "very_large"):
             config.caption_dropout_rate = 0.1
     else:
         if size_cat == "small" and total_images >= 30:
