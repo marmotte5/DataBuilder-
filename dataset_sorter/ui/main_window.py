@@ -1,4 +1,7 @@
-"""Main application window — Dataset Sorter."""
+"""Main application window — Dataset Sorter.
+
+Optimized for datasets up to 1,000,000 images.
+"""
 
 import json
 import sys
@@ -25,7 +28,7 @@ from dataset_sorter import recommender
 
 from dataset_sorter.ui.theme import (
     get_stylesheet, COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE,
+    SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, DANGER_BUTTON_STYLE,
 )
 from dataset_sorter.ui.tag_panel import TagPanel
 from dataset_sorter.ui.override_panel import OverridePanel
@@ -91,7 +94,7 @@ class MainWindow(QMainWindow):
         top.addWidget(btn_out)
         root.addLayout(top)
 
-        # Scan settings bar — workers, GPU, scan button
+        # Scan settings bar — workers, GPU, scan button, cancel button
         scan_bar = QHBoxLayout()
         scan_bar.setSpacing(8)
 
@@ -121,6 +124,12 @@ class MainWindow(QMainWindow):
         scan_bar.addWidget(self.gpu_checkbox)
 
         scan_bar.addStretch()
+
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
+        self.btn_cancel.setVisible(False)
+        self.btn_cancel.clicked.connect(self._cancel_operation)
+        scan_bar.addWidget(self.btn_cancel)
 
         self.btn_scan = QPushButton("Scan")
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
@@ -204,6 +213,17 @@ class MainWindow(QMainWindow):
         self.btn_scan.setEnabled(enabled)
         self.btn_dry.setEnabled(enabled)
         self.btn_export.setEnabled(enabled)
+        self.btn_cancel.setVisible(not enabled)
+
+    # -- Cancel --
+
+    def _cancel_operation(self):
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.cancel()
+            self.statusBar().showMessage("Cancelling scan...")
+        if self._export_worker and self._export_worker.isRunning():
+            self._export_worker.cancel()
+            self.statusBar().showMessage("Cancelling export...")
 
     # -- Browsing & Scan --
 
@@ -248,6 +268,7 @@ class MainWindow(QMainWindow):
             use_gpu=use_gpu,
         )
         self._scan_worker.progress.connect(self._on_scan_progress)
+        self._scan_worker.status.connect(self._on_worker_status)
         self._scan_worker.finished_scan.connect(self._on_scan_finished)
         self._scan_worker.start()
 
@@ -255,10 +276,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
+    def _on_worker_status(self, msg):
+        self.statusBar().showMessage(msg)
+
     def _on_scan_finished(self, entries):
         self.entries = entries
         self.progress_bar.setVisible(False)
         self._set_controls_enabled(True)
+
+        if not entries:
+            self.statusBar().showMessage("Scan returned no results (cancelled or empty).")
+            return
+
+        self.statusBar().showMessage(f"Processing {len(entries)} entries...")
+        QApplication.processEvents()
 
         self._rebuild_tag_index()
         self._compute_auto_buckets()
@@ -294,7 +325,6 @@ class MainWindow(QMainWindow):
         counts = np.array([self.tag_counts[t] for t in tags])
 
         if counts.min() == counts.max():
-            # All tags have equal count — assign all to bucket 1
             for tag in tags:
                 self.tag_auto_buckets[tag] = 1
             return
@@ -461,9 +491,6 @@ class MainWindow(QMainWindow):
                     self.manual_overrides.pop(old_tag)
             if old_tag in self.deleted_tags:
                 self.deleted_tags.discard(old_tag)
-                # Only propagate deletion if new_name doesn't already
-                # exist as a non-deleted tag; otherwise the deletion
-                # would silently swallow an unrelated tag.
                 if new_name not in self.tag_counts or new_name in self.deleted_tags:
                     self.deleted_tags.add(new_name)
         self._after_tag_edit()
@@ -518,8 +545,6 @@ class MainWindow(QMainWindow):
             new_tag = tag.replace(search, replace).strip()
             if new_tag != tag:
                 del self.manual_overrides[tag]
-                # Only carry over the override if the new key doesn't
-                # already have its own override (avoid silent overwrite).
                 if new_tag and new_tag not in self.manual_overrides:
                     updates[new_tag] = val
         self.manual_overrides.update(updates)
@@ -697,7 +722,6 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.statusBar().showMessage("Exporting...")
 
-        # ExportWorker deep-copies data internally for thread safety
         self._export_worker = ExportWorker(
             self.entries,
             self.output_input.text().strip(),
@@ -706,6 +730,7 @@ class MainWindow(QMainWindow):
             self.deleted_tags,
         )
         self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.status.connect(self._on_worker_status)
         self._export_worker.finished_export.connect(self._on_export_finished)
         self._export_worker.start()
 

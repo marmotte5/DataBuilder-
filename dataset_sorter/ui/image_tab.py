@@ -1,4 +1,7 @@
-"""Images tab — Image browser with per-image bucket override."""
+"""Images tab — Image browser with per-image bucket override.
+
+Includes jump-to navigation for large datasets (1M+ images).
+"""
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
@@ -34,10 +37,21 @@ class ImageTab(QWidget):
         self.btn_prev = QPushButton("Previous")
         self.btn_prev.clicked.connect(self._go_prev)
         nav.addWidget(self.btn_prev)
+
+        # Jump-to spinner for navigating large datasets
+        self.jump_spinner = QSpinBox()
+        self.jump_spinner.setMinimum(1)
+        self.jump_spinner.setMaximum(1)
+        self.jump_spinner.setToolTip("Jump to image number")
+        self.jump_spinner.setMaximumWidth(100)
+        self.jump_spinner.editingFinished.connect(self._on_jump)
+        nav.addWidget(self.jump_spinner)
+
         self.index_label = QLabel("0 / 0")
         self.index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.index_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-weight: 600; background: transparent;")
         nav.addWidget(self.index_label, 1)
+
         self.btn_next = QPushButton("Next")
         self.btn_next.clicked.connect(self._go_next)
         nav.addWidget(self.btn_next)
@@ -85,6 +99,9 @@ class ImageTab(QWidget):
         self._deleted_tags = deleted_tags
         self._manual_overrides = manual_overrides
         self._current_index = max(0, min(self._current_index, len(entries) - 1)) if entries else 0
+        # Update jump spinner range
+        total = len(entries) if entries else 1
+        self.jump_spinner.setMaximum(max(1, total))
         self._show_current()
 
     def _show_current(self):
@@ -94,10 +111,17 @@ class ImageTab(QWidget):
             self.path_label.setText("")
             self.bucket_label.setText("")
             self.tags_text.clear()
+            self.jump_spinner.blockSignals(True)
+            self.jump_spinner.setValue(1)
+            self.jump_spinner.blockSignals(False)
             return
         idx = self._current_index
         entry = self._entries[idx]
-        self.index_label.setText(f"{idx + 1} / {len(self._entries)}")
+        total = len(self._entries)
+        self.index_label.setText(f"{idx + 1} / {total}")
+        self.jump_spinner.blockSignals(True)
+        self.jump_spinner.setValue(idx + 1)
+        self.jump_spinner.blockSignals(False)
         pixmap = QPixmap(str(entry.image_path))
         if not pixmap.isNull():
             pixmap = pixmap.scaled(self.IMG_W, self.IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -122,6 +146,13 @@ class ImageTab(QWidget):
     def _go_next(self):
         if self._current_index < len(self._entries) - 1:
             self._current_index += 1
+            self._show_current()
+
+    def _on_jump(self):
+        val = self.jump_spinner.value()
+        new_idx = max(0, min(val - 1, len(self._entries) - 1))
+        if new_idx != self._current_index:
+            self._current_index = new_idx
             self._show_current()
 
     def _on_force(self):

@@ -65,14 +65,14 @@ def get_stylesheet() -> str:
     QPushButton:hover {{ background-color: {c['surface_hover']}; border-color: {c['accent']}; }}
     QPushButton:pressed {{ background-color: {c['accent_subtle']}; }}
     QPushButton:disabled {{ color: {c['text_muted']}; background-color: {c['bg_alt']}; border-color: {c['bg_alt']}; }}
-    QTableWidget {{
+    QTableWidget, QTableView {{
         background-color: {c['bg_alt']}; alternate-background-color: {c['surface']};
         color: {c['text']}; border: 1px solid {c['border']}; border-radius: 8px;
         gridline-color: {c['border']}; selection-background-color: {c['accent_subtle']};
         selection-color: {c['text']};
     }}
-    QTableWidget::item {{ padding: 4px 8px; }}
-    QTableWidget::item:selected {{ background-color: {c['accent_subtle']}; }}
+    QTableWidget::item, QTableView::item {{ padding: 4px 8px; }}
+    QTableWidget::item:selected, QTableView::item:selected {{ background-color: {c['accent_subtle']}; }}
     QHeaderView::section {{
         background-color: {c['surface']}; color: {c['header']};
         padding: 6px 8px; border: none; border-bottom: 2px solid {c['accent']};

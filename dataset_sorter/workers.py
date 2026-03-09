@@ -1,10 +1,10 @@
 """QThread workers for long-running operations (scan, export).
 
-Supports parallel scanning with configurable worker count and
-optional GPU-accelerated image validation.
+Supports parallel scanning with configurable worker count,
+optional GPU-accelerated image validation, and cancellation.
+Optimized for 1M+ image datasets.
 """
 
-import copy
 import os
 import shutil
 import uuid
@@ -17,6 +17,11 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.utils import is_path_inside, sanitize_folder_name
+
+# Chunk size for submitting futures (avoids 1M-entry dict)
+_SCAN_CHUNK = 5000
+# Progress emit interval
+_PROGRESS_INTERVAL = 200
 
 
 def _parse_single_image(args: tuple) -> ImageEntry:
@@ -35,14 +40,13 @@ def _parse_single_image(args: tuple) -> ImageEntry:
         except OSError:
             tags = []
 
-    # GPU validation: verify image can be decoded (optional, catches corrupt files)
     if use_gpu:
         try:
             import torch
             from torchvision.io import read_image, ImageReadMode
             read_image(str(img_path), mode=ImageReadMode.RGB)
         except Exception:
-            pass  # Still include — just can't GPU-validate
+            pass
 
     unique_id = f"{i:06d}_{uuid.uuid4().hex[:8]}"
     return ImageEntry(
@@ -57,7 +61,8 @@ def _parse_single_image(args: tuple) -> ImageEntry:
 class ScanWorker(QThread):
     """Scans source directory for images and txt files.
 
-    Uses ThreadPoolExecutor for parallel tag file reading.
+    Uses ThreadPoolExecutor with chunked submission for memory efficiency.
+    Supports cancellation via cancel().
     """
 
     progress = pyqtSignal(int, int)       # current, total
@@ -75,12 +80,19 @@ class ScanWorker(QThread):
         self.source_dir = Path(source_dir)
         self.num_workers = max(1, num_workers)
         self.use_gpu = use_gpu
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         self.status.emit("Discovering images...")
         image_files: list[Path] = []
 
         for root, _dirs, files in os.walk(self.source_dir):
+            if self._cancelled:
+                self.finished_scan.emit([])
+                return
             for f in files:
                 if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
                     image_files.append(Path(root) / f)
@@ -93,44 +105,59 @@ class ScanWorker(QThread):
             self.finished_scan.emit([])
             return
 
-        # Parallel parsing with ThreadPoolExecutor
         entries: list[ImageEntry] = [None] * total  # type: ignore[list-item]
-        args_list = [(i, p, self.use_gpu) for i, p in enumerate(image_files)]
         completed = 0
 
         if self.num_workers <= 1:
-            # Single-threaded fallback
-            for args in args_list:
+            for i, img_path in enumerate(image_files):
+                if self._cancelled:
+                    self.finished_scan.emit([])
+                    return
                 try:
-                    entry = _parse_single_image(args)
+                    entry = _parse_single_image((i, img_path, self.use_gpu))
                 except Exception:
                     entry = ImageEntry(
-                        image_path=image_files[args[0]],
-                        unique_id=f"{args[0]:06d}_{uuid.uuid4().hex[:8]}",
+                        image_path=img_path,
+                        unique_id=f"{i:06d}_{uuid.uuid4().hex[:8]}",
                     )
-                entries[args[0]] = entry
+                entries[i] = entry
                 completed += 1
-                if completed % 50 == 0 or completed == total:
+                if completed % _PROGRESS_INTERVAL == 0 or completed == total:
                     self.progress.emit(completed, total)
         else:
+            # Process in chunks to avoid holding 1M futures in memory
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                futures = {
-                    executor.submit(_parse_single_image, args): args[0]
-                    for args in args_list
-                }
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        entries[idx] = future.result()
-                    except Exception:
-                        # Fallback entry on error
-                        entries[idx] = ImageEntry(
-                            image_path=image_files[idx],
-                            unique_id=f"{idx:06d}_{uuid.uuid4().hex[:8]}",
+                for chunk_start in range(0, total, _SCAN_CHUNK):
+                    if self._cancelled:
+                        self.finished_scan.emit([])
+                        return
+
+                    chunk_end = min(chunk_start + _SCAN_CHUNK, total)
+                    futures = {}
+                    for i in range(chunk_start, chunk_end):
+                        fut = executor.submit(
+                            _parse_single_image,
+                            (i, image_files[i], self.use_gpu),
                         )
-                    completed += 1
-                    if completed % 100 == 0 or completed == total:
-                        self.progress.emit(completed, total)
+                        futures[fut] = i
+
+                    for future in as_completed(futures):
+                        if self._cancelled:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            self.finished_scan.emit([])
+                            return
+
+                        idx = futures[future]
+                        try:
+                            entries[idx] = future.result()
+                        except Exception:
+                            entries[idx] = ImageEntry(
+                                image_path=image_files[idx],
+                                unique_id=f"{idx:06d}_{uuid.uuid4().hex[:8]}",
+                            )
+                        completed += 1
+                        if completed % _PROGRESS_INTERVAL == 0 or completed == total:
+                            self.progress.emit(completed, total)
 
         self.finished_scan.emit(entries)
 
@@ -153,8 +180,8 @@ def _unique_dest(folder_path: Path, name: str) -> Path:
 class ExportWorker(QThread):
     """Copies images and filtered txt files to output directory.
 
-    Uses deep copies of data to avoid thread safety issues.
-    Handles filename collisions by appending unique suffixes.
+    Uses lightweight snapshots instead of deepcopy for memory efficiency.
+    Supports cancellation via cancel().
     """
 
     progress = pyqtSignal(int, int)
@@ -171,15 +198,22 @@ class ExportWorker(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        # Deep copy to prevent thread safety issues
-        self.entries = copy.deepcopy(entries)
+        # Lightweight snapshot: only copy the fields we need as tuples
+        # Avoids deepcopy which is extremely slow at 1M entries
+        self._snapshots: list[tuple] = [
+            (e.image_path, e.txt_path, list(e.tags), e.assigned_bucket)
+            for e in entries
+        ]
         self.output_dir = Path(output_dir)
         self.source_dir = Path(source_dir)
         self.bucket_names = dict(bucket_names)
         self.deleted_tags = set(deleted_tags)
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
-        # Security checks
         if is_path_inside(self.output_dir, self.source_dir):
             self.finished_export.emit(0, -1)
             return
@@ -194,13 +228,15 @@ class ExportWorker(QThread):
         error_log: list[str] = []
 
         # Group by bucket
-        bucket_entries: dict[int, list[ImageEntry]] = defaultdict(list)
-        for entry in self.entries:
-            bucket_entries[entry.assigned_bucket].append(entry)
+        bucket_entries: dict[int, list[tuple]] = defaultdict(list)
+        for snap in self._snapshots:
+            bucket_entries[snap[3]].append(snap)
 
-        total = len(self.entries)
+        total = len(self._snapshots)
 
         for bucket_num, b_entries in sorted(bucket_entries.items()):
+            if self._cancelled:
+                break
             if not b_entries:
                 continue
 
@@ -216,25 +252,22 @@ class ExportWorker(QThread):
             folder_path.mkdir(parents=True, exist_ok=True)
             self.status.emit(f"Exporting bucket {bucket_num} ({len(b_entries)} images)...")
 
-            for entry in b_entries:
+            for image_path, txt_path, tags, _ in b_entries:
+                if self._cancelled:
+                    break
                 try:
-                    # Use unique destination to avoid filename collisions
-                    dest_img = _unique_dest(folder_path, entry.image_path.name)
+                    dest_img = _unique_dest(folder_path, image_path.name)
                     if not is_path_inside(dest_img, self.output_dir):
                         errors += 1
                     else:
-                        shutil.copy2(str(entry.image_path), str(dest_img))
+                        shutil.copy2(str(image_path), str(dest_img))
 
-                        if entry.txt_path is not None:
-                            # Match txt filename to image filename
+                        if txt_path is not None:
                             txt_name = dest_img.stem + ".txt"
                             dest_txt = folder_path / txt_name
                             if is_path_inside(dest_txt, self.output_dir):
-                                # Always write from entry.tags to capture any
-                                # renames, merges, or search/replace edits.
-                                # Filter out deleted tags if any.
                                 filtered = [
-                                    t for t in entry.tags
+                                    t for t in tags
                                     if t not in self.deleted_tags
                                 ]
                                 dest_txt.write_text(
@@ -244,9 +277,10 @@ class ExportWorker(QThread):
                         copied += 1
                 except Exception as exc:
                     errors += 1
-                    error_log.append(f"{entry.image_path}: {exc}")
+                    error_log.append(f"{image_path}: {exc}")
 
-                self.progress.emit(copied + errors, total)
+                if (copied + errors) % _PROGRESS_INTERVAL == 0 or (copied + errors) == total:
+                    self.progress.emit(copied + errors, total)
 
         if error_log:
             try:
