@@ -80,6 +80,10 @@ class TagPanel(QWidget):
     def populate(self, tag_counts, tag_auto_buckets, manual_overrides, deleted_tags):
         self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
+        # Also block selection model signals during repopulation
+        sel = self.table.selectionModel()
+        if sel:
+            sel.blockSignals(True)
         self.table.setRowCount(0)
 
         tags_sorted = sorted(tag_counts.keys())
@@ -118,8 +122,25 @@ class TagPanel(QWidget):
             self.table.setItem(row, 4, item_del)
 
         self.table.blockSignals(False)
+        if sel:
+            sel.blockSignals(False)
         self.table.setSortingEnabled(True)
         self.tag_count_badge.setText(f"{len(tags_sorted)} tags")
+
+    def restore_selection(self, tag_names: list[str]):
+        """Restore selection by tag names after repopulation."""
+        if not tag_names:
+            return
+        tag_set = set(tag_names)
+        sel = self.table.selectionModel()
+        if not sel:
+            return
+        sel.blockSignals(True)
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item and item.text() in tag_set:
+                self.table.selectRow(row)
+        sel.blockSignals(False)
 
     def _filter_table(self, text: str):
         text_lower = text.lower()

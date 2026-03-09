@@ -21,16 +21,18 @@ DEFAULT_NUM_WORKERS = 4
 
 # Supported model types
 MODEL_TYPES = {
-    "sd15_lora":   "SD 1.5 LoRA",
-    "sd15_full":   "SD 1.5 Full Finetune",
-    "sdxl_lora":   "SDXL LoRA",
-    "sdxl_full":   "SDXL Full Finetune",
-    "flux_lora":   "Flux LoRA",
-    "flux_full":   "Flux Full Finetune",
-    "sd3_lora":    "SD3 LoRA",
-    "sd3_full":    "SD3 Full Finetune",
-    "pony_lora":   "Pony Diffusion LoRA",
-    "pony_full":   "Pony Diffusion Full Finetune",
+    "sd15_lora":    "SD 1.5 LoRA",
+    "sd15_full":    "SD 1.5 Full Finetune",
+    "sdxl_lora":    "SDXL LoRA",
+    "sdxl_full":    "SDXL Full Finetune",
+    "flux_lora":    "Flux LoRA",
+    "flux_full":    "Flux Full Finetune",
+    "sd3_lora":     "SD3 LoRA",
+    "sd3_full":     "SD3 Full Finetune",
+    "pony_lora":    "Pony Diffusion LoRA",
+    "pony_full":    "Pony Diffusion Full Finetune",
+    "zimage_lora":  "Z-Image LoRA",
+    "zimage_full":  "Z-Image Full Finetune",
 }
 
 MODEL_TYPE_KEYS = list(MODEL_TYPES.keys())
@@ -49,24 +51,29 @@ NETWORK_TYPES = {
 
 # Supported optimizers
 OPTIMIZERS = {
-    "Adafactor":    "Adafactor — Low memory, good generalist",
-    "Prodigy":      "Prodigy — Automatic adaptive LR",
-    "AdamW":        "AdamW — Standard, performant",
-    "AdamW8bit":    "AdamW 8-bit — Standard, lower memory",
-    "DAdaptAdam":   "D-Adapt Adam — Adaptive LR",
-    "SGD":          "SGD — Simple, stable",
+    "Adafactor":          "Adafactor — Low memory, good generalist",
+    "Prodigy":            "Prodigy — Automatic adaptive LR",
+    "AdamW":              "AdamW — Standard, performant",
+    "AdamW8bit":          "AdamW 8-bit — Standard, lower memory",
+    "DAdaptAdam":         "D-Adapt Adam — Adaptive LR",
+    "CAME":               "CAME — Fast convergence, low memory",
+    "AdamWScheduleFree":  "AdamW Schedule-Free — No scheduler needed",
+    "Lion":               "Lion — Sign-based, fast training",
+    "SGD":                "SGD — Simple, stable",
 }
 
 # Resolutions per model
 MODEL_RESOLUTIONS: dict[str, int] = {
-    "sd15_lora":  512,
-    "sd15_full":  512,
-    "sdxl_lora":  1024,
-    "sdxl_full":  1024,
-    "flux_lora":  1024,
-    "flux_full":  1024,
-    "sd3_lora":   1024,
-    "sd3_full":   1024,
-    "pony_lora":  1024,
-    "pony_full":  1024,
+    "sd15_lora":    512,
+    "sd15_full":    512,
+    "sdxl_lora":    1024,
+    "sdxl_full":    1024,
+    "flux_lora":    1024,
+    "flux_full":    1024,
+    "sd3_lora":     1024,
+    "sd3_full":     1024,
+    "pony_lora":    1024,
+    "pony_full":    1024,
+    "zimage_lora":  1024,
+    "zimage_full":  1024,
 }

@@ -84,7 +84,7 @@ class ImageTab(QWidget):
         self._entries = entries
         self._deleted_tags = deleted_tags
         self._manual_overrides = manual_overrides
-        self._current_index = max(0, min(self._current_index, len(entries) - 1))
+        self._current_index = max(0, min(self._current_index, len(entries) - 1)) if entries else 0
         self._show_current()
 
     def _show_current(self):

@@ -4,8 +4,10 @@ Computes optimal training parameters based on dataset analysis,
 hardware, model type, optimizer and network type.
 
 Based on community best practices (2025-2026):
-kohya_ss, OneTrainer, SimpleTuner, civitai guides.
+kohya_ss, OneTrainer, SimpleTuner, civitai guides, HuggingFace diffusers.
 """
+
+import math
 
 from dataset_sorter.constants import MAX_BUCKETS, MODEL_RESOLUTIONS
 from dataset_sorter.models import TrainingConfig
@@ -73,30 +75,43 @@ _VRAM_PROFILES: dict[tuple[str, int], tuple[int, int, bool, bool, bool]] = {
     ("pony_full", 24):  (1, 2, True,  True,  True),
     ("pony_full", 48):  (2, 1, True,  True,  False),
     ("pony_full", 96):  (4, 1, False, True,  False),
+    # Z-Image LoRA — 6B param S3-DiT (Alibaba/Tongyi-MAI)
+    # Similar VRAM footprint to SDXL but slightly heavier due to 6B params
+    ("zimage_lora", 12):  (1, 4, True,  True,  True),
+    ("zimage_lora", 16):  (1, 4, True,  True,  True),
+    ("zimage_lora", 24):  (2, 2, True,  True,  False),
+    ("zimage_lora", 48):  (4, 1, True,  True,  False),
+    ("zimage_lora", 96):  (8, 1, False, True,  False),
+    # Z-Image Full — 24 GB minimum (6B params, lighter than Flux but heavier than SDXL)
+    ("zimage_full", 24):  (1, 2, True,  True,  True),
+    ("zimage_full", 48):  (2, 1, True,  True,  False),
+    ("zimage_full", 96):  (4, 1, False, True,  False),
 }
 
 _FALLBACK_PROFILE = (1, 4, True, True, True)
 
 
 # ---------------------------------------------------------------------------
-# Base learning rates per model (AdamW/AdamW8bit, LoRA)
-# Source: community guides, civitai, SimpleTuner
+# Base learning rates per model (AdamW/AdamW8bit)
+# Source: community guides, civitai, SimpleTuner, HuggingFace
 # ---------------------------------------------------------------------------
 
 _BASE_LR_LORA: dict[str, float] = {
-    "sd15_lora":  2e-4,
-    "sdxl_lora":  1e-4,
-    "flux_lora":  2e-3,   # Flux learns 5-10x faster than SDXL
-    "sd3_lora":   1e-4,
-    "pony_lora":  1e-4,
+    "sd15_lora":     2e-4,
+    "sdxl_lora":     1e-4,
+    "flux_lora":     2e-3,    # Flux learns 5-10x faster than SDXL
+    "sd3_lora":      1e-4,
+    "pony_lora":     1e-4,
+    "zimage_lora":   1e-4,    # Z-Image: similar to SDXL, conservative start
 }
 
 _BASE_LR_FULL: dict[str, float] = {
-    "sd15_full":  1e-6,
-    "sdxl_full":  5e-7,
-    "flux_full":  5e-7,   # Flux full: very low LR (12B params, easy to destabilize)
-    "sd3_full":   5e-7,
-    "pony_full":  5e-7,
+    "sd15_full":     1e-6,
+    "sdxl_full":     5e-7,
+    "flux_full":     5e-7,    # Flux full: very low LR (12B params)
+    "sd3_full":      5e-7,
+    "pony_full":     5e-7,
+    "zimage_full":   5e-7,    # Z-Image full: 6B params, conservative
 }
 
 # Adafactor uses higher LR for LoRA
@@ -123,6 +138,9 @@ def _compute_network_rank(
     elif "sd15" in model_type:
         # SD 1.5: 32-64 typical
         base_ranks = {"small": 32, "medium": 32, "large": 64, "very_large": 64}
+    elif "zimage" in model_type:
+        # Z-Image: 16-64, S3-DiT architecture responds well to moderate ranks
+        base_ranks = {"small": 16, "medium": 32, "large": 64, "very_large": 64}
     else:
         # SDXL/SD3/Pony: 32-128
         base_ranks = {"small": 32, "medium": 32, "large": 64, "very_large": 128}
@@ -189,6 +207,18 @@ def _apply_optimizer_settings(
         config.text_encoder_lr = 1.0
     elif optimizer in ("AdamW", "AdamW8bit"):
         config.weight_decay = 0.01
+    elif optimizer == "CAME":
+        # CAME: fast convergence, low memory (~Adafactor memory, ~AdamW quality)
+        # Uses confidence-guided adaptive LR, no special LR override needed
+        config.weight_decay = 0.01
+    elif optimizer == "AdamWScheduleFree":
+        # Schedule-free: no external scheduler, optimizer handles it internally
+        config.weight_decay = 0.01
+    elif optimizer == "Lion":
+        # Lion: sign-based optimizer, uses ~50% less memory than AdamW
+        # Requires ~3-10x lower LR than AdamW and higher weight decay
+        config.learning_rate *= 0.3  # Lion needs much lower LR
+        config.weight_decay = 0.1 if is_lora else 0.3
     elif optimizer == "SGD":
         config.weight_decay = 0.0
 
@@ -221,6 +251,7 @@ def recommend(
     is_sdxl = "sdxl" in model_type
     is_pony = "pony" in model_type
     is_sd15 = "sd15" in model_type
+    is_zimage = "zimage" in model_type
 
     # --- Diversity & size category ---
     diversity = unique_tags / max(total_tag_occurrences, 1)
@@ -238,10 +269,16 @@ def recommend(
     config.resolution = MODEL_RESOLUTIONS.get(model_type, 1024)
     if is_flux and vram_gb <= 12:
         config.resolution = 512
+    if is_zimage and vram_gb <= 12:
+        config.resolution = 768
 
     # --- VRAM profile ---
     key = (model_type, vram_gb)
-    bs, ga, gc, cl, cld = _VRAM_PROFILES.get(key, _FALLBACK_PROFILE)
+    profile = _VRAM_PROFILES.get(key)
+    used_fallback = profile is None
+    if used_fallback:
+        profile = _FALLBACK_PROFILE
+    bs, ga, gc, cl, cld = profile
     config.batch_size = bs
     config.gradient_accumulation = ga
     config.gradient_checkpointing = gc
@@ -292,15 +329,22 @@ def recommend(
         if is_lora:
             config.train_text_encoder = vram_gb >= 24
         else:
-            # SD3 Full: train CLIP encoders if VRAM allows
             config.train_text_encoder = vram_gb >= 24
         config.train_text_encoder_2 = False
         config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
+    elif is_zimage:
+        # Z-Image: S3-DiT uses CLIP text encoder, trainable on sufficient VRAM
+        config.train_text_encoder = is_lora and vram_gb >= 16
+        config.train_text_encoder_2 = False
+        if not is_lora:
+            config.train_text_encoder = vram_gb >= 24
+            config.text_encoder_lr = config.learning_rate * 0.05 if config.train_text_encoder else 0.0
+        else:
+            config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
     elif is_sdxl or is_pony:
         config.train_text_encoder = True
         config.train_text_encoder_2 = vram_gb >= 24
         if not is_lora:
-            # Full finetune: lower TE LR to prevent catastrophic forgetting
             config.text_encoder_lr = config.learning_rate * 0.05
         else:
             config.text_encoder_lr = config.learning_rate * 0.1
@@ -332,19 +376,24 @@ def recommend(
     if is_lora:
         config.use_ema = size_cat in ("medium", "large", "very_large")
     else:
-        # Full finetune: EMA is highly recommended when VRAM allows
         config.use_ema = vram_gb >= 24 and total_images >= 200
         if is_flux:
-            # Flux full is so VRAM-heavy, only EMA on 96 GB
             config.use_ema = vram_gb >= 96 and total_images >= 500
+        elif is_zimage:
+            # Z-Image full: EMA on 48+ GB
+            config.use_ema = vram_gb >= 48 and total_images >= 200
     config.ema_decay = 0.9999
 
     # --- Epochs ---
     if is_flux and is_lora:
         epoch_map = {"small": 5, "medium": 3, "large": 1, "very_large": 1}
     elif is_flux and not is_lora:
-        # Flux full: fewer epochs, very easy to overtrain a 12B model
         epoch_map = {"small": 3, "medium": 2, "large": 1, "very_large": 1}
+    elif is_zimage and is_lora:
+        # Z-Image LoRA: moderate epochs, 6B model learns reasonably fast
+        epoch_map = {"small": 8, "medium": 5, "large": 2, "very_large": 1}
+    elif is_zimage and not is_lora:
+        epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
     elif is_lora:
         if is_sd15:
             epoch_map = {"small": 15, "medium": 10, "large": 3, "very_large": 1}
@@ -353,7 +402,6 @@ def recommend(
         else:
             epoch_map = {"small": 10, "medium": 5, "large": 2, "very_large": 1}
     else:
-        # Full finetune: SD 1.5 / SDXL / SD3 / Pony
         if is_sd15:
             epoch_map = {"small": 8, "medium": 5, "large": 2, "very_large": 1}
         elif is_sd3:
@@ -366,25 +414,32 @@ def recommend(
     steps_per_epoch = max(total_images // config.effective_batch_size, 1)
     config.total_steps = steps_per_epoch * config.epochs
 
-    # Prodigy needs ~20-30% more steps
+    # Prodigy needs ~20-30% more steps (use ceil to avoid no-op on small epochs)
     if optimizer == "Prodigy":
-        config.total_steps = int(config.total_steps * 1.25)
-        config.epochs = max(config.epochs, int(config.epochs * 1.25))
-
-    # Warmup: ~10% of steps
-    config.warmup_steps = max(10, min(config.total_steps // 10, 200))
+        config.total_steps = math.ceil(config.total_steps * 1.25)
+        config.epochs = max(config.epochs, math.ceil(config.epochs * 1.25))
 
     # Flux: cap steps (very easy to overtrain)
     if is_flux and is_lora:
         if config.total_steps > 2000 and size_cat in ("small", "medium"):
             config.total_steps = 1500
     elif is_flux and not is_lora:
-        # Flux full: even more conservative
         if config.total_steps > 3000 and size_cat in ("small", "medium"):
             config.total_steps = 2500
 
+    # Z-Image: cap steps similarly to SDXL
+    if is_zimage and is_lora:
+        if config.total_steps > 3000 and size_cat in ("small", "medium"):
+            config.total_steps = 2500
+
+    # Warmup: ~10% of steps (recalculate AFTER any step caps)
+    config.warmup_steps = max(10, min(config.total_steps // 10, 200))
+
     # --- Scheduler ---
     if optimizer == "Prodigy":
+        config.lr_scheduler = "constant"
+    elif optimizer == "AdamWScheduleFree":
+        # Schedule-free: the optimizer IS the scheduler
         config.lr_scheduler = "constant"
     elif size_cat == "very_large":
         config.lr_scheduler = "cosine_with_restarts"
@@ -409,17 +464,34 @@ def recommend(
     # Noise offset: 0.0-0.1, improves blacks/whites
     if is_flux or is_sd3:
         config.noise_offset = 0.04
+    elif is_zimage:
+        config.noise_offset = 0.04
     elif is_sdxl or is_pony:
         config.noise_offset = 0.0357
     else:
         config.noise_offset = 0.05
 
-    # Min SNR gamma = 5: "free lunch", ~3.4x faster convergence
-    config.min_snr_gamma = 5
+    # Min SNR gamma = 5: ~3.4x faster convergence (ICCV 2023)
+    # For flow-matching models (Flux, SD3), debiased estimation is preferred
+    if is_flux or is_sd3:
+        config.min_snr_gamma = 0
+        config.debiased_estimation = True
+    else:
+        config.min_snr_gamma = 5
+        config.debiased_estimation = False
+
+    # IP noise gamma: input perturbation for LoRA regularization
+    if is_lora and not (is_flux or is_sd3):
+        config.ip_noise_gamma = 0.1
+
+    # Guidance scale: Flux uses guidance_scale=1.0 during training
+    if is_flux:
+        config.guidance_scale = 1.0
+    elif is_zimage:
+        config.guidance_scale = 1.0
 
     # Caption dropout: anti-overfit regularization
     if not is_lora:
-        # Full finetune: more aggressive caption dropout to prevent overfit
         if size_cat == "small" and total_images >= 20:
             config.caption_dropout_rate = 0.1
         elif size_cat in ("medium", "large"):
@@ -443,13 +515,15 @@ def recommend(
         config.multires_noise_discount = 0.3
     elif is_flux:
         config.multires_noise_discount = 0.1
+    elif is_zimage:
+        config.multires_noise_discount = 0.2
 
     # --- Contextual notes ---
     config.notes = _build_notes(
         model_type, vram_gb, total_images, diversity, size_cat,
-        is_lora, is_flux, is_sd3, is_pony,
+        is_lora, is_flux, is_sd3, is_pony, is_zimage,
         max_bucket_images, num_active_buckets,
-        optimizer, network_type, config,
+        optimizer, network_type, config, used_fallback,
     )
 
     return config
@@ -462,12 +536,20 @@ def recommend(
 def _build_notes(
     model_type: str, vram_gb: int, total_images: int,
     diversity: float, size_cat: str, is_lora: bool,
-    is_flux: bool, is_sd3: bool, is_pony: bool,
+    is_flux: bool, is_sd3: bool, is_pony: bool, is_zimage: bool,
     max_bucket_images: int, num_active_buckets: int,
     optimizer: str, network_type: str,
-    config: TrainingConfig,
+    config: TrainingConfig, used_fallback: bool,
 ) -> list[str]:
     notes: list[str] = []
+
+    # VRAM fallback warning
+    if used_fallback:
+        notes.append(
+            f"WARNING: No optimized VRAM profile for {model_type} at {vram_gb} GB. "
+            "Using conservative fallback settings. Results may be suboptimal — "
+            "consider a different VRAM tier or model type."
+        )
 
     if total_images < 30:
         notes.append(
@@ -509,10 +591,11 @@ def _build_notes(
     if num_active_buckets < 5 and total_images > 100:
         notes.append("Few active buckets — tags are very uniformly distributed.")
 
+    # Optimizer-specific notes
     if optimizer == "Prodigy":
         notes.append(
             "Prodigy: LR=1.0 is intentional (self-adjusting). "
-            "The d_coef stabilizes in ~200-300 steps. Monitor it in logs."
+            "d_coef stabilizes in ~200-300 steps. Monitor d_coef in logs."
         )
         if not is_lora:
             notes.append(
@@ -526,12 +609,31 @@ def _build_notes(
             "With Adafactor + SDXL, enable fused_backward_pass in kohya "
             "to reduce VRAM from ~24 GB to ~10 GB."
         )
+    elif optimizer == "CAME":
+        notes.append(
+            "CAME: confidence-guided adaptive optimizer. Memory usage similar "
+            "to Adafactor with quality closer to AdamW. Good for VRAM-limited setups."
+        )
+    elif optimizer == "AdamWScheduleFree":
+        notes.append(
+            "AdamW Schedule-Free: no external LR scheduler needed — the optimizer "
+            "handles warmup and decay internally. Set scheduler to 'constant'. "
+            "Comparable to well-tuned cosine schedule without hyperparameter search."
+        )
+    elif optimizer == "Lion":
+        notes.append(
+            "Lion: sign-based optimizer using ~50% less memory than AdamW. "
+            "LR has been automatically reduced (~3x lower than AdamW). "
+            "Uses higher weight decay for regularization. "
+            "Good for large-batch training scenarios."
+        )
     elif optimizer == "SGD":
         notes.append(
             "SGD is not recommended in 2025. Adaptive optimizers "
             "(Prodigy, AdamW) converge significantly faster."
         )
 
+    # Network type notes
     if network_type == "dora":
         notes.append(
             "DoRA: magnitude + direction decomposition. ~30% slower than LoRA "
@@ -548,6 +650,7 @@ def _build_notes(
             "Suited for simple styles, less for complex subjects."
         )
 
+    # Model-specific notes
     if is_flux:
         if vram_gb <= 16:
             notes.append(
@@ -559,6 +662,10 @@ def _build_notes(
                 "Flux learns very fast (5-10x faster than SDXL). "
                 "Watch for overtraining — good captions matter more "
                 "than text encoder training."
+            )
+            notes.append(
+                "Flux: guidance_scale=1.0 during training. "
+                "Both text encoders (T5-XXL + CLIP-L) should be frozen."
             )
         else:
             notes.append(
@@ -592,6 +699,35 @@ def _build_notes(
             "your captions."
         )
 
+    if is_zimage:
+        if is_lora:
+            notes.append(
+                "Z-Image (Alibaba/Tongyi-MAI): 6B param S3-DiT architecture. "
+                "Use sigmoid timestep_type for best results. "
+                "Base resolution 1024px. Rank 16-64 recommended."
+            )
+            if vram_gb < 12:
+                notes.append(
+                    "WARNING: Z-Image LoRA is not viable below 12 GB VRAM. "
+                    "Consider using SD 1.5 LoRA instead."
+                )
+        else:
+            notes.append(
+                "Z-Image full finetune: 6B parameter S3-DiT model. "
+                "Requires 24+ GB VRAM. Use sigmoid timestep_type. "
+                "Save checkpoints frequently — 6B params can destabilize quickly."
+            )
+            if vram_gb < 24:
+                notes.append(
+                    "WARNING: Z-Image full finetune is not viable below 24 GB VRAM. "
+                    "Consider using Z-Image LoRA instead."
+                )
+        notes.append(
+            "Z-Image tip: the Turbo variant uses Ostris adapter for faster inference. "
+            "For training, use the Base variant as the starting checkpoint."
+        )
+
+    # Full finetune general notes
     if not is_lora:
         notes.append(
             "Full finetune: save checkpoints every 100-200 steps to recover "
@@ -608,10 +744,31 @@ def _build_notes(
                 "regularize and prevent catastrophic forgetting."
             )
 
-    notes.append(
-        "Min SNR gamma=5 enabled: ~3.4x faster convergence "
-        "(\"free lunch\", see ICCV 2023)."
-    )
+    # Advanced parameter notes
+    if config.debiased_estimation:
+        notes.append(
+            "Debiased estimation enabled (instead of Min SNR): preferred for "
+            "flow-matching models (Flux, SD3). Stabilizes training without "
+            "the fixed gamma tradeoff."
+        )
+    else:
+        notes.append(
+            "Min SNR gamma=5 enabled: ~3.4x faster convergence "
+            "(\"free lunch\", see ICCV 2023)."
+        )
+
+    if config.ip_noise_gamma > 0:
+        notes.append(
+            f"IP noise gamma={config.ip_noise_gamma}: input perturbation "
+            "regularization for LoRA. Helps prevent overfitting on small datasets."
+        )
+
+    # LoRA+ tip for applicable optimizers
+    if is_lora and optimizer in ("AdamW", "AdamW8bit"):
+        notes.append(
+            "LoRA+ tip: set lora_B LR to 16x lora_A LR for faster convergence "
+            "(community best practice 2025). Requires kohya_ss or OneTrainer support."
+        )
 
     return notes
 
@@ -626,16 +783,18 @@ _NETWORK_LABELS = {
 }
 
 _MODEL_LABELS = {
-    "sd15_lora": "SD 1.5 LoRA",
-    "sd15_full": "SD 1.5 Full Finetune",
-    "sdxl_lora": "SDXL LoRA",
-    "sdxl_full": "SDXL Full Finetune",
-    "flux_lora": "Flux LoRA",
-    "flux_full": "Flux Full Finetune",
-    "sd3_lora":  "SD3 LoRA",
-    "sd3_full":  "SD3 Full Finetune",
-    "pony_lora": "Pony Diffusion LoRA",
-    "pony_full": "Pony Diffusion Full Finetune",
+    "sd15_lora":    "SD 1.5 LoRA",
+    "sd15_full":    "SD 1.5 Full Finetune",
+    "sdxl_lora":    "SDXL LoRA",
+    "sdxl_full":    "SDXL Full Finetune",
+    "flux_lora":    "Flux LoRA",
+    "flux_full":    "Flux Full Finetune",
+    "sd3_lora":     "SD3 LoRA",
+    "sd3_full":     "SD3 Full Finetune",
+    "pony_lora":    "Pony Diffusion LoRA",
+    "pony_full":    "Pony Diffusion Full Finetune",
+    "zimage_lora":  "Z-Image LoRA",
+    "zimage_full":  "Z-Image Full Finetune",
 }
 
 
@@ -682,11 +841,16 @@ def format_config(config: TrainingConfig) -> str:
         lines.append(f"    Decouple         {config.prodigy_decouple}")
         lines.append(f"    Safeguard warmup {config.prodigy_safeguard_warmup}")
         lines.append(f"    Bias correction  {config.prodigy_use_bias_correction}")
+    elif config.optimizer == "Lion":
+        lines.append(f"    Note             LR auto-reduced for Lion (sign-based)")
+    elif config.optimizer == "AdamWScheduleFree":
+        lines.append(f"    Note             No external scheduler needed")
     lines.append("")
 
     lines.append(f"  -- Text Encoder {thin[17:]}")
     lines.append(f"    Train TE         {'Yes' if config.train_text_encoder else 'No'}")
-    if "sdxl" in config.model_type or "pony" in config.model_type or "flux" in config.model_type or "sd3" in config.model_type:
+    has_te2 = any(k in config.model_type for k in ("sdxl", "pony", "flux", "sd3", "zimage"))
+    if has_te2:
         lines.append(f"    Train TE2        {'Yes' if config.train_text_encoder_2 else 'No'}")
     if config.text_encoder_lr > 0:
         lines.append(f"    TE LR            {config.text_encoder_lr:.2e}")
@@ -696,6 +860,8 @@ def format_config(config: TrainingConfig) -> str:
         lines.append(f"    Note             T5-XXL & CLIP-L frozen (recommended)")
     elif "sd3" in config.model_type:
         lines.append(f"    Note             T5 frozen, CLIP trainable")
+    elif "zimage" in config.model_type:
+        lines.append(f"    Note             S3-DiT CLIP encoder")
     lines.append("")
 
     lines.append(f"  -- Batch & Epochs {thin[19:]}")
@@ -722,7 +888,14 @@ def format_config(config: TrainingConfig) -> str:
 
     lines.append(f"  -- Advanced Parameters {thin[24:]}")
     lines.append(f"    Noise offset          {config.noise_offset:.4f}")
-    lines.append(f"    Min SNR gamma         {config.min_snr_gamma}")
+    if config.min_snr_gamma > 0:
+        lines.append(f"    Min SNR gamma         {config.min_snr_gamma}")
+    if config.debiased_estimation:
+        lines.append(f"    Debiased estimation   Yes")
+    if config.ip_noise_gamma > 0:
+        lines.append(f"    IP noise gamma        {config.ip_noise_gamma:.2f}")
+    if config.guidance_scale != 1.0 or "flux" in config.model_type or "zimage" in config.model_type:
+        lines.append(f"    Guidance scale        {config.guidance_scale:.1f}")
     if config.caption_dropout_rate > 0:
         lines.append(f"    Caption dropout       {config.caption_dropout_rate:.0%}")
     if config.multires_noise_discount > 0:

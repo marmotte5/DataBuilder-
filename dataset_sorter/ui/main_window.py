@@ -1,6 +1,7 @@
 """Main application window — Dataset Sorter."""
 
 import json
+import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -164,14 +165,14 @@ class MainWindow(QMainWindow):
 
         # Bottom bar
         bottom = QHBoxLayout()
-        btn_dry = QPushButton("Dry Run (Summary)")
-        btn_dry.clicked.connect(self._dry_run)
-        bottom.addWidget(btn_dry)
+        self.btn_dry = QPushButton("Dry Run (Summary)")
+        self.btn_dry.clicked.connect(self._dry_run)
+        bottom.addWidget(self.btn_dry)
         bottom.addStretch()
-        btn_export = QPushButton("Export (copy only)")
-        btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
-        btn_export.clicked.connect(self._start_export)
-        bottom.addWidget(btn_export)
+        self.btn_export = QPushButton("Export (copy only)")
+        self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self.btn_export.clicked.connect(self._start_export)
+        bottom.addWidget(self.btn_export)
         root.addLayout(bottom)
 
     def _label(self, text):
@@ -199,6 +200,12 @@ class MainWindow(QMainWindow):
         self.image_tab.force_bucket.connect(self._force_image_bucket)
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
 
+    def _set_controls_enabled(self, enabled: bool):
+        """Enable/disable data-dependent controls during scan/export."""
+        self.btn_scan.setEnabled(enabled)
+        self.btn_dry.setEnabled(enabled)
+        self.btn_export.setEnabled(enabled)
+
     # -- Browsing & Scan --
 
     def _browse_source(self):
@@ -217,7 +224,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Error: invalid source directory.")
             return
 
-        self.btn_scan.setEnabled(False)
+        # Clean up previous worker
+        if self._scan_worker is not None:
+            if self._scan_worker.isRunning():
+                self._scan_worker.wait()
+            self._scan_worker.deleteLater()
+            self._scan_worker = None
+
+        self._set_controls_enabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
 
@@ -245,7 +259,7 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, entries):
         self.entries = entries
         self.progress_bar.setVisible(False)
-        self.btn_scan.setEnabled(True)
+        self._set_controls_enabled(True)
 
         self._rebuild_tag_index()
         self._compute_auto_buckets()
@@ -281,8 +295,9 @@ class MainWindow(QMainWindow):
         counts = np.array([self.tag_counts[t] for t in tags])
 
         if counts.min() == counts.max():
-            for i, tag in enumerate(tags):
-                self.tag_auto_buckets[tag] = min((i * MAX_BUCKETS) // len(tags) + 1, MAX_BUCKETS)
+            # All tags have equal count — assign all to bucket 1
+            for tag in tags:
+                self.tag_auto_buckets[tag] = 1
             return
 
         percentiles = np.linspace(0, 100, MAX_BUCKETS + 1)
@@ -295,23 +310,35 @@ class MainWindow(QMainWindow):
 
     def _assign_entries_to_buckets(self):
         for entry in self.entries:
-            active = [t for t in entry.tags if t not in self.deleted_tags]
-            if not active:
-                entry.assigned_bucket = MAX_BUCKETS // 2
-                continue
-            max_b = 0
-            for tag in active:
-                b = self.manual_overrides.get(tag, self.tag_auto_buckets.get(tag, 1))
-                max_b = max(max_b, b)
-            entry.assigned_bucket = max(1, max_b)
+            self._assign_single_entry_bucket(entry)
+
+    def _assign_single_entry_bucket(self, entry: ImageEntry):
+        """Assign a single entry to its bucket based on its tags."""
+        active = [t for t in entry.tags if t not in self.deleted_tags]
+        if not active:
+            entry.assigned_bucket = 1
+            return
+        max_b = 0
+        for tag in active:
+            b = self.manual_overrides.get(tag, self.tag_auto_buckets.get(tag, 1))
+            max_b = max(max_b, b)
+        entry.assigned_bucket = max(1, max_b)
 
     # -- UI refresh --
 
     def _refresh_all_ui(self):
+        # Save current tag selection
+        selected_tags = self.tag_panel.get_selected_tags() if self._selection_connected else []
+
         self.tag_panel.populate(
             self.tag_counts, self.tag_auto_buckets,
             self.manual_overrides, self.deleted_tags,
         )
+
+        # Restore selection
+        if selected_tags:
+            self.tag_panel.restore_selection(selected_tags)
+
         n_txt = sum(1 for e in self.entries if e.txt_path is not None)
         self.override_panel.update_stats(
             len(self.entries), n_txt, len(self.tag_counts),
@@ -333,6 +360,7 @@ class MainWindow(QMainWindow):
     def _on_tag_selection(self, tags):
         if not tags:
             self.override_panel.set_selected_info("No tag selected")
+            self.preview_tab.clear()
             return
         if len(tags) == 1:
             tag = tags[0]
@@ -342,6 +370,7 @@ class MainWindow(QMainWindow):
             self.preview_tab.update_preview(tag, indices, self.entries)
         else:
             self.override_panel.set_selected_info(f"{len(tags)} tags selected")
+            self.preview_tab.clear()
 
     # -- Overrides --
 
@@ -421,7 +450,10 @@ class MainWindow(QMainWindow):
                     entry.tags = [new_name if t == old_tag else t for t in entry.tags]
                 count += 1
             if old_tag in self.manual_overrides:
-                self.manual_overrides[new_name] = self.manual_overrides.pop(old_tag)
+                if new_name not in self.manual_overrides:
+                    self.manual_overrides[new_name] = self.manual_overrides.pop(old_tag)
+                else:
+                    self.manual_overrides.pop(old_tag)
             if old_tag in self.deleted_tags:
                 self.deleted_tags.discard(old_tag)
                 self.deleted_tags.add(new_name)
@@ -469,8 +501,6 @@ class MainWindow(QMainWindow):
                     changed = True
                 if new_tag and new_tag not in new_tags:
                     new_tags.append(new_tag)
-                elif new_tag and new_tag in new_tags:
-                    changed = True
             if changed:
                 entry.tags = new_tags
                 modified += 1
@@ -529,17 +559,33 @@ class MainWindow(QMainWindow):
         except (OSError, json.JSONDecodeError) as e:
             self.statusBar().showMessage(f"Error: {e}")
             return
-        self.manual_overrides = data.get("manual_overrides", {})
+
+        # Validate and load manual_overrides
+        raw_overrides = data.get("manual_overrides", {})
+        self.manual_overrides = {}
+        if isinstance(raw_overrides, dict):
+            for k, v in raw_overrides.items():
+                try:
+                    self.manual_overrides[str(k)] = int(v)
+                except (ValueError, TypeError):
+                    pass
+
+        # Load bucket_names (full replace)
+        self.bucket_names = {i: "bucket" for i in range(1, MAX_BUCKETS + 1)}
         for k, v in data.get("bucket_names", {}).items():
             try:
-                self.bucket_names[int(k)] = sanitize_folder_name(v)
+                self.bucket_names[int(k)] = sanitize_folder_name(str(v))
             except (ValueError, KeyError):
                 pass
-        self.deleted_tags = set(data.get("deleted_tags", []))
+
+        # Validate deleted_tags
+        raw_deleted = data.get("deleted_tags", [])
+        self.deleted_tags = set(raw_deleted) if isinstance(raw_deleted, list) else set()
+
         if "source_dir" in data:
-            self.source_input.setText(data["source_dir"])
+            self.source_input.setText(str(data["source_dir"]))
         if "output_dir" in data:
-            self.output_input.setText(data["output_dir"])
+            self.output_input.setText(str(data["output_dir"]))
         if self.entries:
             self._compute_auto_buckets()
             self._assign_entries_to_buckets()
@@ -575,9 +621,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Image forced to bucket {bucket}.")
 
     def _reset_image_bucket(self, index):
-        self._assign_entries_to_buckets()
-        self.image_tab.set_data(self.entries, self.deleted_tags, self.manual_overrides)
-        self.statusBar().showMessage("Image bucket reset.")
+        if 0 <= index < len(self.entries):
+            self._assign_single_entry_bucket(self.entries[index])
+            self.image_tab.refresh()
+            self.statusBar().showMessage("Image bucket reset.")
 
     # -- Dry run & Export --
 
@@ -597,7 +644,8 @@ class MainWindow(QMainWindow):
             name = self.bucket_names.get(bn, "bucket")
             folder = f"{bn}_{sanitize_folder_name(name)}"
             summary.append((folder, name, bucket_counts[bn]))
-        dialog = DryRunDialog(summary, sum(bucket_counts.values()), MAX_BUCKETS - len(bucket_counts), self)
+        unused = MAX_BUCKETS - len(bucket_counts)
+        dialog = DryRunDialog(summary, sum(bucket_counts.values()), unused, self)
         dialog.exec()
         if dialog.accepted_export:
             self._do_export()
@@ -613,16 +661,25 @@ class MainWindow(QMainWindow):
         self._do_export()
 
     def _do_export(self):
+        # Clean up previous worker
+        if self._export_worker is not None:
+            if self._export_worker.isRunning():
+                self._export_worker.wait()
+            self._export_worker.deleteLater()
+            self._export_worker = None
+
+        self._set_controls_enabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.statusBar().showMessage("Exporting...")
+
+        # ExportWorker deep-copies data internally for thread safety
         self._export_worker = ExportWorker(
             self.entries,
             self.output_input.text().strip(),
             self.source_input.text().strip(),
             self.bucket_names,
             self.deleted_tags,
-            num_workers=self.workers_spinner.value(),
         )
         self._export_worker.progress.connect(self._on_export_progress)
         self._export_worker.finished_export.connect(self._on_export_finished)
@@ -634,6 +691,7 @@ class MainWindow(QMainWindow):
 
     def _on_export_finished(self, copied, errors):
         self.progress_bar.setVisible(False)
+        self._set_controls_enabled(True)
         if errors == -1:
             QMessageBox.critical(self, "Security Error", "Output directory is inside the source directory.")
         elif errors == -2:

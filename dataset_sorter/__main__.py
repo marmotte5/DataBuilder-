@@ -1,4 +1,4 @@
-"""Point d'entrée : python -m dataset_sorter."""
+"""Entry point: python -m dataset_sorter."""
 
 from dataset_sorter.ui.main_window import run
 

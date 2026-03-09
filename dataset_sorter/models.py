@@ -65,8 +65,11 @@ class TrainingConfig:
     # Advanced parameters
     noise_offset: float = 0.0
     min_snr_gamma: int = 0
+    ip_noise_gamma: float = 0.0
+    debiased_estimation: bool = False
     caption_dropout_rate: float = 0.0
     multires_noise_discount: float = 0.0
+    guidance_scale: float = 1.0
 
     # Notes
     notes: list[str] = field(default_factory=list)

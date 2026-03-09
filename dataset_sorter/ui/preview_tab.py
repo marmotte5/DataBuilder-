@@ -40,7 +40,9 @@ class PreviewTab(QWidget):
         count = len(entry_indices)
         self.info_label.setText(f"Tag: {tag}  —  {count} image(s)")
 
-        shown = entry_indices[:self.MAX_THUMBNAILS]
+        # Filter out stale indices that may be out of bounds
+        valid_indices = [idx for idx in entry_indices if 0 <= idx < len(entries)]
+        shown = valid_indices[:self.MAX_THUMBNAILS]
         cols = 3 if len(shown) > 6 else 2 if len(shown) > 1 else 1
 
         for i, idx in enumerate(shown):

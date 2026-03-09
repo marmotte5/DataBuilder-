@@ -4,6 +4,7 @@ Supports parallel scanning with configurable worker count and
 optional GPU-accelerated image validation.
 """
 
+import copy
 import os
 import shutil
 import uuid
@@ -100,7 +101,13 @@ class ScanWorker(QThread):
         if self.num_workers <= 1:
             # Single-threaded fallback
             for args in args_list:
-                entry = _parse_single_image(args)
+                try:
+                    entry = _parse_single_image(args)
+                except Exception:
+                    entry = ImageEntry(
+                        image_path=image_files[args[0]],
+                        unique_id=f"{args[0]:06d}_{uuid.uuid4().hex[:8]}",
+                    )
                 entries[args[0]] = entry
                 completed += 1
                 if completed % 50 == 0 or completed == total:
@@ -128,8 +135,27 @@ class ScanWorker(QThread):
         self.finished_scan.emit(entries)
 
 
+def _unique_dest(folder_path: Path, name: str) -> Path:
+    """Return a unique destination path, appending _001 etc. on collision."""
+    dest = folder_path / name
+    if not dest.exists():
+        return dest
+    stem = Path(name).stem
+    suffix = Path(name).suffix
+    counter = 1
+    while True:
+        candidate = folder_path / f"{stem}_{counter:03d}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 class ExportWorker(QThread):
-    """Copies images and filtered txt files to output directory."""
+    """Copies images and filtered txt files to output directory.
+
+    Uses deep copies of data to avoid thread safety issues.
+    Handles filename collisions by appending unique suffixes.
+    """
 
     progress = pyqtSignal(int, int)
     finished_export = pyqtSignal(int, int)  # copied, errors
@@ -142,16 +168,15 @@ class ExportWorker(QThread):
         source_dir: str,
         bucket_names: dict[int, str],
         deleted_tags: set[str],
-        num_workers: int = DEFAULT_NUM_WORKERS,
         parent=None,
     ):
         super().__init__(parent)
-        self.entries = entries
+        # Deep copy to prevent thread safety issues
+        self.entries = copy.deepcopy(entries)
         self.output_dir = Path(output_dir)
         self.source_dir = Path(source_dir)
-        self.bucket_names = bucket_names
-        self.deleted_tags = deleted_tags
-        self.num_workers = max(1, num_workers)
+        self.bucket_names = dict(bucket_names)
+        self.deleted_tags = set(deleted_tags)
 
     def run(self):
         # Security checks
@@ -192,14 +217,17 @@ class ExportWorker(QThread):
 
             for entry in b_entries:
                 try:
-                    dest_img = folder_path / entry.image_path.name
+                    # Use unique destination to avoid filename collisions
+                    dest_img = _unique_dest(folder_path, entry.image_path.name)
                     if not is_path_inside(dest_img, self.output_dir):
                         errors += 1
                         continue
                     shutil.copy2(str(entry.image_path), str(dest_img))
 
                     if entry.txt_path is not None:
-                        dest_txt = folder_path / entry.txt_path.name
+                        # Match txt filename to image filename
+                        txt_name = dest_img.stem + ".txt"
+                        dest_txt = folder_path / txt_name
                         if is_path_inside(dest_txt, self.output_dir):
                             if self.deleted_tags:
                                 filtered = [

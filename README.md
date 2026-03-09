@@ -9,9 +9,9 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 ## Features
 
 - **Tag-based sorting** — Automatically sorts images into 80 buckets based on tag rarity using numpy percentile quantiles
-- **Training recommendations** — State-of-the-art parameter suggestions for SD 1.5, SDXL, Flux, SD3, and Pony Diffusion (LoRA and full finetune)
-- **10 model types** — SD 1.5 LoRA/Full, SDXL LoRA/Full, Flux LoRA/Full, SD3 LoRA/Full, Pony LoRA/Full
-- **6 optimizers** — Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, SGD
+- **Training recommendations** — State-of-the-art parameter suggestions for SD 1.5, SDXL, Flux, SD3, Pony Diffusion, and Z-Image (LoRA and full finetune)
+- **12 model types** — SD 1.5, SDXL, Flux, SD3, Pony, Z-Image (LoRA and Full Finetune each)
+- **9 optimizers** — Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, CAME, AdamW Schedule-Free, Lion, SGD
 - **4 network types** — LoRA, DoRA, LoHa, LoKr with auto-tuned rank/alpha
 - **6 VRAM profiles** — 8, 12, 16, 24, 48, 96 GB with optimized batch/memory settings
 - **Tag management** — Rename, merge, search & replace, delete/restore tags
@@ -98,7 +98,7 @@ The scanner recursively finds all images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bm
 ### 3. Get training recommendations
 
 Switch to the **Recommendations** tab and configure:
-- **Model type** (SD 1.5, SDXL, Flux, SD3, Pony)
+- **Model type** (SD 1.5, SDXL, Flux, SD3, Pony, Z-Image)
 - **VRAM** (8–96 GB)
 - **Network type** (LoRA, DoRA, LoHa, LoKr)
 - **Optimizer** (Adafactor, Prodigy, AdamW, etc.)
@@ -149,9 +149,15 @@ dataset_sorter/
 The recommendation engine incorporates community best practices (2025–2026) from kohya_ss, OneTrainer, SimpleTuner, and civitai guides:
 
 - **Flux**: LR 5–10x higher than SDXL (base 2e-3), both text encoders frozen, steps capped at 1500–2000
+- **Z-Image**: 6B param S3-DiT (Alibaba/Tongyi-MAI), sigmoid timestep_type, rank 16-64
 - **Prodigy**: LR=1.0 (self-adjusting), d_coef=0.8, decouple=True, 25% more steps
 - **Adafactor**: scale_parameter=False, 5x LR multiplier for LoRA
-- **Min SNR gamma=5**: Always enabled (~3.4x faster convergence, ICCV 2023)
+- **CAME**: Confidence-guided adaptive optimizer, Adafactor memory with AdamW quality
+- **Lion**: Sign-based optimizer, ~50% less memory, auto-reduced LR
+- **AdamW Schedule-Free**: No external scheduler needed, optimizer handles warmup/decay
+- **Min SNR gamma=5**: Enabled for epsilon-prediction models (SD 1.5, SDXL, Pony)
+- **Debiased estimation**: Preferred for flow-matching models (Flux, SD3) instead of Min SNR
+- **IP noise gamma=0.1**: Input perturbation regularization for LoRA training
 - **Network rank**: Auto-scaled by model type, dataset size, diversity, and VRAM
 - **VRAM profiles**: Tested batch/gradient accumulation/checkpointing combos per model+VRAM pair
 
