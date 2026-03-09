@@ -312,7 +312,13 @@ class MainWindow(QMainWindow):
             self._assign_single_entry_bucket(entry)
 
     def _assign_single_entry_bucket(self, entry: ImageEntry):
-        """Assign a single entry to its bucket based on its tags."""
+        """Assign a single entry to its bucket based on its tags.
+
+        Per-image forced_bucket takes priority over tag-based calculation.
+        """
+        if entry.forced_bucket is not None:
+            entry.assigned_bucket = entry.forced_bucket
+            return
         active = [t for t in entry.tags if t not in self.deleted_tags]
         if not active:
             entry.assigned_bucket = 1
@@ -626,13 +632,17 @@ class MainWindow(QMainWindow):
 
     def _force_image_bucket(self, index, bucket):
         if 0 <= index < len(self.entries):
-            self.entries[index].assigned_bucket = bucket
+            entry = self.entries[index]
+            entry.forced_bucket = bucket
+            entry.assigned_bucket = bucket
             self.image_tab.refresh()
             self.statusBar().showMessage(f"Image forced to bucket {bucket}.")
 
     def _reset_image_bucket(self, index):
         if 0 <= index < len(self.entries):
-            self._assign_single_entry_bucket(self.entries[index])
+            entry = self.entries[index]
+            entry.forced_bucket = None
+            self._assign_single_entry_bucket(entry)
             self.image_tab.refresh()
             self.statusBar().showMessage("Image bucket reset.")
 

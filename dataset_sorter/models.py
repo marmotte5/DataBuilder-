@@ -83,6 +83,7 @@ class ImageEntry:
     txt_path: Optional[Path] = None
     tags: list[str] = field(default_factory=list)
     assigned_bucket: int = 1
+    forced_bucket: Optional[int] = None  # Per-image override, survives tag edits
     unique_id: str = ""
 
 

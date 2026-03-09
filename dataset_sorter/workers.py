@@ -221,26 +221,26 @@ class ExportWorker(QThread):
                     dest_img = _unique_dest(folder_path, entry.image_path.name)
                     if not is_path_inside(dest_img, self.output_dir):
                         errors += 1
-                        continue
-                    shutil.copy2(str(entry.image_path), str(dest_img))
+                    else:
+                        shutil.copy2(str(entry.image_path), str(dest_img))
 
-                    if entry.txt_path is not None:
-                        # Match txt filename to image filename
-                        txt_name = dest_img.stem + ".txt"
-                        dest_txt = folder_path / txt_name
-                        if is_path_inside(dest_txt, self.output_dir):
-                            # Always write from entry.tags to capture any
-                            # renames, merges, or search/replace edits.
-                            # Filter out deleted tags if any.
-                            filtered = [
-                                t for t in entry.tags
-                                if t not in self.deleted_tags
-                            ]
-                            dest_txt.write_text(
-                                ", ".join(filtered), encoding="utf-8",
-                            )
+                        if entry.txt_path is not None:
+                            # Match txt filename to image filename
+                            txt_name = dest_img.stem + ".txt"
+                            dest_txt = folder_path / txt_name
+                            if is_path_inside(dest_txt, self.output_dir):
+                                # Always write from entry.tags to capture any
+                                # renames, merges, or search/replace edits.
+                                # Filter out deleted tags if any.
+                                filtered = [
+                                    t for t in entry.tags
+                                    if t not in self.deleted_tags
+                                ]
+                                dest_txt.write_text(
+                                    ", ".join(filtered), encoding="utf-8",
+                                )
 
-                    copied += 1
+                        copied += 1
                 except Exception as exc:
                     errors += 1
                     error_log.append(f"{entry.image_path}: {exc}")
