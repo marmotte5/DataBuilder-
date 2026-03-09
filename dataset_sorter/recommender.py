@@ -461,13 +461,14 @@ def recommend(
     # --- Advanced parameters ---
     config.mixed_precision = "bf16"
 
-    # Noise offset: 0.0-0.1, improves blacks/whites
+    # Noise offset: improves blacks/whites dynamic range
+    # Community consensus 2025: 0.05 for Flux/SDXL, 0.05-0.1 for SD 1.5
     if is_flux or is_sd3:
-        config.noise_offset = 0.04
+        config.noise_offset = 0.05
     elif is_zimage:
-        config.noise_offset = 0.04
+        config.noise_offset = 0.05
     elif is_sdxl or is_pony:
-        config.noise_offset = 0.0357
+        config.noise_offset = 0.05
     else:
         config.noise_offset = 0.05
 
@@ -491,19 +492,18 @@ def recommend(
         config.guidance_scale = 1.0
 
     # Caption dropout: anti-overfit regularization
+    # Community consensus: 0.05 max for LoRA, higher risks "captionless LoRA"
     if not is_lora:
         if size_cat == "small" and total_images >= 20:
-            config.caption_dropout_rate = 0.1
+            config.caption_dropout_rate = 0.05
         elif size_cat in ("medium", "large"):
-            config.caption_dropout_rate = 0.15
+            config.caption_dropout_rate = 0.1
         elif size_cat == "very_large":
             config.caption_dropout_rate = 0.1
     else:
         if size_cat == "small" and total_images >= 30:
             config.caption_dropout_rate = 0.05
-        elif size_cat in ("medium", "large"):
-            config.caption_dropout_rate = 0.1
-        elif size_cat == "very_large":
+        elif size_cat in ("medium", "large", "very_large"):
             config.caption_dropout_rate = 0.05
 
     # Full finetune: higher weight decay for regularization
@@ -595,7 +595,9 @@ def _build_notes(
     if optimizer == "Prodigy":
         notes.append(
             "Prodigy: LR=1.0 is intentional (self-adjusting). "
-            "d_coef stabilizes in ~200-300 steps. Monitor d_coef in logs."
+            "d_coef stabilizes in ~200-300 steps. Monitor d_coef in logs. "
+            "Use cosine or constant scheduler — avoid cosine_with_restarts "
+            "(Prodigy authors recommend against it)."
         )
         if not is_lora:
             notes.append(
@@ -604,10 +606,15 @@ def _build_notes(
             )
     elif optimizer == "DAdaptAdam":
         notes.append("D-Adapt Adam: LR=1.0 is intentional (self-adjusting).")
-    elif optimizer == "Adafactor" and ("sdxl" in model_type or is_pony):
+    elif optimizer == "Adafactor":
+        if "sdxl" in model_type or is_pony:
+            notes.append(
+                "With Adafactor + SDXL, enable fused_backward_pass in kohya "
+                "to reduce VRAM from ~24 GB to ~10 GB."
+            )
         notes.append(
-            "With Adafactor + SDXL, enable fused_backward_pass in kohya "
-            "to reduce VRAM from ~24 GB to ~10 GB."
+            "Adafactor: stochastic rounding is important when using bf16 "
+            "LoRA weights. May need more steps than adaptive optimizers."
         )
     elif optimizer == "CAME":
         notes.append(
@@ -637,7 +644,8 @@ def _build_notes(
     if network_type == "dora":
         notes.append(
             "DoRA: magnitude + direction decomposition. ~30% slower than LoRA "
-            "and ~15% more VRAM, but often better quality."
+            "and ~15% more VRAM, but often better quality. "
+            "Warning: DoRA LoRA/LoCon may have loading issues in Forge UI."
         )
     elif network_type == "loha":
         notes.append(
@@ -661,12 +669,18 @@ def _build_notes(
             notes.append(
                 "Flux learns very fast (5-10x faster than SDXL). "
                 "Watch for overtraining — good captions matter more "
-                "than text encoder training."
+                "than text encoder training. Save checkpoints every 200-500 steps."
             )
             notes.append(
-                "Flux: guidance_scale=1.0 during training. "
+                "Flux: guidance_scale=1.0 during training, "
+                "timestep_sampling=sigmoid, model_prediction_type=raw. "
                 "Both text encoders (T5-XXL + CLIP-L) should be frozen."
             )
+            if config.effective_batch_size < 4:
+                notes.append(
+                    "WARNING: Flux benefits from effective batch size >= 4 for "
+                    "stable training. Consider increasing gradient accumulation."
+                )
         else:
             notes.append(
                 "Flux full finetune: 12B parameter model. Requires 48+ GB VRAM "
