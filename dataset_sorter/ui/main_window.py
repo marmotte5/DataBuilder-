@@ -35,6 +35,7 @@ from dataset_sorter.ui.override_panel import OverridePanel
 from dataset_sorter.ui.preview_tab import PreviewTab
 from dataset_sorter.ui.reco_tab import RecoTab
 from dataset_sorter.ui.image_tab import ImageTab
+from dataset_sorter.ui.training_tab import TrainingTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 
 
@@ -166,6 +167,8 @@ class MainWindow(QMainWindow):
         right_tabs.addTab(self.reco_tab, "Recommendations")
         self.image_tab = ImageTab()
         right_tabs.addTab(self.image_tab, "Images")
+        self.training_tab = TrainingTab()
+        right_tabs.addTab(self.training_tab, "Training")
         splitter.addWidget(right_tabs)
 
         splitter.setSizes([500, 300, 400])
@@ -207,6 +210,8 @@ class MainWindow(QMainWindow):
 
         self.image_tab.force_bucket.connect(self._force_image_bucket)
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
+
+        self.training_tab.request_training_data.connect(self._on_training_data_request)
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable/disable data-dependent controls during scan/export."""
@@ -657,6 +662,19 @@ class MainWindow(QMainWindow):
         )
         self.reco_tab.set_last_config(config)
         self.reco_tab.set_output(recommender.format_config(config))
+
+    # -- Training tab --
+
+    def _on_training_data_request(self):
+        """Provide dataset + recommendations to training tab."""
+        # Apply recommendations config if available
+        if hasattr(self.reco_tab, '_last_config') and self.reco_tab._last_config is not None:
+            self.training_tab.apply_config(self.reco_tab._last_config)
+
+        if self.entries:
+            self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
+        else:
+            self.statusBar().showMessage("No dataset loaded. Scan first.")
 
     # -- Image tab --
 

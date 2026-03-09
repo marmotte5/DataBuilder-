@@ -1,2 +1,19 @@
 PyQt6>=6.5
 numpy>=1.24
+
+# Training dependencies (install for training functionality)
+torch>=2.1
+torchvision>=0.16
+diffusers>=0.28
+transformers>=4.38
+accelerate>=0.27
+safetensors>=0.4
+peft>=0.10
+Pillow>=10.0
+
+# Optional optimizers (install as needed)
+# bitsandbytes>=0.43     # AdamW 8-bit
+# prodigyopt>=1.0        # Prodigy optimizer
+# lion-pytorch>=0.1      # Lion optimizer
+# dadaptation>=3.1       # D-Adapt Adam
+# came-pytorch>=0.1      # CAME optimizer
