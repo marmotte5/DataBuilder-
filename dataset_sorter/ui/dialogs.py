@@ -1,4 +1,4 @@
-"""Dialogues de l'application."""
+"""Application dialogs."""
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -6,23 +6,15 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 
-from dataset_sorter.ui.theme import (
-    COLORS, SUCCESS_BUTTON_STYLE, MUTED_LABEL_STYLE,
-)
+from dataset_sorter.ui.theme import COLORS, SUCCESS_BUTTON_STYLE, MUTED_LABEL_STYLE
 
 
 class DryRunDialog(QDialog):
-    """Affiche un résumé de l'export avant exécution."""
+    """Shows export summary before execution."""
 
-    def __init__(
-        self,
-        bucket_summary: list[tuple[str, str, int]],
-        total_images: int,
-        hidden_empty: int,
-        parent=None,
-    ):
+    def __init__(self, bucket_summary, total_images, hidden_empty, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Résumé de l'export (Dry Run)")
+        self.setWindowTitle("Export Summary (Dry Run)")
         self.setMinimumSize(550, 450)
         self.accepted_export = False
 
@@ -30,22 +22,13 @@ class DryRunDialog(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Info
-        info = QLabel(
-            f"{total_images} images dans {len(bucket_summary)} buckets actifs"
-        )
-        info.setStyleSheet(f"""
-            color: {COLORS['text']};
-            font-size: 16px;
-            font-weight: 700;
-            background: transparent;
-        """)
+        info = QLabel(f"{total_images} images in {len(bucket_summary)} active buckets")
+        info.setStyleSheet(f"color: {COLORS['text']}; font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(info)
 
-        # Table
         table = QTableWidget()
         table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Dossier", "Nom", "Images"])
+        table.setHorizontalHeaderLabels(["Folder", "Name", "Images"])
         table.setRowCount(len(bucket_summary))
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().setVisible(False)
@@ -60,28 +43,24 @@ class DryRunDialog(QDialog):
             table.setItem(row, 0, QTableWidgetItem(folder))
             table.setItem(row, 1, QTableWidgetItem(name))
             ci = QTableWidgetItem(str(count))
-            ci.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
+            ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             table.setItem(row, 2, ci)
-
         layout.addWidget(table, 1)
 
         if hidden_empty > 0:
-            hid = QLabel(f"{hidden_empty} buckets vides masqués")
+            hid = QLabel(f"{hidden_empty} empty buckets hidden")
             hid.setStyleSheet(MUTED_LABEL_STYLE)
             layout.addWidget(hid)
 
-        # Boutons
         btns = QHBoxLayout()
         btns.addStretch()
-        btn_cancel = QPushButton("Annuler")
-        btn_cancel.clicked.connect(self.reject)
-        btns.addWidget(btn_cancel)
-        btn_go = QPushButton("Lancer l'export")
-        btn_go.setStyleSheet(SUCCESS_BUTTON_STYLE)
-        btn_go.clicked.connect(self._accept)
-        btns.addWidget(btn_go)
+        bc = QPushButton("Cancel")
+        bc.clicked.connect(self.reject)
+        btns.addWidget(bc)
+        bg = QPushButton("Start Export")
+        bg.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        bg.clicked.connect(self._accept)
+        btns.addWidget(bg)
         layout.addLayout(btns)
 
     def _accept(self):

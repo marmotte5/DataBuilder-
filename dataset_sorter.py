@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lanceur de Dataset Sorter."""
+"""Dataset Sorter launcher."""
 
 from dataset_sorter.ui.main_window import run
 

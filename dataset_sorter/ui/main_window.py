@@ -1,4 +1,4 @@
-"""Fenêtre principale de l'application Dataset Sorter."""
+"""Main application window — Dataset Sorter."""
 
 import json
 import sys
@@ -12,20 +12,20 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
-    QTabWidget, QFileDialog, QMessageBox,
+    QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
 )
 
 from dataset_sorter.constants import (
-    CONFIG_FILE, MAX_BUCKETS, MODEL_TYPE_KEYS,
+    CONFIG_FILE, MAX_BUCKETS, DEFAULT_NUM_WORKERS,
 )
 from dataset_sorter.models import ImageEntry
-from dataset_sorter.utils import sanitize_folder_name, validate_paths
+from dataset_sorter.utils import sanitize_folder_name, validate_paths, has_gpu
 from dataset_sorter.workers import ScanWorker, ExportWorker
 from dataset_sorter import recommender
 
 from dataset_sorter.ui.theme import (
     get_stylesheet, COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    SECURITY_BANNER_STYLE,
+    SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE,
 )
 from dataset_sorter.ui.tag_panel import TagPanel
 from dataset_sorter.ui.override_panel import OverridePanel
@@ -36,11 +36,11 @@ from dataset_sorter.ui.dialogs import DryRunDialog
 
 
 class MainWindow(QMainWindow):
-    """Fenêtre principale — orchestre tous les panneaux."""
+    """Main window — orchestrates all panels."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dataset Sorter")
+        self.setWindowTitle("Dataset Sorter — Sort datasets by tag rarity")
         self.setMinimumSize(1400, 900)
 
         # State
@@ -56,16 +56,14 @@ class MainWindow(QMainWindow):
 
         self._scan_worker: Optional[ScanWorker] = None
         self._export_worker: Optional[ExportWorker] = None
+        self._gpu_available = has_gpu()
+        self._selection_connected = False
 
         self._build_ui()
         self._connect_signals()
         self.statusBar().showMessage(
-            "Prêt. Sélectionnez un dossier source et lancez le scan."
+            "Ready. Select a source folder and start scanning."
         )
-
-    # ------------------------------------------------------------------
-    # UI
-    # ------------------------------------------------------------------
 
     def _build_ui(self):
         central = QWidget()
@@ -74,36 +72,66 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        # Top bar
+        # Top bar — paths
         top = QHBoxLayout()
         top.setSpacing(8)
-        top.addWidget(self._label("Dossier source"))
+        top.addWidget(self._label("Source"))
         self.source_input = QLineEdit()
-        self.source_input.setPlaceholderText("Chemin du dossier source...")
+        self.source_input.setPlaceholderText("Source directory path...")
         top.addWidget(self.source_input, 2)
-        btn_src = QPushButton("Parcourir")
+        btn_src = QPushButton("Browse")
         btn_src.clicked.connect(self._browse_source)
         top.addWidget(btn_src)
-
-        top.addWidget(self._label("Dossier de sortie"))
+        top.addWidget(self._label("Output"))
         self.output_input = QLineEdit()
-        self.output_input.setPlaceholderText("Chemin du dossier de sortie...")
+        self.output_input.setPlaceholderText("Output directory path...")
         top.addWidget(self.output_input, 2)
-        btn_out = QPushButton("Parcourir")
+        btn_out = QPushButton("Browse")
         btn_out.clicked.connect(self._browse_output)
         top.addWidget(btn_out)
+        root.addLayout(top)
 
-        self.btn_scan = QPushButton("Scanner")
+        # Scan settings bar — workers, GPU, scan button
+        scan_bar = QHBoxLayout()
+        scan_bar.setSpacing(8)
+
+        wlbl = QLabel("Workers:")
+        wlbl.setStyleSheet(MUTED_LABEL_STYLE)
+        scan_bar.addWidget(wlbl)
+        self.workers_spinner = QSpinBox()
+        self.workers_spinner.setRange(1, 32)
+        self.workers_spinner.setValue(DEFAULT_NUM_WORKERS)
+        self.workers_spinner.setToolTip(
+            "Number of parallel threads for scanning. "
+            "Higher = faster on large datasets with SSDs."
+        )
+        self.workers_spinner.setMaximumWidth(70)
+        scan_bar.addWidget(self.workers_spinner)
+
+        self.gpu_checkbox = QCheckBox("GPU validation")
+        self.gpu_checkbox.setToolTip(
+            "Use GPU to validate images during scan (requires torch + torchvision). "
+            "Catches corrupt files early."
+        )
+        self.gpu_checkbox.setEnabled(self._gpu_available)
+        if not self._gpu_available:
+            self.gpu_checkbox.setToolTip(
+                "GPU not available. Install torch with CUDA support to enable."
+            )
+        scan_bar.addWidget(self.gpu_checkbox)
+
+        scan_bar.addStretch()
+
+        self.btn_scan = QPushButton("Scan")
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_scan.clicked.connect(self._start_scan)
-        top.addWidget(self.btn_scan)
-        root.addLayout(top)
+        scan_bar.addWidget(self.btn_scan)
+        root.addLayout(scan_bar)
 
         # Security banner
         banner = QLabel(
-            "LECTURE SEULE — Les fichiers sources ne sont jamais modifiés, "
-            "renommés, déplacés ou supprimés. Toutes les opérations ont lieu "
-            "dans le dossier de sortie."
+            "READ-ONLY — Source files are never modified, renamed, moved or "
+            "deleted. All operations happen in the output directory only."
         )
         banner.setStyleSheet(SECURITY_BANNER_STYLE)
         banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -117,19 +145,16 @@ class MainWindow(QMainWindow):
 
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
-
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
-
         self.override_panel = OverridePanel()
         splitter.addWidget(self.override_panel)
 
-        # Right tabs
         right_tabs = QTabWidget()
         self.preview_tab = PreviewTab()
         right_tabs.addTab(self.preview_tab, "Preview")
         self.reco_tab = RecoTab()
-        right_tabs.addTab(self.reco_tab, "Recommandations")
+        right_tabs.addTab(self.reco_tab, "Recommendations")
         self.image_tab = ImageTab()
         right_tabs.addTab(self.image_tab, "Images")
         splitter.addWidget(right_tabs)
@@ -139,24 +164,20 @@ class MainWindow(QMainWindow):
 
         # Bottom bar
         bottom = QHBoxLayout()
-        btn_dry = QPushButton("Dry Run (Résumé)")
+        btn_dry = QPushButton("Dry Run (Summary)")
         btn_dry.clicked.connect(self._dry_run)
         bottom.addWidget(btn_dry)
         bottom.addStretch()
-        btn_export = QPushButton("Lancer l'export (copie uniquement)")
+        btn_export = QPushButton("Export (copy only)")
         btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
         btn_export.clicked.connect(self._start_export)
         bottom.addWidget(btn_export)
         root.addLayout(bottom)
 
-    def _label(self, text: str) -> QLabel:
+    def _label(self, text):
         lbl = QLabel(text)
         lbl.setStyleSheet("background: transparent;")
         return lbl
-
-    # ------------------------------------------------------------------
-    # Signal wiring
-    # ------------------------------------------------------------------
 
     def _connect_signals(self):
         p = self.override_panel
@@ -178,41 +199,50 @@ class MainWindow(QMainWindow):
         self.image_tab.force_bucket.connect(self._force_image_bucket)
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
 
-    # ------------------------------------------------------------------
-    # Browsing & Scan
-    # ------------------------------------------------------------------
+    # -- Browsing & Scan --
 
     def _browse_source(self):
-        path = QFileDialog.getExistingDirectory(self, "Dossier source")
+        path = QFileDialog.getExistingDirectory(self, "Select source directory")
         if path:
             self.source_input.setText(path)
 
     def _browse_output(self):
-        path = QFileDialog.getExistingDirectory(self, "Dossier de sortie")
+        path = QFileDialog.getExistingDirectory(self, "Select output directory")
         if path:
             self.output_input.setText(path)
 
     def _start_scan(self):
         source = self.source_input.text().strip()
         if not source or not Path(source).is_dir():
-            self.statusBar().showMessage("Erreur : dossier source invalide.")
+            self.statusBar().showMessage("Error: invalid source directory.")
             return
 
         self.btn_scan.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.statusBar().showMessage("Scan en cours...")
 
-        self._scan_worker = ScanWorker(source)
+        num_workers = self.workers_spinner.value()
+        use_gpu = self.gpu_checkbox.isChecked() and self._gpu_available
+
+        self.statusBar().showMessage(
+            f"Scanning with {num_workers} worker(s)"
+            f"{' + GPU validation' if use_gpu else ''}..."
+        )
+
+        self._scan_worker = ScanWorker(
+            source,
+            num_workers=num_workers,
+            use_gpu=use_gpu,
+        )
         self._scan_worker.progress.connect(self._on_scan_progress)
         self._scan_worker.finished_scan.connect(self._on_scan_finished)
         self._scan_worker.start()
 
-    def _on_scan_progress(self, current: int, total: int):
+    def _on_scan_progress(self, current, total):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
-    def _on_scan_finished(self, entries: list):
+    def _on_scan_finished(self, entries):
         self.entries = entries
         self.progress_bar.setVisible(False)
         self.btn_scan.setEnabled(True)
@@ -222,17 +252,17 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
 
-        self.tag_panel.connect_selection()
+        if not self._selection_connected:
+            self.tag_panel.connect_selection()
+            self._selection_connected = True
 
         n_txt = sum(1 for e in self.entries if e.txt_path is not None)
         self.statusBar().showMessage(
-            f"Scan terminé : {len(self.entries)} images, "
-            f"{n_txt} txt, {len(self.tag_counts)} tags uniques."
+            f"Scan complete: {len(self.entries)} images, "
+            f"{n_txt} txt files, {len(self.tag_counts)} unique tags."
         )
 
-    # ------------------------------------------------------------------
-    # Tag index & bucket computation
-    # ------------------------------------------------------------------
+    # -- Tag index & buckets --
 
     def _rebuild_tag_index(self):
         self.tag_counts = Counter()
@@ -252,7 +282,7 @@ class MainWindow(QMainWindow):
 
         if counts.min() == counts.max():
             for i, tag in enumerate(tags):
-                self.tag_auto_buckets[tag] = (i * MAX_BUCKETS) // len(tags) + 1
+                self.tag_auto_buckets[tag] = min((i * MAX_BUCKETS) // len(tags) + 1, MAX_BUCKETS)
             return
 
         percentiles = np.linspace(0, 100, MAX_BUCKETS + 1)
@@ -275,9 +305,7 @@ class MainWindow(QMainWindow):
                 max_b = max(max_b, b)
             entry.assigned_bucket = max(1, max_b)
 
-    # ------------------------------------------------------------------
-    # UI refresh
-    # ------------------------------------------------------------------
+    # -- UI refresh --
 
     def _refresh_all_ui(self):
         self.tag_panel.populate(
@@ -295,54 +323,41 @@ class MainWindow(QMainWindow):
         )
 
     def _after_tag_edit(self):
-        """Pipeline commun après toute modification de tags."""
         self._rebuild_tag_index()
         self._compute_auto_buckets()
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
 
-    # ------------------------------------------------------------------
-    # Tag selection
-    # ------------------------------------------------------------------
+    # -- Tag selection --
 
-    def _on_tag_selection(self, tags: list[str]):
+    def _on_tag_selection(self, tags):
         if not tags:
-            self.override_panel.set_selected_info("Aucun tag sélectionné")
+            self.override_panel.set_selected_info("No tag selected")
             return
         if len(tags) == 1:
             tag = tags[0]
             count = self.tag_counts.get(tag, 0)
-            self.override_panel.set_selected_info(
-                f"Tag : {tag} ({count} occurrences)"
-            )
+            self.override_panel.set_selected_info(f"Tag: {tag} ({count} occurrences)")
             indices = self.tag_to_entries.get(tag, [])
             self.preview_tab.update_preview(tag, indices, self.entries)
         else:
-            self.override_panel.set_selected_info(
-                f"{len(tags)} tags sélectionnés"
-            )
+            self.override_panel.set_selected_info(f"{len(tags)} tags selected")
 
-    # ------------------------------------------------------------------
-    # Override operations
-    # ------------------------------------------------------------------
+    # -- Overrides --
 
-    def _apply_override(self, value: int):
+    def _apply_override(self, value):
         tags = self.tag_panel.get_selected_tags()
         if not tags:
-            self.statusBar().showMessage("Aucun tag sélectionné.")
+            self.statusBar().showMessage("No tag selected.")
             return
         if value == 0:
             for tag in tags:
                 self.manual_overrides.pop(tag, None)
-            self.statusBar().showMessage(
-                f"Override supprimé pour {len(tags)} tag(s)."
-            )
+            self.statusBar().showMessage(f"Override removed for {len(tags)} tag(s).")
         else:
             for tag in tags:
                 self.manual_overrides[tag] = value
-            self.statusBar().showMessage(
-                f"Override → bucket {value} pour {len(tags)} tag(s)."
-            )
+            self.statusBar().showMessage(f"Override -> bucket {value} for {len(tags)} tag(s).")
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
 
@@ -354,13 +369,9 @@ class MainWindow(QMainWindow):
             self.manual_overrides.pop(tag, None)
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
-        self.statusBar().showMessage(
-            f"Override réinitialisé pour {len(tags)} tag(s)."
-        )
+        self.statusBar().showMessage(f"Override reset for {len(tags)} tag(s).")
 
-    # ------------------------------------------------------------------
-    # Tag deletion
-    # ------------------------------------------------------------------
+    # -- Tag deletion --
 
     def _delete_selected_tags(self):
         tags = self.tag_panel.get_selected_tags()
@@ -369,9 +380,7 @@ class MainWindow(QMainWindow):
         self.deleted_tags.update(tags)
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
-        self.statusBar().showMessage(
-            f"{len(tags)} tag(s) marqué(s) pour suppression."
-        )
+        self.statusBar().showMessage(f"{len(tags)} tag(s) marked for deletion.")
 
     def _restore_selected_tags(self):
         tags = self.tag_panel.get_selected_tags()
@@ -381,28 +390,25 @@ class MainWindow(QMainWindow):
             self.deleted_tags.discard(tag)
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
-        self.statusBar().showMessage(f"{len(tags)} tag(s) restauré(s).")
+        self.statusBar().showMessage(f"{len(tags)} tag(s) restored.")
 
     def _restore_all_tags(self):
         n = len(self.deleted_tags)
         self.deleted_tags.clear()
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
-        self.statusBar().showMessage(f"{n} tag(s) restauré(s).")
+        self.statusBar().showMessage(f"{n} tag(s) restored.")
 
-    # ------------------------------------------------------------------
-    # Tag editing
-    # ------------------------------------------------------------------
+    # -- Tag editing --
 
-    def _rename_tag(self, new_name: str):
+    def _rename_tag(self, new_name):
         if not new_name:
-            self.override_panel.set_editor_info("Entrez un nouveau nom.")
+            self.override_panel.set_editor_info("Enter a new name.")
             return
         tags = self.tag_panel.get_selected_tags()
         if not tags:
-            self.override_panel.set_editor_info("Sélectionnez un tag.")
+            self.override_panel.set_editor_info("Select a tag first.")
             return
-
         count = 0
         for old_tag in tags:
             if old_tag == new_name:
@@ -419,23 +425,17 @@ class MainWindow(QMainWindow):
             if old_tag in self.deleted_tags:
                 self.deleted_tags.discard(old_tag)
                 self.deleted_tags.add(new_name)
-
         self._after_tag_edit()
-        self.override_panel.set_editor_info(
-            f"Renommage effectué ({count} modifications)."
-        )
+        self.override_panel.set_editor_info(f"Renamed ({count} changes).")
 
-    def _merge_tags(self, target: str):
+    def _merge_tags(self, target):
         if not target:
-            self.override_panel.set_editor_info("Entrez un tag cible.")
+            self.override_panel.set_editor_info("Enter a target tag.")
             return
         tags = self.tag_panel.get_selected_tags()
         if len(tags) < 2:
-            self.override_panel.set_editor_info(
-                "Sélectionnez au moins 2 tags pour fusionner."
-            )
+            self.override_panel.set_editor_info("Select at least 2 tags to merge.")
             return
-
         count = 0
         for tag in tags:
             if tag == target:
@@ -452,17 +452,13 @@ class MainWindow(QMainWindow):
             else:
                 self.manual_overrides.pop(tag, None)
             self.deleted_tags.discard(tag)
-
         self._after_tag_edit()
-        self.override_panel.set_editor_info(
-            f"Fusion vers « {target} » ({count} modifications)."
-        )
+        self.override_panel.set_editor_info(f"Merged to \"{target}\" ({count} changes).")
 
-    def _search_replace_tags(self, search: str, replace: str):
+    def _search_replace_tags(self, search, replace):
         if not search:
-            self.override_panel.set_editor_info("Entrez un texte à rechercher.")
+            self.override_panel.set_editor_info("Enter search text.")
             return
-
         modified = 0
         for entry in self.entries:
             new_tags: list[str] = []
@@ -478,8 +474,6 @@ class MainWindow(QMainWindow):
             if changed:
                 entry.tags = new_tags
                 modified += 1
-
-        # Transfer overrides & deleted
         updates = {}
         for tag, val in list(self.manual_overrides.items()):
             new_tag = tag.replace(search, replace).strip()
@@ -488,39 +482,29 @@ class MainWindow(QMainWindow):
                 if new_tag:
                     updates[new_tag] = val
         self.manual_overrides.update(updates)
-
         new_del = set()
         for tag in self.deleted_tags:
             new_tag = tag.replace(search, replace).strip()
             if new_tag:
                 new_del.add(new_tag)
         self.deleted_tags = new_del
-
         self._after_tag_edit()
-        self.override_panel.set_editor_info(
-            f"« {search} » → « {replace} » : {modified} entrée(s) modifiée(s)."
-        )
+        self.override_panel.set_editor_info(f"\"{search}\" -> \"{replace}\": {modified} entries modified.")
 
-    # ------------------------------------------------------------------
-    # Bucket names
-    # ------------------------------------------------------------------
+    # -- Bucket names --
 
-    def _apply_bucket_name_all(self, name: str):
+    def _apply_bucket_name_all(self, name):
         if not name:
             return
         s = sanitize_folder_name(name)
         for i in range(1, MAX_BUCKETS + 1):
             self.bucket_names[i] = s
-        self.statusBar().showMessage(f"Nom « {s} » appliqué à tous les buckets.")
+        self.statusBar().showMessage(f"Name \"{s}\" applied to all buckets.")
 
-    # ------------------------------------------------------------------
-    # Config
-    # ------------------------------------------------------------------
+    # -- Config --
 
     def _save_config(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Sauvegarder la configuration", CONFIG_FILE, "JSON (*.json)",
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Save Configuration", CONFIG_FILE, "JSON (*.json)")
         if not path:
             return
         data = {
@@ -531,25 +515,20 @@ class MainWindow(QMainWindow):
             "output_dir": self.output_input.text(),
         }
         try:
-            Path(path).write_text(
-                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8",
-            )
-            self.statusBar().showMessage(f"Configuration sauvegardée : {path}")
+            Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            self.statusBar().showMessage(f"Config saved: {path}")
         except OSError as e:
-            self.statusBar().showMessage(f"Erreur : {e}")
+            self.statusBar().showMessage(f"Error: {e}")
 
     def _load_config(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Charger une configuration", "", "JSON (*.json)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Load Configuration", "", "JSON (*.json)")
         if not path:
             return
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
-            self.statusBar().showMessage(f"Erreur : {e}")
+            self.statusBar().showMessage(f"Error: {e}")
             return
-
         self.manual_overrides = data.get("manual_overrides", {})
         for k, v in data.get("bucket_names", {}).items():
             try:
@@ -561,155 +540,109 @@ class MainWindow(QMainWindow):
             self.source_input.setText(data["source_dir"])
         if "output_dir" in data:
             self.output_input.setText(data["output_dir"])
-
         if self.entries:
             self._compute_auto_buckets()
             self._assign_entries_to_buckets()
             self._refresh_all_ui()
+        self.statusBar().showMessage(f"Config loaded: {path}")
 
-        self.statusBar().showMessage(f"Configuration chargée : {path}")
-
-    # ------------------------------------------------------------------
-    # Recommendations
-    # ------------------------------------------------------------------
+    # -- Recommendations --
 
     def _update_recommendations(self):
         if not self.entries:
-            self.reco_tab.set_output(
-                "Scannez un dataset pour obtenir des recommandations."
-            )
+            self.reco_tab.set_output("Scan a dataset to get recommendations.")
             return
-
-        model_type = self.reco_tab.get_model_type()
-        vram_gb = self.reco_tab.get_vram()
-        network_type = self.reco_tab.get_network_type()
-        optimizer = self.reco_tab.get_optimizer()
-
         bucket_counts = Counter(e.assigned_bucket for e in self.entries)
-
         config = recommender.recommend(
-            model_type=model_type,
-            vram_gb=vram_gb,
+            model_type=self.reco_tab.get_model_type(),
+            vram_gb=self.reco_tab.get_vram(),
             total_images=len(self.entries),
             unique_tags=len(self.tag_counts),
             total_tag_occurrences=sum(self.tag_counts.values()),
             max_bucket_images=max(bucket_counts.values()) if bucket_counts else 0,
             num_active_buckets=len(bucket_counts),
-            optimizer=optimizer,
-            network_type=network_type,
+            optimizer=self.reco_tab.get_optimizer(),
+            network_type=self.reco_tab.get_network_type(),
         )
         self.reco_tab.set_output(recommender.format_config(config))
 
-    # ------------------------------------------------------------------
-    # Image tab
-    # ------------------------------------------------------------------
+    # -- Image tab --
 
-    def _force_image_bucket(self, index: int, bucket: int):
+    def _force_image_bucket(self, index, bucket):
         if 0 <= index < len(self.entries):
             self.entries[index].assigned_bucket = bucket
             self.image_tab.refresh()
-            self.statusBar().showMessage(f"Image forcée au bucket {bucket}.")
+            self.statusBar().showMessage(f"Image forced to bucket {bucket}.")
 
-    def _reset_image_bucket(self, index: int):
+    def _reset_image_bucket(self, index):
         self._assign_entries_to_buckets()
-        self.image_tab.set_data(
-            self.entries, self.deleted_tags, self.manual_overrides,
-        )
-        self.statusBar().showMessage("Bucket de l'image réinitialisé.")
+        self.image_tab.set_data(self.entries, self.deleted_tags, self.manual_overrides)
+        self.statusBar().showMessage("Image bucket reset.")
 
-    # ------------------------------------------------------------------
-    # Dry run & Export
-    # ------------------------------------------------------------------
+    # -- Dry run & Export --
 
     def _dry_run(self):
         if not self.entries:
-            self.statusBar().showMessage("Aucune donnée.")
+            self.statusBar().showMessage("No data. Run a scan first.")
             return
-        ok, msg = validate_paths(
-            self.source_input.text().strip(),
-            self.output_input.text().strip(),
-        )
+        ok, msg = validate_paths(self.source_input.text().strip(), self.output_input.text().strip())
         if not ok:
-            QMessageBox.warning(self, "Erreur", msg)
+            QMessageBox.warning(self, "Error", msg)
             return
-
         bucket_counts: Counter = Counter()
         for e in self.entries:
             bucket_counts[e.assigned_bucket] += 1
-
         summary = []
         for bn in sorted(bucket_counts):
             name = self.bucket_names.get(bn, "bucket")
             folder = f"{bn}_{sanitize_folder_name(name)}"
             summary.append((folder, name, bucket_counts[bn]))
-
-        dialog = DryRunDialog(
-            summary, sum(bucket_counts.values()),
-            MAX_BUCKETS - len(bucket_counts), self,
-        )
+        dialog = DryRunDialog(summary, sum(bucket_counts.values()), MAX_BUCKETS - len(bucket_counts), self)
         dialog.exec()
         if dialog.accepted_export:
             self._do_export()
 
     def _start_export(self):
         if not self.entries:
-            self.statusBar().showMessage("Aucune donnée.")
+            self.statusBar().showMessage("No data. Run a scan first.")
             return
-        ok, msg = validate_paths(
-            self.source_input.text().strip(),
-            self.output_input.text().strip(),
-        )
+        ok, msg = validate_paths(self.source_input.text().strip(), self.output_input.text().strip())
         if not ok:
-            QMessageBox.warning(self, "Erreur", msg)
+            QMessageBox.warning(self, "Error", msg)
             return
         self._do_export()
 
     def _do_export(self):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.statusBar().showMessage("Export en cours...")
-
+        self.statusBar().showMessage("Exporting...")
         self._export_worker = ExportWorker(
             self.entries,
             self.output_input.text().strip(),
             self.source_input.text().strip(),
             self.bucket_names,
             self.deleted_tags,
+            num_workers=self.workers_spinner.value(),
         )
         self._export_worker.progress.connect(self._on_export_progress)
         self._export_worker.finished_export.connect(self._on_export_finished)
         self._export_worker.start()
 
-    def _on_export_progress(self, current: int, total: int):
+    def _on_export_progress(self, current, total):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
-    def _on_export_finished(self, copied: int, errors: int):
+    def _on_export_finished(self, copied, errors):
         self.progress_bar.setVisible(False)
         if errors == -1:
-            QMessageBox.critical(
-                self, "Erreur de sécurité",
-                "Le dossier de sortie est à l'intérieur du dossier source.",
-            )
+            QMessageBox.critical(self, "Security Error", "Output directory is inside the source directory.")
         elif errors == -2:
-            QMessageBox.critical(
-                self, "Erreur de sécurité",
-                "Le dossier source est à l'intérieur du dossier de sortie.",
-            )
+            QMessageBox.critical(self, "Security Error", "Source directory is inside the output directory.")
         elif errors > 0:
-            self.statusBar().showMessage(
-                f"Export terminé : {copied} copié(s), {errors} erreur(s). "
-                "Voir export_errors.log."
-            )
+            self.statusBar().showMessage(f"Export done: {copied} copied, {errors} error(s). See export_errors.log.")
         else:
-            self.statusBar().showMessage(
-                f"Export terminé : {copied} image(s) copiée(s)."
-            )
+            self.statusBar().showMessage(f"Export complete: {copied} image(s) copied.")
 
-
-# ------------------------------------------------------------------
-# Entry point
-# ------------------------------------------------------------------
 
 def run():
     app = QApplication(sys.argv)

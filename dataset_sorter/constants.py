@@ -1,22 +1,25 @@
-"""Constantes globales de l'application."""
+"""Global application constants."""
 
 import re
 
-# Extensions d'images supportées
+# Supported image extensions
 IMAGE_EXTENSIONS: set[str] = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif",
 }
 
-# Fichier de configuration par défaut
+# Default config file name
 CONFIG_FILE = "dataset_sorter_config.json"
 
-# Nombre maximal de buckets
+# Maximum number of buckets
 MAX_BUCKETS = 80
 
-# Regex pour nettoyer les noms de dossiers
+# Regex for sanitizing folder names
 SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_\-. ]")
 
-# Types de modèles supportés
+# Default number of dataloader workers for parallel scanning
+DEFAULT_NUM_WORKERS = 4
+
+# Supported model types
 MODEL_TYPES = {
     "sd15_lora":   "SD 1.5 LoRA",
     "sd15_full":   "SD 1.5 Full Finetune",
@@ -31,10 +34,10 @@ MODEL_TYPES = {
 MODEL_TYPE_KEYS = list(MODEL_TYPES.keys())
 MODEL_TYPE_LABELS = list(MODEL_TYPES.values())
 
-# Profils VRAM disponibles (Go)
+# Available VRAM profiles (GB)
 VRAM_TIERS = [8, 12, 16, 24, 48, 96]
 
-# Types de réseaux supportés
+# Supported network types
 NETWORK_TYPES = {
     "lora":  "LoRA — Low-Rank Adaptation",
     "dora":  "DoRA — Weight-Decomposed Low-Rank",
@@ -42,17 +45,17 @@ NETWORK_TYPES = {
     "lokr":  "LoKr — Low-Rank Kronecker Product",
 }
 
-# Optimiseurs supportés
+# Supported optimizers
 OPTIMIZERS = {
-    "Adafactor":    "Adafactor — Mémoire réduite, bon généraliste",
-    "Prodigy":      "Prodigy — LR adaptatif automatique",
+    "Adafactor":    "Adafactor — Low memory, good generalist",
+    "Prodigy":      "Prodigy — Automatic adaptive LR",
     "AdamW":        "AdamW — Standard, performant",
-    "AdamW8bit":    "AdamW 8-bit — Standard, mémoire réduite",
-    "DAdaptAdam":   "D-Adapt Adam — LR adaptatif",
+    "AdamW8bit":    "AdamW 8-bit — Standard, lower memory",
+    "DAdaptAdam":   "D-Adapt Adam — Adaptive LR",
     "SGD":          "SGD — Simple, stable",
 }
 
-# Résolutions par modèle
+# Resolutions per model
 MODEL_RESOLUTIONS: dict[str, int] = {
     "sd15_lora":  512,
     "sd15_full":  512,
