@@ -46,6 +46,10 @@ class RecoTab(QWidget):
         row2.addWidget(self.optimizer_combo, 1)
         layout.addLayout(row2)
 
+        # Disable network combo for full finetune models
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._on_model_changed(self.model_combo.currentIndex())
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         self.btn_recalc = QPushButton("Recalculate")
@@ -79,6 +83,16 @@ class RecoTab(QWidget):
 
     def get_optimizer(self):
         return self.optimizer_combo.currentData() or "Adafactor"
+
+    def _on_model_changed(self, index):
+        """Disable network combo for full finetune models."""
+        model_key = MODEL_TYPE_KEYS[index] if 0 <= index < len(MODEL_TYPE_KEYS) else ""
+        is_full = model_key.endswith("_full")
+        self.network_combo.setEnabled(not is_full)
+        if is_full:
+            self.network_combo.setToolTip("Network type is not applicable for full finetune")
+        else:
+            self.network_combo.setToolTip("")
 
     def set_output(self, text):
         self.text_output.setPlainText(text)

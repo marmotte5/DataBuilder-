@@ -10,7 +10,7 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 
 - **Tag-based sorting** — Automatically sorts images into 80 buckets based on tag rarity using numpy percentile quantiles
 - **Training recommendations** — State-of-the-art parameter suggestions for SD 1.5, SDXL, Flux, SD3, and Pony Diffusion (LoRA and full finetune)
-- **8 model types** — SD 1.5 LoRA/Full, SDXL LoRA/Full, Flux LoRA, SD3 LoRA, Pony LoRA/Full
+- **10 model types** — SD 1.5 LoRA/Full, SDXL LoRA/Full, Flux LoRA/Full, SD3 LoRA/Full, Pony LoRA/Full
 - **6 optimizers** — Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, SGD
 - **4 network types** — LoRA, DoRA, LoHa, LoKr with auto-tuned rank/alpha
 - **6 VRAM profiles** — 8, 12, 16, 24, 48, 96 GB with optimized batch/memory settings

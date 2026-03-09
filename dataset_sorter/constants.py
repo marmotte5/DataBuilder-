@@ -26,7 +26,9 @@ MODEL_TYPES = {
     "sdxl_lora":   "SDXL LoRA",
     "sdxl_full":   "SDXL Full Finetune",
     "flux_lora":   "Flux LoRA",
+    "flux_full":   "Flux Full Finetune",
     "sd3_lora":    "SD3 LoRA",
+    "sd3_full":    "SD3 Full Finetune",
     "pony_lora":   "Pony Diffusion LoRA",
     "pony_full":   "Pony Diffusion Full Finetune",
 }
@@ -62,7 +64,9 @@ MODEL_RESOLUTIONS: dict[str, int] = {
     "sdxl_lora":  1024,
     "sdxl_full":  1024,
     "flux_lora":  1024,
+    "flux_full":  1024,
     "sd3_lora":   1024,
+    "sd3_full":   1024,
     "pony_lora":  1024,
     "pony_full":  1024,
 }

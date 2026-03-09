@@ -49,12 +49,19 @@ _VRAM_PROFILES: dict[tuple[str, int], tuple[int, int, bool, bool, bool]] = {
     ("flux_lora", 24):  (2, 2, True,  True,  True),
     ("flux_lora", 48):  (4, 1, True,  True,  False),
     ("flux_lora", 96):  (8, 1, False, True,  False),
+    # Flux Full — 48 GB minimum (12B param model, very VRAM hungry)
+    ("flux_full", 48):  (1, 4, True,  True,  True),
+    ("flux_full", 96):  (2, 2, True,  True,  False),
     # SD3 LoRA — still experimental
     ("sd3_lora", 12):  (1, 4, True,  True,  True),
     ("sd3_lora", 16):  (1, 4, True,  True,  True),
     ("sd3_lora", 24):  (2, 2, True,  True,  False),
     ("sd3_lora", 48):  (4, 1, True,  True,  False),
     ("sd3_lora", 96):  (4, 1, False, True,  False),
+    # SD3 Full — 24 GB minimum
+    ("sd3_full", 24):  (1, 2, True,  True,  True),
+    ("sd3_full", 48):  (2, 1, True,  True,  False),
+    ("sd3_full", 96):  (4, 1, False, True,  False),
     # Pony LoRA (SDXL-based)
     ("pony_lora",  8):  (1, 4, True,  True,  True),
     ("pony_lora", 12):  (1, 4, True,  True,  True),
@@ -87,6 +94,8 @@ _BASE_LR_LORA: dict[str, float] = {
 _BASE_LR_FULL: dict[str, float] = {
     "sd15_full":  1e-6,
     "sdxl_full":  5e-7,
+    "flux_full":  5e-7,   # Flux full: very low LR (12B params, easy to destabilize)
+    "sd3_full":   5e-7,
     "pony_full":  5e-7,
 }
 
@@ -269,22 +278,39 @@ def recommend(
 
     # --- Text encoder ---
     if is_flux:
-        # Flux: ALWAYS freeze both TEs (T5-XXL + CLIP-L)
-        config.train_text_encoder = False
-        config.train_text_encoder_2 = False
-        config.text_encoder_lr = 0.0
+        if is_lora:
+            # Flux LoRA: ALWAYS freeze both TEs (T5-XXL + CLIP-L)
+            config.train_text_encoder = False
+            config.train_text_encoder_2 = False
+            config.text_encoder_lr = 0.0
+        else:
+            # Flux Full: optionally train CLIP-L on high VRAM, never train T5-XXL
+            config.train_text_encoder = vram_gb >= 96
+            config.train_text_encoder_2 = False
+            config.text_encoder_lr = config.learning_rate * 0.05 if vram_gb >= 96 else 0.0
     elif is_sd3:
-        config.train_text_encoder = vram_gb >= 24
+        if is_lora:
+            config.train_text_encoder = vram_gb >= 24
+        else:
+            # SD3 Full: train CLIP encoders if VRAM allows
+            config.train_text_encoder = vram_gb >= 24
         config.train_text_encoder_2 = False
-        config.text_encoder_lr = config.learning_rate * 0.1
+        config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
     elif is_sdxl or is_pony:
         config.train_text_encoder = True
         config.train_text_encoder_2 = vram_gb >= 24
-        config.text_encoder_lr = config.learning_rate * 0.1
+        if not is_lora:
+            # Full finetune: lower TE LR to prevent catastrophic forgetting
+            config.text_encoder_lr = config.learning_rate * 0.05
+        else:
+            config.text_encoder_lr = config.learning_rate * 0.1
     elif is_sd15:
         config.train_text_encoder = True
         config.train_text_encoder_2 = False
-        config.text_encoder_lr = config.learning_rate * 0.1
+        if not is_lora:
+            config.text_encoder_lr = config.learning_rate * 0.05
+        else:
+            config.text_encoder_lr = config.learning_rate * 0.1
 
     # Prodigy / DAdapt: TE LR = 1.0 if TE is trained
     if optimizer in ("Prodigy", "DAdaptAdam"):
@@ -306,12 +332,19 @@ def recommend(
     if is_lora:
         config.use_ema = size_cat in ("medium", "large", "very_large")
     else:
-        config.use_ema = vram_gb >= 48 and total_images >= 1000
+        # Full finetune: EMA is highly recommended when VRAM allows
+        config.use_ema = vram_gb >= 24 and total_images >= 200
+        if is_flux:
+            # Flux full is so VRAM-heavy, only EMA on 96 GB
+            config.use_ema = vram_gb >= 96 and total_images >= 500
     config.ema_decay = 0.9999
 
     # --- Epochs ---
-    if is_flux:
+    if is_flux and is_lora:
         epoch_map = {"small": 5, "medium": 3, "large": 1, "very_large": 1}
+    elif is_flux and not is_lora:
+        # Flux full: fewer epochs, very easy to overtrain a 12B model
+        epoch_map = {"small": 3, "medium": 2, "large": 1, "very_large": 1}
     elif is_lora:
         if is_sd15:
             epoch_map = {"small": 15, "medium": 10, "large": 3, "very_large": 1}
@@ -320,7 +353,13 @@ def recommend(
         else:
             epoch_map = {"small": 10, "medium": 5, "large": 2, "very_large": 1}
     else:
-        epoch_map = {"small": 5, "medium": 3, "large": 2, "very_large": 1}
+        # Full finetune: SD 1.5 / SDXL / SD3 / Pony
+        if is_sd15:
+            epoch_map = {"small": 8, "medium": 5, "large": 2, "very_large": 1}
+        elif is_sd3:
+            epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
+        else:
+            epoch_map = {"small": 5, "medium": 3, "large": 2, "very_large": 1}
     config.epochs = epoch_map[size_cat]
 
     # --- Steps ---
@@ -335,10 +374,14 @@ def recommend(
     # Warmup: ~10% of steps
     config.warmup_steps = max(10, min(config.total_steps // 10, 200))
 
-    # Flux: cap steps (500-1500 typical, very easy to overtrain)
+    # Flux: cap steps (very easy to overtrain)
     if is_flux and is_lora:
         if config.total_steps > 2000 and size_cat in ("small", "medium"):
             config.total_steps = 1500
+    elif is_flux and not is_lora:
+        # Flux full: even more conservative
+        if config.total_steps > 3000 and size_cat in ("small", "medium"):
+            config.total_steps = 2500
 
     # --- Scheduler ---
     if optimizer == "Prodigy":
@@ -375,12 +418,25 @@ def recommend(
     config.min_snr_gamma = 5
 
     # Caption dropout: anti-overfit regularization
-    if size_cat == "small" and total_images >= 30:
-        config.caption_dropout_rate = 0.05
-    elif size_cat in ("medium", "large"):
-        config.caption_dropout_rate = 0.1
-    elif size_cat == "very_large":
-        config.caption_dropout_rate = 0.05
+    if not is_lora:
+        # Full finetune: more aggressive caption dropout to prevent overfit
+        if size_cat == "small" and total_images >= 20:
+            config.caption_dropout_rate = 0.1
+        elif size_cat in ("medium", "large"):
+            config.caption_dropout_rate = 0.15
+        elif size_cat == "very_large":
+            config.caption_dropout_rate = 0.1
+    else:
+        if size_cat == "small" and total_images >= 30:
+            config.caption_dropout_rate = 0.05
+        elif size_cat in ("medium", "large"):
+            config.caption_dropout_rate = 0.1
+        elif size_cat == "very_large":
+            config.caption_dropout_rate = 0.05
+
+    # Full finetune: higher weight decay for regularization
+    if not is_lora and optimizer in ("AdamW", "AdamW8bit"):
+        config.weight_decay = 0.1
 
     # Multires noise discount
     if is_sdxl or is_pony:
@@ -425,7 +481,8 @@ def _build_notes(
 
     if total_images < 500 and not is_lora:
         notes.append(
-            "Full finetune with few images: a LoRA would be more suitable."
+            "Full finetune with few images: a LoRA would be more suitable. "
+            "Full finetune risks catastrophic forgetting with small datasets."
         )
 
     if diversity < 0.05:
@@ -497,17 +554,36 @@ def _build_notes(
                 "Flux on <=16 GB: use an fp8 quantized base model "
                 "and reduced resolution."
             )
-        notes.append(
-            "Flux learns very fast (5-10x faster than SDXL). "
-            "Watch for overtraining — good captions matter more "
-            "than text encoder training."
-        )
+        if is_lora:
+            notes.append(
+                "Flux learns very fast (5-10x faster than SDXL). "
+                "Watch for overtraining — good captions matter more "
+                "than text encoder training."
+            )
+        else:
+            notes.append(
+                "Flux full finetune: 12B parameter model. Requires 48+ GB VRAM "
+                "minimum. Use bf16 mixed precision and gradient checkpointing. "
+                "Very prone to catastrophic forgetting — save checkpoints frequently."
+            )
+            if vram_gb < 48:
+                notes.append(
+                    "WARNING: Flux full finetune is not viable below 48 GB VRAM. "
+                    "Consider using Flux LoRA instead."
+                )
 
     if is_sd3:
-        notes.append(
-            "SD3 is still experimental. T5 is frozen, only CLIP "
-            "encoders are trainable."
-        )
+        if is_lora:
+            notes.append(
+                "SD3 is still experimental. T5 is frozen, only CLIP "
+                "encoders are trainable."
+            )
+        else:
+            notes.append(
+                "SD3 full finetune: experimental. T5 is frozen, CLIP encoders "
+                "trainable on 24+ GB. Use careful LR scheduling and frequent "
+                "checkpoint saves."
+            )
 
     if is_pony:
         notes.append(
@@ -515,6 +591,22 @@ def _build_notes(
             "and include score tags (score_9, score_8_up, etc.) in "
             "your captions."
         )
+
+    if not is_lora:
+        notes.append(
+            "Full finetune: save checkpoints every 100-200 steps to recover "
+            "from overfitting. Use a validation set if available."
+        )
+        if config.use_ema:
+            notes.append(
+                "EMA enabled: the EMA model often generalizes better than "
+                "the training model. Compare both at inference."
+            )
+        if config.weight_decay >= 0.1:
+            notes.append(
+                "Higher weight decay (0.1) applied for full finetune to "
+                "regularize and prevent catastrophic forgetting."
+            )
 
     notes.append(
         "Min SNR gamma=5 enabled: ~3.4x faster convergence "
@@ -539,7 +631,9 @@ _MODEL_LABELS = {
     "sdxl_lora": "SDXL LoRA",
     "sdxl_full": "SDXL Full Finetune",
     "flux_lora": "Flux LoRA",
+    "flux_full": "Flux Full Finetune",
     "sd3_lora":  "SD3 LoRA",
+    "sd3_full":  "SD3 Full Finetune",
     "pony_lora": "Pony Diffusion LoRA",
     "pony_full": "Pony Diffusion Full Finetune",
 }
@@ -571,6 +665,10 @@ def format_config(config: TrainingConfig) -> str:
         lines.append(f"    Rank             {config.lora_rank}")
         lines.append(f"    Alpha            {config.lora_alpha}")
         lines.append("")
+    else:
+        lines.append(f"  -- Training Mode {thin[18:]}")
+        lines.append(f"    Mode             Full Finetune (all weights)")
+        lines.append("")
 
     lines.append(f"  -- Optimizer {thin[14:]}")
     lines.append(f"    Optimizer        {config.optimizer}")
@@ -588,7 +686,7 @@ def format_config(config: TrainingConfig) -> str:
 
     lines.append(f"  -- Text Encoder {thin[17:]}")
     lines.append(f"    Train TE         {'Yes' if config.train_text_encoder else 'No'}")
-    if "sdxl" in config.model_type or "pony" in config.model_type:
+    if "sdxl" in config.model_type or "pony" in config.model_type or "flux" in config.model_type or "sd3" in config.model_type:
         lines.append(f"    Train TE2        {'Yes' if config.train_text_encoder_2 else 'No'}")
     if config.text_encoder_lr > 0:
         lines.append(f"    TE LR            {config.text_encoder_lr:.2e}")
