@@ -462,15 +462,8 @@ def recommend(
     config.mixed_precision = "bf16"
 
     # Noise offset: improves blacks/whites dynamic range
-    # Community consensus 2025: 0.05 for Flux/SDXL, 0.05-0.1 for SD 1.5
-    if is_flux or is_sd3:
-        config.noise_offset = 0.05
-    elif is_zimage:
-        config.noise_offset = 0.05
-    elif is_sdxl or is_pony:
-        config.noise_offset = 0.05
-    else:
-        config.noise_offset = 0.05
+    # Community consensus 2025: 0.05 across all model types
+    config.noise_offset = 0.05
 
     # Min SNR gamma = 5: ~3.4x faster convergence (ICCV 2023)
     # For flow-matching models (Flux, SD3), debiased estimation is preferred

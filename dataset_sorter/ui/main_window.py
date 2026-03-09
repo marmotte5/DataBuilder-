@@ -1,7 +1,6 @@
 """Main application window — Dataset Sorter."""
 
 import json
-import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -566,7 +565,9 @@ class MainWindow(QMainWindow):
         if isinstance(raw_overrides, dict):
             for k, v in raw_overrides.items():
                 try:
-                    self.manual_overrides[str(k)] = int(v)
+                    val = int(v)
+                    if 1 <= val <= MAX_BUCKETS:
+                        self.manual_overrides[str(k)] = val
                 except (ValueError, TypeError):
                     pass
 

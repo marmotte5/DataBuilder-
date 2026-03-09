@@ -229,16 +229,16 @@ class ExportWorker(QThread):
                         txt_name = dest_img.stem + ".txt"
                         dest_txt = folder_path / txt_name
                         if is_path_inside(dest_txt, self.output_dir):
-                            if self.deleted_tags:
-                                filtered = [
-                                    t for t in entry.tags
-                                    if t not in self.deleted_tags
-                                ]
-                                dest_txt.write_text(
-                                    ", ".join(filtered), encoding="utf-8",
-                                )
-                            else:
-                                shutil.copy2(str(entry.txt_path), str(dest_txt))
+                            # Always write from entry.tags to capture any
+                            # renames, merges, or search/replace edits.
+                            # Filter out deleted tags if any.
+                            filtered = [
+                                t for t in entry.tags
+                                if t not in self.deleted_tags
+                            ]
+                            dest_txt.write_text(
+                                ", ".join(filtered), encoding="utf-8",
+                            )
 
                     copied += 1
                 except Exception as exc:
