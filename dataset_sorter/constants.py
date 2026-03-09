@@ -77,3 +77,104 @@ MODEL_RESOLUTIONS: dict[str, int] = {
     "zimage_lora":  1024,
     "zimage_full":  1024,
 }
+
+# ── LR Schedulers ─────────────────────────────────────────────────────
+LR_SCHEDULERS = {
+    "cosine":                  "Cosine — Smooth decay to zero",
+    "cosine_with_restarts":    "Cosine w/ Restarts — Periodic warm restarts",
+    "linear":                  "Linear — Steady linear decay",
+    "constant":                "Constant — Fixed LR (Prodigy/D-Adapt)",
+    "constant_with_warmup":    "Constant w/ Warmup — Flat after warmup",
+    "polynomial":              "Polynomial — Configurable power decay",
+    "rex":                     "REX — Reciprocal decay (2025)",
+}
+
+# ── Timestep Sampling ─────────────────────────────────────────────────
+TIMESTEP_SAMPLING = {
+    "uniform":       "Uniform — Standard random timesteps",
+    "sigmoid":       "Sigmoid — Bias toward mid-range (Z-Image, Flux)",
+    "logit_normal":  "Logit-Normal — Bell curve in logit space (SD3)",
+}
+
+# ── Model Prediction Types ────────────────────────────────────────────
+PREDICTION_TYPES = {
+    "epsilon":       "Epsilon — Noise prediction (SD 1.5, SDXL)",
+    "v_prediction":  "V-Prediction — Velocity (SD 2.x, some SDXL)",
+    "raw":           "Raw — Direct output (Flux)",
+    "flow":          "Flow — Flow matching (SD3, Z-Image)",
+}
+
+# ── Attention Implementations ─────────────────────────────────────────
+ATTENTION_MODES = {
+    "sdpa":            "SDPA — PyTorch 2.0+ native (recommended)",
+    "xformers":        "xFormers — Memory efficient attention",
+    "flash_attention":  "Flash Attention 2 — Fastest, needs Ampere+",
+}
+
+# ── Sample Samplers ───────────────────────────────────────────────────
+SAMPLE_SAMPLERS = {
+    "euler_a":    "Euler Ancestral",
+    "euler":      "Euler",
+    "dpm++_2m":   "DPM++ 2M",
+    "dpm++_sde":  "DPM++ SDE",
+    "ddim":       "DDIM",
+    "lms":        "LMS",
+}
+
+# ── Save Precision ────────────────────────────────────────────────────
+SAVE_PRECISIONS = {
+    "bf16":   "BFloat16 — Best quality/size (recommended)",
+    "fp16":   "Float16 — Universal compatibility",
+    "fp32":   "Float32 — Full precision (large files)",
+}
+
+# ── Clip Skip per model (defaults) ────────────────────────────────────
+MODEL_CLIP_SKIP: dict[str, int] = {
+    "sd15_lora":    1,
+    "sd15_full":    1,
+    "sdxl_lora":    0,  # 0 = no clip skip for SDXL
+    "sdxl_full":    0,
+    "flux_lora":    0,
+    "flux_full":    0,
+    "sd3_lora":     0,
+    "sd3_full":     0,
+    "pony_lora":    2,  # Pony always clip_skip=2
+    "pony_full":    2,
+    "zimage_lora":  0,
+    "zimage_full":  0,
+}
+
+# ── Default prediction type per model ─────────────────────────────────
+MODEL_PREDICTION_TYPE: dict[str, str] = {
+    "sd15_lora":    "epsilon",
+    "sd15_full":    "epsilon",
+    "sdxl_lora":    "epsilon",
+    "sdxl_full":    "epsilon",
+    "flux_lora":    "raw",
+    "flux_full":    "raw",
+    "sd3_lora":     "flow",
+    "sd3_full":     "flow",
+    "pony_lora":    "epsilon",
+    "pony_full":    "epsilon",
+    "zimage_lora":  "flow",
+    "zimage_full":  "flow",
+}
+
+# ── Default timestep sampling per model ───────────────────────────────
+MODEL_TIMESTEP_SAMPLING: dict[str, str] = {
+    "sd15_lora":    "uniform",
+    "sd15_full":    "uniform",
+    "sdxl_lora":    "uniform",
+    "sdxl_full":    "uniform",
+    "flux_lora":    "sigmoid",
+    "flux_full":    "sigmoid",
+    "sd3_lora":     "logit_normal",
+    "sd3_full":     "logit_normal",
+    "pony_lora":    "uniform",
+    "pony_full":    "uniform",
+    "zimage_lora":  "sigmoid",
+    "zimage_full":  "sigmoid",
+}
+
+# ── Recommended CUDA version ──────────────────────────────────────────
+CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"

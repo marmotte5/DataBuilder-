@@ -655,6 +655,7 @@ class MainWindow(QMainWindow):
             optimizer=self.reco_tab.get_optimizer(),
             network_type=self.reco_tab.get_network_type(),
         )
+        self.reco_tab.set_last_config(config)
         self.reco_tab.set_output(recommender.format_config(config))
 
     # -- Image tab --
