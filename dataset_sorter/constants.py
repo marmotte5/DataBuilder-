@@ -83,6 +83,16 @@ OPTIMIZERS = {
     "AdamWScheduleFree":  "AdamW Schedule-Free — No scheduler needed",
     "Lion":               "Lion — Sign-based, fast training",
     "SGD":                "SGD — Simple, stable",
+    "SOAP":               "SOAP — 2nd-order, 40% fewer iters (ICLR 2025)",
+    "Muon":               "Muon — Orthogonal updates, 2x efficiency",
+}
+
+# LoRA initialization methods (PEFT library)
+LORA_INIT_METHODS = {
+    "default":   "Default — Kaiming uniform (standard)",
+    "pissa":     "PiSSA — Principal SVD init (faster convergence)",
+    "olora":     "OLoRA — Orthogonal init (stable training)",
+    "gaussian":  "Gaussian — Random normal init",
 }
 
 # ── Per-model defaults (defined once, expanded to _lora/_full) ───────
@@ -110,6 +120,7 @@ TIMESTEP_SAMPLING = {
     "uniform":       "Uniform — Standard random timesteps",
     "sigmoid":       "Sigmoid — Bias toward mid-range (Z-Image, Flux)",
     "logit_normal":  "Logit-Normal — Bell curve in logit space (SD3)",
+    "speed":         "SpeeD — Asymmetric + change-aware (~3x faster, CVPR 2025)",
 }
 
 # ── Model Prediction Types ────────────────────────────────────────────

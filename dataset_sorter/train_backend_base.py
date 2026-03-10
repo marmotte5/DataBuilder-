@@ -66,6 +66,7 @@ class TrainBackendBase(ABC):
         # Cached tensors (pre-computed once, reused every step)
         self._cached_time_ids: Optional[torch.Tensor] = None
         self._compiled = False
+        self._speed_sampler = None   # SpeeD timestep sampler (lazy init)
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -156,8 +157,16 @@ class TrainBackendBase(ABC):
 
     def _sample_flow_timesteps(self, batch_size: int) -> torch.Tensor:
         """Sample timesteps for flow matching models."""
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
         sampling = self.config.timestep_sampling
+
+        if sampling == "speed":
+            # SpeeD: asymmetric Beta distribution (CVPR 2025)
+            if self._speed_sampler is None:
+                from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+                self._speed_sampler = SpeedTimestepSampler(device=self.device)
+            return self._speed_sampler.sample_flow_timesteps(batch_size)
+
+        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
         if sampling == "logit_normal":
             u = torch.sigmoid(torch.randn_like(u) * 1.0)
         elif sampling == "sigmoid":
@@ -238,18 +247,48 @@ class TrainBackendBase(ABC):
                 pass
 
     def setup_lora(self) -> nn.Module:
-        """Inject LoRA layers and return the wrapped model."""
+        """Inject LoRA layers and return the wrapped model.
+
+        Supports advanced PEFT variants:
+        - DoRA: weight-decomposed LoRA (ICML 2024) — `use_dora=True`
+        - rsLoRA: rank-stabilized scaling — `use_rslora=True`
+        - PiSSA: principal SVD init — `init_lora_weights="pissa"`
+        """
         from peft import LoraConfig, get_peft_model
 
         config = self.config
         target_modules = self._get_lora_target_modules()
 
-        lora_config = LoraConfig(
+        # Build LoRA config with optional DoRA/rsLoRA/PiSSA
+        lora_kwargs = dict(
             r=config.lora_rank,
             lora_alpha=config.lora_alpha,
             target_modules=target_modules,
             lora_dropout=0.0,
         )
+
+        # DoRA: decompose into magnitude + direction (ICML 2024)
+        if config.use_dora:
+            lora_kwargs["use_dora"] = True
+            log.info("LoRA variant: DoRA (weight-decomposed)")
+
+        # rsLoRA: scale by alpha/sqrt(r) instead of alpha/r
+        if config.use_rslora:
+            lora_kwargs["use_rslora"] = True
+            log.info("LoRA variant: rsLoRA (rank-stabilized scaling)")
+
+        # Initialization method: PiSSA, OLoRA, Gaussian
+        if config.lora_init == "pissa":
+            lora_kwargs["init_lora_weights"] = "pissa"
+            log.info("LoRA init: PiSSA (principal SVD)")
+        elif config.lora_init == "olora":
+            lora_kwargs["init_lora_weights"] = "olora"
+            log.info("LoRA init: OLoRA (orthogonal)")
+        elif config.lora_init == "gaussian":
+            lora_kwargs["init_lora_weights"] = "gaussian"
+            log.info("LoRA init: Gaussian")
+
+        lora_config = LoraConfig(**lora_kwargs)
 
         self.unet.to(self.device, dtype=self.dtype)
         self.unet.requires_grad_(False)
@@ -321,11 +360,20 @@ class TrainBackendBase(ABC):
                 device=latents.device, dtype=latents.dtype,
             )
 
-        # Sample timesteps
-        timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps,
-            (batch_size,), device=self.device,
-        ).long()
+        # Sample timesteps (SpeeD asymmetric or uniform)
+        if config.timestep_sampling == "speed" or config.speed_asymmetric:
+            if self._speed_sampler is None:
+                from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+                num_ts = self.noise_scheduler.config.num_train_timesteps
+                self._speed_sampler = SpeedTimestepSampler(
+                    num_train_timesteps=num_ts, device=self.device,
+                )
+            timesteps = self._speed_sampler.sample_timesteps(batch_size)
+        else:
+            timesteps = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps,
+                (batch_size,), device=self.device,
+            ).long()
 
         # Add noise to latents
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
@@ -356,6 +404,11 @@ class TrainBackendBase(ABC):
         if config.min_snr_gamma > 0:
             snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
             loss = loss * snr_weights
+
+        # SpeeD change-aware loss weighting (CVPR 2025)
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
 
         return loss.mean()
 

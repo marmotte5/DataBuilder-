@@ -184,6 +184,19 @@ def _get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         except ImportError:
             log.warning("schedulefree not installed, falling back to AdamW")
             return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
+    elif config.optimizer == "SOAP":
+        from dataset_sorter.optimizers import SOAP
+        return SOAP(
+            param_groups, lr=lr, weight_decay=config.weight_decay,
+            precondition_frequency=10,
+        )
+    elif config.optimizer == "Muon":
+        from dataset_sorter.optimizers import Muon
+        return Muon(
+            param_groups, lr=lr if lr > 0.001 else 0.02,
+            weight_decay=config.weight_decay,
+            momentum=0.95,
+        )
     elif config.optimizer == "SGD":
         return torch.optim.SGD(
             param_groups, lr=lr, weight_decay=config.weight_decay,
@@ -303,6 +316,15 @@ class Trainer:
 
         # ── 3. Apply all speed optimizations ──
         self.backend.apply_speed_optimizations()
+
+        # ── 3b. MeBP: selective activation checkpointing (Apple 2025) ──
+        if config.mebp_enabled and self.backend.unet is not None:
+            from dataset_sorter.speed_optimizations import MeBPWrapper
+            self.backend.unet = MeBPWrapper(
+                self.backend.unet,
+                num_checkpoints=config.mebp_num_checkpoints,
+            )
+            log.info("MeBP: selective activation checkpointing enabled")
 
         # ── 4. Text encoder setup ──
         self.backend.freeze_text_encoders()
@@ -455,11 +477,29 @@ class Trainer:
             pin_memory=True,
             drop_last=True,
             persistent_workers=use_workers > 0,
-            prefetch_factor=2 if use_workers > 0 else None,
+            prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
         )
+
+        # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
+        if config.async_dataload and self.device.type == "cuda":
+            from dataset_sorter.speed_optimizations import AsyncGPUPrefetcher
+            dataloader = AsyncGPUPrefetcher(
+                dataloader, self.device, self.dtype,
+                prefetch_count=config.prefetch_factor,
+            )
+            log.info("Async GPU prefetch enabled")
 
         grad_accum_steps = config.gradient_accumulation
         running_loss = 0.0
+
+        # ── VJP Approximation (Feb 2026) ──
+        vjp_scaler = None
+        if config.approx_vjp:
+            from dataset_sorter.speed_optimizations import ApproxVJPGradScaler
+            vjp_scaler = ApproxVJPGradScaler(
+                num_samples=config.approx_vjp_num_samples, enabled=True,
+            )
+            log.info(f"VJP approximation enabled ({config.approx_vjp_num_samples} samples)")
 
         # Pre-collect trainable params for grad clipping (avoid re-filtering each step)
         trainable_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
@@ -506,6 +546,10 @@ class Trainer:
                         if self.grad_scaler is not None:
                             self.grad_scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
+
+                    # VJP approximation: reduce gradient compute (Feb 2026)
+                    if vjp_scaler is not None:
+                        vjp_scaler.approximate_gradients(trainable_params)
 
                     if self.grad_scaler is not None:
                         self.grad_scaler.step(self.optimizer)

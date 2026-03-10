@@ -51,6 +51,11 @@ class TrainingConfig:
     conv_rank: int = 0              # Conv layer rank (LoRA-C / LoCon)
     conv_alpha: int = 0             # Conv layer alpha
 
+    # LoRA variant options (PEFT library, 2024-2026 state-of-the-art)
+    use_dora: bool = False          # DoRA: weight-decomposed LoRA (ICML 2024)
+    use_rslora: bool = False        # rsLoRA: rank-stabilized scaling (alpha/sqrt(r))
+    lora_init: str = "default"      # Initialization: default, pissa, olora, gaussian
+
     # ── Optimizer ──────────────────────────────────────────────────────
     optimizer: str = "Adafactor"
     weight_decay: float = 0.01
@@ -120,10 +125,26 @@ class TrainingConfig:
     guidance_scale: float = 1.0
 
     # Timestep sampling (flow-matching models)
-    timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal
+    timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal, speed
     model_prediction_type: str = ""     # epsilon, v_prediction, raw, flow
     sigma_min: float = 0.0
     sigma_max: float = 0.0
+
+    # SpeeD: asymmetric timestep sampling + change-aware weighting (CVPR 2025)
+    speed_asymmetric: bool = False      # Enable SpeeD asymmetric sampling
+    speed_change_aware: bool = False    # Enable change-aware loss weighting
+
+    # ── Memory-Efficient Backprop (MeBP) ─────────────────────────────
+    mebp_enabled: bool = False          # Checkpoint-free memory-efficient backprop
+    mebp_num_checkpoints: int = 0       # 0 = auto (sqrt(layers))
+
+    # ── VJP Approximation ────────────────────────────────────────────
+    approx_vjp: bool = False            # Random unbiased VJP approximation
+    approx_vjp_num_samples: int = 1     # Number of random projections
+
+    # ── Async Data Loading ───────────────────────────────────────────
+    async_dataload: bool = True         # Asynchronous GPU prefetching
+    prefetch_factor: int = 3            # Batches to prefetch ahead
 
     # ── Regularization ─────────────────────────────────────────────────
     prior_loss_weight: float = 1.0  # DreamBooth prior preservation

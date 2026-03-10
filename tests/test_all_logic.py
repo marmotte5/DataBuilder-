@@ -1161,5 +1161,287 @@ class TestEdgeCases:
         assert stats.diversity == 0.5
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 13. SOAP & MUON OPTIMIZERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSOAP:
+    def test_soap_step(self):
+        import torch
+        from dataset_sorter.optimizers import SOAP
+        model = torch.nn.Linear(10, 5)
+        opt = SOAP(model.parameters(), lr=1e-3, precondition_frequency=2)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+        opt.step()
+        opt.zero_grad()
+        # Second step triggers preconditioner update (freq=2)
+        loss = model(x).sum()
+        loss.backward()
+        opt.step()
+
+    def test_soap_default_params(self):
+        import torch
+        from dataset_sorter.optimizers import SOAP
+        p = torch.nn.Parameter(torch.randn(3, 3))
+        opt = SOAP([p])
+        assert opt.defaults["lr"] == 3e-4
+        assert opt.defaults["precondition_frequency"] == 10
+
+
+class TestMuon:
+    def test_muon_step(self):
+        import torch
+        from dataset_sorter.optimizers import Muon
+        model = torch.nn.Linear(10, 5)
+        opt = Muon(model.parameters(), lr=0.02, ns_steps=3)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+        opt.step()
+
+    def test_muon_1d_params(self):
+        """1D params (biases) should get standard SGD treatment."""
+        import torch
+        from dataset_sorter.optimizers import Muon
+        p = torch.nn.Parameter(torch.randn(5))
+        opt = Muon([p], lr=0.01)
+        p.grad = torch.randn(5)
+        opt.step()
+
+    def test_newton_schulz_orthogonalize(self):
+        import torch
+        from dataset_sorter.optimizers import Muon
+        M = torch.randn(4, 4)
+        result = Muon._newton_schulz_orthogonalize(M, num_steps=10)
+        # Result should be approximately orthogonal: R^T R ≈ I
+        eye = result.T @ result
+        identity = torch.eye(4)
+        assert torch.allclose(eye, identity, atol=0.1)
+
+    def test_create_muon_param_groups(self):
+        import torch
+        from dataset_sorter.optimizers import create_muon_param_groups
+        model = torch.nn.Sequential(
+            torch.nn.Linear(10, 5),    # 2D weight + 1D bias
+            torch.nn.LayerNorm(5),     # norm params
+            torch.nn.Linear(5, 3),     # 2D weight + 1D bias
+        )
+        muon_groups, adamw_groups = create_muon_param_groups(model)
+        assert len(muon_groups) > 0
+        assert len(adamw_groups) > 0
+        # All 2D non-norm params should be in muon
+        muon_count = sum(len(g["params"]) for g in muon_groups)
+        adamw_count = sum(len(g["params"]) for g in adamw_groups)
+        assert muon_count == 2   # Two Linear weights
+        assert adamw_count == 4  # Two biases + LayerNorm weight + bias
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14. SPEED OPTIMIZATIONS MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSpeedTimestepSampler:
+    def test_sample_timesteps_shape(self):
+        import torch
+        from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+        sampler = SpeedTimestepSampler(num_train_timesteps=1000)
+        ts = sampler.sample_timesteps(8)
+        assert ts.shape == (8,)
+        assert (ts >= 0).all()
+        assert (ts < 1000).all()
+
+    def test_sample_timesteps_mid_range_bias(self):
+        """Beta(2,2) distribution should concentrate around the middle."""
+        import torch
+        from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+        sampler = SpeedTimestepSampler(num_train_timesteps=1000)
+        ts = sampler.sample_timesteps(10000)
+        mean = ts.float().mean().item()
+        # Should be roughly centered around 500 (mid-range)
+        assert 350 < mean < 650
+
+    def test_sample_flow_timesteps(self):
+        import torch
+        from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+        sampler = SpeedTimestepSampler()
+        t = sampler.sample_flow_timesteps(8)
+        assert t.shape == (8,)
+        assert (t >= 0).all()
+        assert (t <= 1).all()
+
+    def test_change_aware_weights(self):
+        import torch
+        from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+        sampler = SpeedTimestepSampler(warmup_steps=2)
+        ts = torch.tensor([100, 200, 300])
+        losses = torch.tensor([0.5, 0.3, 0.1])
+        # During warmup: all weights should be 1
+        w1 = sampler.compute_weights(ts, losses)
+        assert torch.allclose(w1, torch.ones(3))
+        # After warmup
+        sampler.compute_weights(ts, losses)
+        w3 = sampler.compute_weights(ts, losses)
+        assert w3.shape == (3,)
+        assert (w3 > 0).all()
+
+
+class TestApproxVJP:
+    def test_approximate_gradients_preserves_1d(self):
+        import torch
+        from dataset_sorter.speed_optimizations import ApproxVJPGradScaler
+        scaler = ApproxVJPGradScaler(num_samples=1)
+        p = torch.nn.Parameter(torch.randn(10))
+        p.grad = torch.randn(10)
+        original = p.grad.clone()
+        scaler.approximate_gradients([p])
+        # 1D grads should not be modified
+        assert torch.allclose(p.grad, original)
+
+    def test_approximate_gradients_modifies_2d(self):
+        import torch
+        from dataset_sorter.speed_optimizations import ApproxVJPGradScaler
+        scaler = ApproxVJPGradScaler(num_samples=1)
+        p = torch.nn.Parameter(torch.randn(100, 100))
+        p.grad = torch.randn(100, 100)
+        original = p.grad.clone()
+        scaler.approximate_gradients([p])
+        # 2D grads should be modified (blended)
+        assert not torch.allclose(p.grad, original)
+
+    def test_disabled_does_nothing(self):
+        import torch
+        from dataset_sorter.speed_optimizations import ApproxVJPGradScaler
+        scaler = ApproxVJPGradScaler(enabled=False)
+        p = torch.nn.Parameter(torch.randn(100, 100))
+        p.grad = torch.randn(100, 100)
+        original = p.grad.clone()
+        scaler.approximate_gradients([p])
+        assert torch.allclose(p.grad, original)
+
+
+class TestAsyncGPUPrefetcher:
+    def test_cpu_fallback(self):
+        """On CPU, should just pass through dataloader."""
+        import torch
+        from dataset_sorter.speed_optimizations import AsyncGPUPrefetcher
+        data = [{"x": torch.randn(4, 3)} for _ in range(5)]
+        prefetcher = AsyncGPUPrefetcher(data, torch.device("cpu"), torch.float32)
+        results = list(prefetcher)
+        assert len(results) == 5
+
+    def test_len(self):
+        import torch
+        from dataset_sorter.speed_optimizations import AsyncGPUPrefetcher
+        data = [{"x": torch.randn(4, 3)} for _ in range(3)]
+        prefetcher = AsyncGPUPrefetcher(data, torch.device("cpu"), torch.float32)
+        assert len(prefetcher) == 3
+
+
+class TestMeBPWrapper:
+    def test_mebp_wrapper_forward(self):
+        import torch
+        from dataset_sorter.speed_optimizations import MeBPWrapper
+        model = torch.nn.Sequential(
+            torch.nn.Linear(10, 10),
+            torch.nn.ReLU(),
+            torch.nn.Linear(10, 5),
+        )
+        wrapped = MeBPWrapper(model, num_checkpoints=1)
+        x = torch.randn(4, 10)
+        out = wrapped(x)
+        assert out.shape == (4, 5)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 15. NEW RECOMMENDER FEATURES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRecommenderNewFeatures:
+    def _recommend(self, **kwargs):
+        from dataset_sorter.recommender import recommend
+        defaults = dict(
+            model_type="sdxl_lora", vram_gb=24, total_images=1000,
+            unique_tags=500, total_tag_occurrences=5000,
+            max_bucket_images=100, num_active_buckets=40,
+            optimizer="Adafactor", network_type="lora",
+        )
+        defaults.update(kwargs)
+        return recommend(**defaults)
+
+    def test_dora_recommended_for_lora(self):
+        cfg = self._recommend()
+        assert cfg.use_dora is True
+
+    def test_rslora_at_high_rank(self):
+        """rsLoRA should be enabled when rank >= 64."""
+        cfg = self._recommend(total_images=10000, unique_tags=5000, total_tag_occurrences=10000)
+        if cfg.lora_rank >= 64:
+            assert cfg.use_rslora is True
+
+    def test_pissa_for_small_datasets(self):
+        cfg = self._recommend(total_images=50)
+        assert cfg.lora_init == "pissa"
+
+    def test_default_init_for_large_datasets(self):
+        cfg = self._recommend(total_images=10000)
+        assert cfg.lora_init == "default"
+
+    def test_speed_asymmetric_enabled(self):
+        cfg = self._recommend()
+        assert cfg.speed_asymmetric is True
+
+    def test_speed_change_aware_enabled(self):
+        cfg = self._recommend()
+        assert cfg.speed_change_aware is True
+
+    def test_async_dataload_enabled(self):
+        cfg = self._recommend()
+        assert cfg.async_dataload is True
+
+    def test_full_finetune_no_dora(self):
+        cfg = self._recommend(model_type="sdxl_full")
+        assert cfg.use_dora is False
+        assert cfg.use_rslora is False
+
+    def test_soap_optimizer_settings(self):
+        cfg = self._recommend(optimizer="SOAP")
+        assert cfg.optimizer == "SOAP"
+        # SOAP uses cosine-family schedulers (model-dependent)
+        assert "cosine" in cfg.lr_scheduler
+
+    def test_muon_optimizer_settings(self):
+        cfg = self._recommend(optimizer="Muon")
+        assert cfg.optimizer == "Muon"
+        assert cfg.learning_rate == 0.02
+
+    def test_all_optimizers_including_new(self):
+        from dataset_sorter.constants import OPTIMIZERS
+        from dataset_sorter.recommender import recommend
+        for opt in OPTIMIZERS:
+            cfg = recommend("sdxl_lora", 24, 1000, 500, 5000, 100, 40, optimizer=opt)
+            assert cfg.learning_rate > 0
+
+    def test_new_constants(self):
+        from dataset_sorter.constants import LORA_INIT_METHODS, TIMESTEP_SAMPLING
+        assert "pissa" in LORA_INIT_METHODS
+        assert "olora" in LORA_INIT_METHODS
+        assert "speed" in TIMESTEP_SAMPLING
+
+    def test_new_model_fields(self):
+        from dataset_sorter.models import TrainingConfig
+        cfg = TrainingConfig()
+        assert hasattr(cfg, "use_dora")
+        assert hasattr(cfg, "use_rslora")
+        assert hasattr(cfg, "lora_init")
+        assert hasattr(cfg, "speed_asymmetric")
+        assert hasattr(cfg, "speed_change_aware")
+        assert hasattr(cfg, "mebp_enabled")
+        assert hasattr(cfg, "approx_vjp")
+        assert hasattr(cfg, "async_dataload")
+        assert hasattr(cfg, "prefetch_factor")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

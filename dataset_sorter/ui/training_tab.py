@@ -22,6 +22,7 @@ from dataset_sorter.constants import (
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
     ATTENTION_MODES, SAMPLE_SAMPLERS, SAVE_PRECISIONS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES,
+    LORA_INIT_METHODS,
 )
 from dataset_sorter.models import TrainingConfig, ImageEntry
 from dataset_sorter.ui.theme import (
@@ -297,6 +298,19 @@ class TrainingTab(QWidget):
         self.conv_rank_spin.setSpecialValueText("Off")
         g2l.addWidget(self.conv_rank_spin, 3, 1)
 
+        # LoRA variants (2024-2026 SOTA)
+        self.dora_check = QCheckBox("DoRA — Weight-decomposed (ICML 2024, same quality at half rank)")
+        g2l.addWidget(self.dora_check, 4, 0, 1, 2)
+
+        self.rslora_check = QCheckBox("rsLoRA — Rank-stabilized scaling (stable at high ranks)")
+        g2l.addWidget(self.rslora_check, 5, 0, 1, 2)
+
+        g2l.addWidget(QLabel("Init Method"), 6, 0)
+        self.lora_init_combo = QComboBox()
+        for key, label in LORA_INIT_METHODS.items():
+            self.lora_init_combo.addItem(label, key)
+        g2l.addWidget(self.lora_init_combo, 6, 1)
+
         g2.setLayout(g2l)
         layout.addWidget(g2)
 
@@ -557,6 +571,29 @@ class TrainingTab(QWidget):
         g1.setLayout(g1l)
         layout.addWidget(g1)
 
+        # SpeeD (CVPR 2025)
+        g_speed = self._group("SpeeD — ~3x Training Speedup (CVPR 2025)")
+        g_speed_l = QVBoxLayout()
+        self.speed_asymmetric_check = QCheckBox("Asymmetric Timestep Sampling (focus on informative mid-range)")
+        g_speed_l.addWidget(self.speed_asymmetric_check)
+        self.speed_change_check = QCheckBox("Change-Aware Loss Weighting (upweight still-learning timesteps)")
+        g_speed_l.addWidget(self.speed_change_check)
+        g_speed.setLayout(g_speed_l)
+        layout.addWidget(g_speed)
+
+        # Memory & Compute Optimizations (2025-2026)
+        g_mem = self._group("Advanced Optimizations (2025-2026)")
+        g_mem_l = QVBoxLayout()
+        self.mebp_check = QCheckBox("MeBP — Memory-Efficient Backprop (Apple 2025, selective checkpointing)")
+        g_mem_l.addWidget(self.mebp_check)
+        self.vjp_check = QCheckBox("Approx VJP — Unbiased gradient approximation (Feb 2026, faster backward)")
+        g_mem_l.addWidget(self.vjp_check)
+        self.async_data_check = QCheckBox("Async GPU Prefetch (overlap data transfer with compute)")
+        self.async_data_check.setChecked(True)
+        g_mem_l.addWidget(self.async_data_check)
+        g_mem.setLayout(g_mem_l)
+        layout.addWidget(g_mem)
+
         # Timestep
         g2 = self._group("Timestep & Prediction")
         g2l = QGridLayout()
@@ -765,6 +802,9 @@ class TrainingTab(QWidget):
         config.lora_alpha = self.alpha_spin.value()
         config.conv_rank = self.conv_rank_spin.value()
         config.conv_alpha = self.conv_rank_spin.value() // 2 if self.conv_rank_spin.value() > 0 else 0
+        config.use_dora = self.dora_check.isChecked()
+        config.use_rslora = self.rslora_check.isChecked()
+        config.lora_init = self.lora_init_combo.currentData() or "default"
 
         # EMA
         config.use_ema = self.ema_check.isChecked()
@@ -808,6 +848,11 @@ class TrainingTab(QWidget):
         config.min_snr_gamma = self.snr_gamma_spin.value()
         config.ip_noise_gamma = self.ip_noise_spin.value()
         config.debiased_estimation = self.debiased_check.isChecked()
+        config.speed_asymmetric = self.speed_asymmetric_check.isChecked()
+        config.speed_change_aware = self.speed_change_check.isChecked()
+        config.mebp_enabled = self.mebp_check.isChecked()
+        config.approx_vjp = self.vjp_check.isChecked()
+        config.async_dataload = self.async_data_check.isChecked()
         config.timestep_sampling = self.timestep_combo.currentData() or "uniform"
         config.model_prediction_type = self.prediction_combo.currentData() or "epsilon"
         config.gradient_checkpointing = self.grad_ckpt_check.isChecked()
@@ -866,6 +911,12 @@ class TrainingTab(QWidget):
         self.rank_spin.setValue(config.lora_rank)
         self.alpha_spin.setValue(config.lora_alpha)
         self.conv_rank_spin.setValue(config.conv_rank)
+        self.dora_check.setChecked(config.use_dora)
+        self.rslora_check.setChecked(config.use_rslora)
+        for i in range(self.lora_init_combo.count()):
+            if self.lora_init_combo.itemData(i) == config.lora_init:
+                self.lora_init_combo.setCurrentIndex(i)
+                break
 
         # EMA
         self.ema_check.setChecked(config.use_ema)
@@ -914,6 +965,11 @@ class TrainingTab(QWidget):
         self.snr_gamma_spin.setValue(config.min_snr_gamma)
         self.ip_noise_spin.setValue(config.ip_noise_gamma)
         self.debiased_check.setChecked(config.debiased_estimation)
+        self.speed_asymmetric_check.setChecked(config.speed_asymmetric)
+        self.speed_change_check.setChecked(config.speed_change_aware)
+        self.mebp_check.setChecked(config.mebp_enabled)
+        self.vjp_check.setChecked(config.approx_vjp)
+        self.async_data_check.setChecked(config.async_dataload)
         for i in range(self.timestep_combo.count()):
             if self.timestep_combo.itemData(i) == config.timestep_sampling:
                 self.timestep_combo.setCurrentIndex(i)

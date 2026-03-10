@@ -353,6 +353,17 @@ def _apply_optimizer_settings(
         config.weight_decay = 0.1 if is_lora else 0.3
     elif optimizer == "SGD":
         config.weight_decay = 0.0
+    elif optimizer == "SOAP":
+        config.weight_decay = 0.01
+        config.lr_scheduler = "cosine"
+    elif optimizer == "Muon":
+        config.learning_rate = 0.02  # Muon uses ~2x larger LR than AdamW
+        config.weight_decay = 0.0    # Muon uses decoupled WD internally
+        config.lr_scheduler = "cosine"
+
+    # Schedule-free optimizers don't need a scheduler
+    if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):
+        config.lr_scheduler = "constant"
 
 
 # ---------------------------------------------------------------------------
@@ -513,12 +524,42 @@ def recommend(
         config.lora_alpha = alpha
         config.conv_rank = conv_rank
         config.conv_alpha = conv_alpha
+
+        # LoRA variants (2024-2026 SOTA)
+        # DoRA: recommended for all LoRA training (same quality at half rank)
+        if network_type in ("lora", "dora"):
+            config.use_dora = True
+
+        # rsLoRA: stabilizes training at high ranks (64+)
+        if rank >= 64:
+            config.use_rslora = True
+
+        # PiSSA: faster convergence for concept/subject LoRAs
+        # (but can overfit at high timesteps for diffusion, so only for small)
+        if size_cat == "small" and not is_flux:
+            config.lora_init = "pissa"
+        else:
+            config.lora_init = "default"
     else:
         config.lora_rank = 0
         config.lora_alpha = 0
         config.conv_rank = 0
         config.conv_alpha = 0
         config.network_type = "full"
+        config.use_dora = False
+        config.use_rslora = False
+        config.lora_init = "default"
+
+    # --- SpeeD timestep sampling (CVPR 2025, ~3x speedup) ---
+    config.speed_asymmetric = True   # Always recommend: low overhead, high impact
+    config.speed_change_aware = True
+
+    # --- Advanced optimizations ---
+    config.async_dataload = True     # Always enable async GPU prefetch
+    # MeBP: only if gradient_checkpointing is off (they serve similar purpose)
+    config.mebp_enabled = not config.gradient_checkpointing
+    # VJP approx: conservative — only for large models where backward is expensive
+    config.approx_vjp = is_flux and vram_gb <= 24
 
     # --- EMA with CPU offloading ---
     if is_lora:
@@ -594,10 +635,10 @@ def recommend(
     config.lr_warmup_ratio = config.warmup_steps / max(config.total_steps, 1)
 
     # --- Scheduler ---
-    if optimizer == "Prodigy":
+    if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):
         config.lr_scheduler = "constant"
-    elif optimizer == "AdamWScheduleFree":
-        config.lr_scheduler = "constant"
+    elif optimizer == "Muon":
+        config.lr_scheduler = "cosine"
     elif size_cat == "very_large":
         config.lr_scheduler = "cosine_with_restarts"
     elif is_sdxl or is_pony:
