@@ -163,6 +163,16 @@ class TrainingConfig:
     dpo_loss_type: str = "sigmoid"     # sigmoid, hinge, ipo
     dpo_label_smoothing: float = 0.0   # Label smoothing for robust DPO
 
+    # ── Token-Level Caption Weighting ─────────────────────────────────
+    token_weighting_enabled: bool = False      # Enable per-token loss weighting
+    token_default_weight: float = 1.0          # Default weight for unmarked tokens
+    token_trigger_weight: float = 2.0          # Default weight for auto-detected triggers
+
+    # ── Attention Map Debugger ─────────────────────────────────────────
+    attention_debug_enabled: bool = False       # Enable attention map capture
+    attention_debug_every_n_steps: int = 100   # Generate debug maps every N steps
+    attention_debug_top_k: int = 5             # Number of top tokens to visualize
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 

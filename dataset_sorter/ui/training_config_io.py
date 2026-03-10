@@ -120,6 +120,16 @@ class TrainingConfigIOMixin:
         if prompts_text:
             config.sample_prompts = [p.strip() for p in prompts_text.split("\n") if p.strip()]
 
+        # Token Weighting
+        config.token_weighting_enabled = self.token_weight_check.isChecked()
+        config.token_default_weight = self.token_default_weight_spin.value()
+        config.token_trigger_weight = self.token_trigger_weight_spin.value()
+
+        # Attention Debug
+        config.attention_debug_enabled = self.attn_debug_check.isChecked()
+        config.attention_debug_every_n_steps = self.attn_debug_steps_spin.value()
+        config.attention_debug_top_k = self.attn_debug_topk_spin.value()
+
         # Smart Resume
         config.smart_resume = self.smart_resume_check.isChecked()
         config.smart_resume_auto_apply = self.smart_resume_auto_apply_check.isChecked()
@@ -262,6 +272,16 @@ class TrainingConfigIOMixin:
 
         if config.sample_prompts:
             self.prompts_input.setPlainText("\n".join(config.sample_prompts))
+
+        # Token Weighting
+        self.token_weight_check.setChecked(config.token_weighting_enabled)
+        self.token_default_weight_spin.setValue(config.token_default_weight)
+        self.token_trigger_weight_spin.setValue(config.token_trigger_weight)
+
+        # Attention Debug
+        self.attn_debug_check.setChecked(config.attention_debug_enabled)
+        self.attn_debug_steps_spin.setValue(config.attention_debug_every_n_steps)
+        self.attn_debug_topk_spin.setValue(config.attention_debug_top_k)
 
         # Smart Resume
         self.smart_resume_check.setChecked(config.smart_resume)

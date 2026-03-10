@@ -144,6 +144,36 @@ class TrainingTabBuildersMixin:
         g3.setLayout(g3l)
         layout.addWidget(g3)
 
+        # Token Weighting
+        g_tw = self._group("Token-Level Caption Weighting")
+        g_tw_l = QGridLayout()
+
+        self.token_weight_check = QCheckBox("Enable Token Weighting")
+        self.token_weight_check.setToolTip(
+            "Weight trigger words and concept tokens higher in the loss. "
+            "Use {token:2.0} syntax in captions to mark important tokens."
+        )
+        g_tw_l.addWidget(self.token_weight_check, 0, 0, 1, 2)
+
+        g_tw_l.addWidget(QLabel("Default Weight"), 1, 0)
+        self.token_default_weight_spin = QDoubleSpinBox()
+        self.token_default_weight_spin.setRange(0.1, 10.0)
+        self.token_default_weight_spin.setDecimals(1)
+        self.token_default_weight_spin.setValue(1.0)
+        self.token_default_weight_spin.setToolTip("Weight for tokens without explicit {token:weight} markers.")
+        g_tw_l.addWidget(self.token_default_weight_spin, 1, 1)
+
+        g_tw_l.addWidget(QLabel("Trigger Weight"), 2, 0)
+        self.token_trigger_weight_spin = QDoubleSpinBox()
+        self.token_trigger_weight_spin.setRange(1.0, 10.0)
+        self.token_trigger_weight_spin.setDecimals(1)
+        self.token_trigger_weight_spin.setValue(2.0)
+        self.token_trigger_weight_spin.setToolTip("Default weight for auto-detected trigger words (first N tags).")
+        g_tw_l.addWidget(self.token_trigger_weight_spin, 2, 1)
+
+        g_tw.setLayout(g_tw_l)
+        layout.addWidget(g_tw)
+
         layout.addStretch()
         scroll.setWidget(w)
         return scroll
@@ -630,6 +660,36 @@ class TrainingTabBuildersMixin:
 
         g1.setLayout(g1l)
         layout.addWidget(g1)
+
+        # Attention Map Debugger
+        g_attn = self._group("Attention Map Debugger")
+        g_attn_l = QGridLayout()
+
+        self.attn_debug_check = QCheckBox("Enable Attention Debug")
+        self.attn_debug_check.setToolTip(
+            "Capture cross-attention maps during training and generate "
+            "heatmap overlays on training images. Helps debug why concepts "
+            "aren't being learned. Slight performance overhead."
+        )
+        g_attn_l.addWidget(self.attn_debug_check, 0, 0, 1, 2)
+
+        g_attn_l.addWidget(QLabel("Debug Every N Steps"), 1, 0)
+        self.attn_debug_steps_spin = QSpinBox()
+        self.attn_debug_steps_spin.setRange(10, 10000)
+        self.attn_debug_steps_spin.setValue(100)
+        self.attn_debug_steps_spin.setSingleStep(50)
+        self.attn_debug_steps_spin.setToolTip("Generate attention debug maps every N steps.")
+        g_attn_l.addWidget(self.attn_debug_steps_spin, 1, 1)
+
+        g_attn_l.addWidget(QLabel("Top K Tokens"), 2, 0)
+        self.attn_debug_topk_spin = QSpinBox()
+        self.attn_debug_topk_spin.setRange(1, 20)
+        self.attn_debug_topk_spin.setValue(5)
+        self.attn_debug_topk_spin.setToolTip("Number of top-attended tokens to visualize per image.")
+        g_attn_l.addWidget(self.attn_debug_topk_spin, 2, 1)
+
+        g_attn.setLayout(g_attn_l)
+        layout.addWidget(g_attn)
 
         # Prompts
         g2 = self._group("Sample Prompts (one per line)")

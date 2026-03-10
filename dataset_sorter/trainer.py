@@ -179,6 +179,11 @@ class Trainer:
         self._resume_event = threading.Event()   # set = resume requested
         self._resume_event.set()                 # start unpaused
 
+        # Token weighting
+        self._token_weighter = None
+        # Attention map debugger
+        self._attention_debugger = None
+
     def setup(
         self,
         model_path: str,
@@ -353,6 +358,19 @@ class Trainer:
                 decay=config.ema_decay,
                 cpu_offload=config.ema_cpu_offload,
             )
+
+        # ── 12. Token weighting setup ──
+        if config.token_weighting_enabled:
+            from dataset_sorter.token_weighting import TokenLossWeighter
+            self._token_weighter = TokenLossWeighter(self.backend.tokenizer)
+            log.info("Token-level caption weighting enabled")
+
+        # ── 13. Attention map debugger setup ──
+        if config.attention_debug_enabled:
+            from dataset_sorter.attention_map_debugger import AttentionMapDebugger
+            self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
+            self._attention_debugger.attach(self.backend.unet)
+            log.info("Attention map debugger enabled")
 
         if progress_fn:
             progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
@@ -536,6 +554,12 @@ class Trainer:
                             sample_fn):
                         self._generate_samples(sample_fn)
 
+                    # Attention map debug report
+                    if (self._attention_debugger is not None and
+                            config.attention_debug_every_n_steps > 0 and
+                            self.state.global_step % config.attention_debug_every_n_steps == 0):
+                        self._generate_attention_debug(batch)
+
                     # ── On-demand actions (triggered from UI) ──
                     self._handle_on_demand_actions(sample_fn, progress_fn)
 
@@ -599,6 +623,20 @@ class Trainer:
                 te_out = (encoder_hidden,)
         else:
             te_out = self.backend.encode_text_batch(batch["caption"])
+
+        # ── Token weighting: compute per-token loss weights ──
+        if self._token_weighter is not None and "caption" in batch:
+            captions_raw = batch["caption"]
+            if isinstance(captions_raw, (list, tuple)):
+                weight_mask = self._token_weighter.compute_batch_weight_masks(
+                    captions_raw, default_weight=config.token_default_weight,
+                )
+                self.backend._token_weight_mask = weight_mask
+            elif isinstance(captions_raw, str):
+                weight_mask = self._token_weighter.compute_weight_mask(
+                    captions_raw, default_weight=config.token_default_weight,
+                )
+                self.backend._token_weight_mask = weight_mask.unsqueeze(0)
 
         # ── Delegate to backend training step (handles model-specific logic) ──
         bsz = latents.shape[0]
@@ -709,6 +747,46 @@ class Trainer:
             self.backend.vae.cpu()
 
         self.state.phase = "training"
+
+    # ── Attention Map Debug ──────────────────────────────────────────────
+
+    @torch.no_grad()
+    def _generate_attention_debug(self, batch):
+        """Generate attention map debug report for the current batch."""
+        if self._attention_debugger is None or not hasattr(self, 'output_dir'):
+            return
+
+        try:
+            from PIL import Image
+
+            debug_dir = self.output_dir / "attention_debug"
+            caption = batch.get("caption", "")
+            if isinstance(caption, (list, tuple)):
+                caption = caption[0] if caption else ""
+
+            # Get the first image from the batch
+            idx = batch.get("index", 0)
+            if isinstance(idx, (list, tuple)):
+                idx = idx[0]
+            elif isinstance(idx, torch.Tensor):
+                idx = idx[0].item()
+
+            if self.dataset is not None and idx < len(self.dataset.image_paths):
+                try:
+                    img = Image.open(self.dataset.image_paths[idx]).convert("RGB")
+                except Exception:
+                    return
+
+                self._attention_debugger.generate_debug_report(
+                    image=img,
+                    caption=caption,
+                    output_dir=debug_dir,
+                    step=self.state.global_step,
+                    top_k_tokens=self.config.attention_debug_top_k,
+                )
+                self._attention_debugger.clear()
+        except Exception as e:
+            log.warning(f"Attention debug report failed: {e}")
 
     # ── Pause / Resume / On-Demand Actions ───────────────────────────────
 
@@ -993,6 +1071,12 @@ class Trainer:
     def cleanup(self):
         """Free all resources (safe even if setup() failed)."""
         self.state.phase = "idle"
+
+        # Detach attention debugger
+        if self._attention_debugger is not None:
+            self._attention_debugger.detach()
+            self._attention_debugger = None
+
         dataset = getattr(self, "dataset", None)
         if dataset is not None:
             dataset.clear_caches()

@@ -128,6 +128,8 @@ class CachedTrainDataset(Dataset):
         # --- Caption with tag shuffle ---
         caption = self._process_caption(self.captions[idx])
         result["caption"] = caption
+        # Keep raw caption with weight markers for token weighting
+        result["raw_caption"] = self.captions[idx]
 
         # --- Text encoder cache ---
         if self._te_cached and idx in self._te_cache:

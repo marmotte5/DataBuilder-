@@ -67,6 +67,7 @@ class TrainBackendBase(ABC):
         self._cached_time_ids: Optional[torch.Tensor] = None
         self._compiled = False
         self._speed_sampler = None   # SpeeD timestep sampler (lazy init)
+        self._token_weight_mask: Optional[torch.Tensor] = None  # Per-step token weights
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -409,6 +410,12 @@ class TrainBackendBase(ABC):
         if config.speed_change_aware and self._speed_sampler is not None:
             speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
             loss = loss * speed_weights
+
+        # Token-level caption weighting
+        if config.token_weighting_enabled and hasattr(self, '_token_weight_mask') and self._token_weight_mask is not None:
+            from dataset_sorter.token_weighting import apply_token_weights_to_loss
+            loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
+            self._token_weight_mask = None  # Clear after use
 
         return loss.mean()
 
