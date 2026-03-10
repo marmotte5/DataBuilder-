@@ -117,7 +117,7 @@ class SD3Backend(TrainBackendBase):
 
         return (encoder_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """SD3 uses pooled projections."""
         if pooled is None:
             return None

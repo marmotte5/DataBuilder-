@@ -73,11 +73,11 @@ class PixArtBackend(TrainBackendBase):
 
         return (encoder_hidden,)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         resolution = self.config.resolution
         return {
-            "resolution": torch.tensor([resolution, resolution]).repeat(batch_size, 1).to(self.device),
-            "aspect_ratio": torch.tensor([1.0]).repeat(batch_size, 1).to(self.device),
+            "resolution": torch.tensor([resolution, resolution], dtype=self.dtype, device=self.device).unsqueeze(0).expand(batch_size, -1),
+            "aspect_ratio": torch.tensor([1.0], dtype=self.dtype, device=self.device).unsqueeze(0).expand(batch_size, -1),
         }
 
     def training_step(

@@ -575,8 +575,8 @@ class TrainingTab(QWidget):
         g2.setLayout(g2l)
         layout.addWidget(g2)
 
-        # Memory & CUDA
-        g3 = self._group("Memory & CUDA")
+        # Memory & GPU
+        g3 = self._group("Memory & GPU")
         g3l = QVBoxLayout()
         self.grad_ckpt_check = QCheckBox("Gradient Checkpointing")
         self.grad_ckpt_check.setChecked(True)
@@ -1014,9 +1014,11 @@ class TrainingTab(QWidget):
                    f"TE={'Yes' if config.cache_text_encoder else 'No'}")
         self._log("")
 
-        # Prompts
-        prompts_text = self.prompts_input.toPlainText().strip()
-        sample_prompts = [p.strip() for p in prompts_text.split("\n") if p.strip()] if prompts_text else None
+        # Clean up any previous worker
+        if hasattr(self, '_training_worker') and self._training_worker is not None:
+            self._training_worker.quit()
+            self._training_worker.wait(3000)
+            self._training_worker = None
 
         from dataset_sorter.training_worker import TrainingWorker
         self._training_worker = TrainingWorker(
@@ -1025,7 +1027,7 @@ class TrainingTab(QWidget):
             image_paths=image_paths,
             captions=captions,
             output_dir=output_dir,
-            sample_prompts=sample_prompts,
+            sample_prompts=config.sample_prompts or None,
         )
         self._training_worker.progress.connect(self._on_progress)
         self._training_worker.loss_update.connect(self._on_loss)

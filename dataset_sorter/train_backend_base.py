@@ -91,7 +91,7 @@ class TrainBackendBase(ABC):
         else:
             return self._compute_epsilon_loss(noise_pred, noise, latents, timesteps)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """Return added_cond_kwargs for UNet forward. Override for model-specific."""
         return None
 
@@ -335,7 +335,7 @@ class TrainBackendBase(ABC):
         pooled = te_out[1] if len(te_out) > 1 else None
 
         # Get model-specific conditioning
-        added_cond = self.get_added_cond(batch_size, pooled=pooled)
+        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out)
 
         # Forward pass with autocast for speed
         _act = autocast_device_type()
@@ -390,7 +390,7 @@ class TrainBackendBase(ABC):
         pooled = te_out[1] if len(te_out) > 1 else None
         timesteps = (t * timestep_scale).long()
 
-        added_cond = self.get_added_cond(batch_size, pooled=pooled)
+        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out)
 
         fwd_kwargs = {}
         if added_cond is not None:

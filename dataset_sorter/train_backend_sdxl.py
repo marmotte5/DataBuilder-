@@ -95,12 +95,12 @@ class SDXLBackend(TrainBackendBase):
         encoder_hidden = torch.cat([hidden_1, hidden_2], dim=-1)
         return (encoder_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """SDXL requires time_ids and text_embeds as added conditioning."""
         if pooled is None:
             return None
         return {
             "text_embeds": pooled,
-            "time_ids": self._cached_time_ids.repeat(batch_size, 1),
+            "time_ids": self._cached_time_ids.expand(batch_size, -1),
         }
 

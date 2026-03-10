@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QTextEdit, QCheckBox, QFileDialog,
+    QPushButton, QTextEdit, QCheckBox, QFileDialog, QMessageBox,
 )
 
 from dataset_sorter.constants import (
@@ -197,7 +197,10 @@ class RecoTab(QWidget):
         if not path:
             return
         content = export_onetrainer_toml(self._last_config)
-        Path(path).write_text(content, encoding="utf-8")
+        try:
+            Path(path).write_text(content, encoding="utf-8")
+        except OSError as e:
+            QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")
 
     def _export_json(self):
         if self._last_config is None:
@@ -209,4 +212,7 @@ class RecoTab(QWidget):
         if not path:
             return
         content = export_kohya_json(self._last_config)
-        Path(path).write_text(content, encoding="utf-8")
+        try:
+            Path(path).write_text(content, encoding="utf-8")
+        except OSError as e:
+            QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")

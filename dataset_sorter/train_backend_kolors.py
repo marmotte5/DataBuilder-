@@ -88,7 +88,7 @@ class KolorsBackend(TrainBackendBase):
 
         return (encoder_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """SDXL-style conditioning with time_ids."""
         if pooled is None:
             return None

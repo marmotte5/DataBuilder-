@@ -64,11 +64,11 @@ class StableCascadeBackend(TrainBackendBase):
         with torch.no_grad():
             out = self.text_encoder(tokens, output_hidden_states=True)
             hidden_states = out.hidden_states[-2]
-            pooled = out.pooler_output if hasattr(out, 'pooler_output') else out[0]
+            pooled = out.pooler_output if hasattr(out, 'pooler_output') else out.last_hidden_state[:, 0]
 
         return (hidden_states, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         if pooled is None:
             return None
         return {"text_embeds": pooled}

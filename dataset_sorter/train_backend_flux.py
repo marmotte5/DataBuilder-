@@ -88,7 +88,7 @@ class FluxBackend(TrainBackendBase):
 
         return (t5_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """Flux uses guidance embedding, not time_ids."""
         if pooled is None:
             return None

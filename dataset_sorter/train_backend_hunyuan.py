@@ -88,32 +88,36 @@ class HunyuanDiTBackend(TrainBackendBase):
         # Concatenate hidden states
         encoder_hidden = torch.cat([clip_hidden, t5_hidden], dim=1)
 
-        return (encoder_hidden, pooled)
+        return (encoder_hidden, pooled, t5_hidden)
 
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
         """Hunyuan DiT conditioning."""
         if pooled is None:
             return None
         resolution = self.config.resolution
-        # Create proper attention masks instead of None
         # CLIP token length (model_max_length from tokenizer, typically 77)
         clip_len = getattr(self.tokenizer, "model_max_length", 77)
         # T5/mT5 token length (we use 256 in encode_text_batch)
         t5_len = 256
+
+        # Extract T5 hidden states from te_out (3rd element from encode_text_batch)
+        t5_hidden = te_out[2] if len(te_out) > 2 else torch.zeros(
+            batch_size, t5_len, self.text_encoder_2.config.hidden_size,
+            device=self.device, dtype=self.dtype,
+        )
+
         added_cond = {
             "text_embedding_mask": torch.ones(
                 batch_size, clip_len, device=self.device, dtype=self.dtype,
             ),
-            "encoder_hidden_states_t5": torch.zeros(
-                batch_size, t5_len, self.text_encoder_2.config.hidden_size,
-                device=self.device, dtype=self.dtype,
-            ) if self.text_encoder_2 is not None else None,
+            "encoder_hidden_states_t5": t5_hidden,
             "text_embedding_mask_t5": torch.ones(
                 batch_size, t5_len, device=self.device, dtype=self.dtype,
             ),
             "image_meta_size": torch.tensor(
                 [resolution, resolution, resolution, resolution, 0, 0],
-            ).repeat(batch_size, 1).to(self.device, dtype=self.dtype),
+                dtype=self.dtype, device=self.device,
+            ).unsqueeze(0).expand(batch_size, -1),
             "style": torch.zeros(batch_size, dtype=torch.long, device=self.device),
         }
         return added_cond
