@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataset-sorter"
+version = "2.0.0"
+description = "Desktop application for sorting, managing, and training image datasets for Stable Diffusion / LoRA training."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "DataBuilder Contributors"},
+]
+keywords = ["dataset", "stable-diffusion", "lora", "training", "image-sorting", "PyQt6"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Graphics",
+]
+dependencies = [
+    "PyQt6>=6.5",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+training = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "diffusers>=0.28",
+    "transformers>=4.38",
+    "accelerate>=0.27",
+    "safetensors>=0.4",
+    "peft>=0.10",
+    "Pillow>=10.0",
+]
+optimizers = [
+    "bitsandbytes>=0.43",
+    "prodigyopt>=1.0",
+    "lion-pytorch>=0.1",
+    "dadaptation>=3.1",
+    "came-pytorch>=0.1",
+    "schedulefree>=1.0",
+]
+all = [
+    "dataset-sorter[training,optimizers]",
+]
+
+[project.scripts]
+dataset-sorter = "dataset_sorter.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/DataBuilder-"
+Repository = "https://github.com/YOUR_USERNAME/DataBuilder-"
+
+[tool.setuptools.packages.find]
+include = ["dataset_sorter*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

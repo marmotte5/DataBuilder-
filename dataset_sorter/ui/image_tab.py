@@ -1,7 +1,11 @@
 """Images tab — Image browser with per-image bucket override.
 
 Includes jump-to navigation for large datasets (1M+ images).
+LRU pixmap cache avoids redundant disk reads when navigating.
 """
+
+from collections import OrderedDict
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
@@ -18,6 +22,35 @@ from dataset_sorter.ui.theme import (
 )
 
 
+class _PixmapCache:
+    """Simple LRU cache for scaled QPixmaps."""
+
+    def __init__(self, max_size: int = 64):
+        self._cache: OrderedDict[str, QPixmap] = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, path: str, width: int, height: int) -> QPixmap:
+        key = path
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+
+        pixmap = QPixmap(path)
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(
+                width, height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self._cache[key] = pixmap
+        if len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+        return pixmap
+
+    def clear(self):
+        self._cache.clear()
+
+
 class ImageTab(QWidget):
     force_bucket = pyqtSignal(int, int)
     reset_bucket = pyqtSignal(int)
@@ -31,6 +64,7 @@ class ImageTab(QWidget):
         self._entries: list[ImageEntry] = []
         self._deleted_tags: set[str] = set()
         self._manual_overrides: dict[str, int] = {}
+        self._pixmap_cache = _PixmapCache(max_size=64)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -115,6 +149,7 @@ class ImageTab(QWidget):
         self._entries = entries
         self._deleted_tags = deleted_tags
         self._manual_overrides = manual_overrides
+        self._pixmap_cache.clear()
         self._current_index = max(0, min(self._current_index, len(entries) - 1)) if entries else 0
         # Update jump spinner range
         total = len(entries) if entries else 1
@@ -139,9 +174,7 @@ class ImageTab(QWidget):
         self.jump_spinner.blockSignals(True)
         self.jump_spinner.setValue(idx + 1)
         self.jump_spinner.blockSignals(False)
-        pixmap = QPixmap(str(entry.image_path))
-        if not pixmap.isNull():
-            pixmap = pixmap.scaled(self.IMG_W, self.IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        pixmap = self._pixmap_cache.get(str(entry.image_path), self.IMG_W, self.IMG_H)
         self.img_display.setPixmap(pixmap)
         self.path_label.setText(str(entry.image_path))
         self.bucket_label.setText(f"  Bucket {entry.assigned_bucket}  ")

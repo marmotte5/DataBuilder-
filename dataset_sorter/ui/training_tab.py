@@ -6,10 +6,12 @@ AuraFlow, Sana, HiDream, Chroma training with real-time loss display,
 sample preview, and full configuration.
 """
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap, QImage
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -35,6 +37,104 @@ from dataset_sorter.training_presets import (
     CONTROLNET_TYPES, DPO_LOSS_TYPES,
     CHECKPOINT_GRANULARITY, CUSTOM_SCHEDULES,
 )
+
+
+class LossChartWidget(QWidget):
+    """Mini QPainter line chart for training loss history."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._points: list[tuple[int, float]] = []
+        self.setMinimumHeight(120)
+        self.setMaximumHeight(180)
+
+    def set_data(self, points: list[tuple[int, float]]):
+        self._points = points
+        self.update()
+
+    def append_point(self, step: int, loss: float):
+        self._points.append((step, loss))
+        self.update()
+
+    def clear_data(self):
+        self._points.clear()
+        self.update()
+
+    def paintEvent(self, event):
+        if len(self._points) < 2:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        margin_l, margin_r, margin_t, margin_b = 50, 10, 10, 25
+        chart_w = w - margin_l - margin_r
+        chart_h = h - margin_t - margin_b
+
+        if chart_w < 10 or chart_h < 10:
+            painter.end()
+            return
+
+        # Draw background
+        bg_color = QColor(COLORS["bg"])
+        painter.fillRect(self.rect(), bg_color)
+
+        # Compute data range
+        steps = [p[0] for p in self._points]
+        losses = [p[1] for p in self._points]
+        min_step, max_step = min(steps), max(steps)
+        min_loss, max_loss = min(losses), max(losses)
+        if max_loss == min_loss:
+            max_loss = min_loss + 1e-6
+        if max_step == min_step:
+            max_step = min_step + 1
+
+        def to_x(step):
+            return margin_l + (step - min_step) / (max_step - min_step) * chart_w
+
+        def to_y(loss):
+            return margin_t + (1 - (loss - min_loss) / (max_loss - min_loss)) * chart_h
+
+        # Grid lines
+        grid_pen = QPen(QColor(COLORS["border"]), 1)
+        painter.setPen(grid_pen)
+        for i in range(5):
+            y = margin_t + i * chart_h / 4
+            painter.drawLine(QPointF(margin_l, y), QPointF(w - margin_r, y))
+
+        # Axis labels
+        label_color = QColor(COLORS["text_muted"])
+        painter.setPen(label_color)
+        painter.setFont(QFont("sans-serif", 8))
+        for i in range(5):
+            y = margin_t + i * chart_h / 4
+            val = max_loss - i * (max_loss - min_loss) / 4
+            painter.drawText(QRectF(0, y - 8, margin_l - 4, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             f"{val:.4f}")
+
+        # Step labels
+        painter.drawText(QRectF(margin_l, h - margin_b + 4, 40, 16),
+                         Qt.AlignmentFlag.AlignLeft, str(min_step))
+        painter.drawText(QRectF(w - margin_r - 40, h - margin_b + 4, 40, 16),
+                         Qt.AlignmentFlag.AlignRight, str(max_step))
+
+        # Draw loss line
+        path = QPainterPath()
+        # Downsample if too many points
+        pts = self._points
+        if len(pts) > chart_w:
+            step_size = max(1, len(pts) // int(chart_w))
+            pts = pts[::step_size]
+        path.moveTo(to_x(pts[0][0]), to_y(pts[0][1]))
+        for step, loss in pts[1:]:
+            path.lineTo(to_x(step), to_y(loss))
+
+        line_pen = QPen(QColor(COLORS["accent"]), 2)
+        painter.setPen(line_pen)
+        painter.drawPath(path)
+
+        painter.end()
 
 
 def _gpu_status_text() -> str:
@@ -177,6 +277,33 @@ class TrainingTab(QWidget):
         self.loss_label = QLabel("")
         self.loss_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; background: transparent; font-family: 'JetBrains Mono', monospace;")
         right_layout.addWidget(self.loss_label)
+
+        # Loss chart
+        self.loss_chart = LossChartWidget()
+        self.loss_chart.setVisible(False)
+        right_layout.addWidget(self.loss_chart)
+
+        # VRAM pre-estimation
+        vram_est_row = QHBoxLayout()
+        vram_est_row.setSpacing(6)
+        btn_estimate_vram = QPushButton("Estimate VRAM")
+        btn_estimate_vram.setToolTip("Pre-estimate GPU VRAM usage based on current settings (no GPU needed)")
+        btn_estimate_vram.clicked.connect(self._estimate_vram)
+        vram_est_row.addWidget(btn_estimate_vram)
+        btn_lr_preview = QPushButton("Preview LR")
+        btn_lr_preview.setToolTip("Preview the learning rate schedule as an ASCII graph")
+        btn_lr_preview.clicked.connect(self._preview_lr_schedule)
+        vram_est_row.addWidget(btn_lr_preview)
+        btn_save_config = QPushButton("Save Config")
+        btn_save_config.setToolTip("Save training configuration to a JSON file")
+        btn_save_config.clicked.connect(self._save_training_config)
+        vram_est_row.addWidget(btn_save_config)
+        btn_load_config = QPushButton("Load Config")
+        btn_load_config.setToolTip("Load training configuration from a JSON file")
+        btn_load_config.clicked.connect(self._load_training_config)
+        vram_est_row.addWidget(btn_load_config)
+        vram_est_row.addStretch()
+        right_layout.addLayout(vram_est_row)
 
         # VRAM usage bar
         vram_row = QHBoxLayout()
@@ -1509,6 +1636,8 @@ class TrainingTab(QWidget):
 
         self._set_training_ui(True)
         self._loss_history.clear()
+        self.loss_chart.clear_data()
+        self.loss_chart.setVisible(True)
 
         self._training_worker.start()
 
@@ -1564,6 +1693,9 @@ class TrainingTab(QWidget):
     def _on_loss(self, step, loss, lr):
         self._loss_history.append((step, loss))
         self.loss_label.setText(f"Step {step}  |  Loss: {loss:.6f}  |  LR: {lr:.2e}")
+        self.loss_chart.append_point(step, loss)
+        if not self.loss_chart.isVisible():
+            self.loss_chart.setVisible(True)
         if step % 10 == 0:
             self._log(f"[Step {step:6d}] loss={loss:.6f}  lr={lr:.2e}")
 
@@ -1625,6 +1757,111 @@ class TrainingTab(QWidget):
 
     def _on_error(self, error_msg):
         self._log(f"ERROR: {error_msg}")
+
+    # ── VRAM Pre-Estimation ─────────────────────────────────────────
+
+    def _estimate_vram(self):
+        """Estimate VRAM usage from current settings without starting training."""
+        from dataset_sorter.vram_estimator import estimate_vram, format_vram_estimate
+        config = self.build_config()
+        result = estimate_vram(config)
+        text = format_vram_estimate(result)
+        self._log("")
+        self._log("=" * 40)
+        self._log(text)
+        self._log("=" * 40)
+        self._log("")
+
+        # Update the VRAM bar with estimated values
+        total_gpu = config.vram_gb
+        est_gb = result["total_gb"]
+        pct = min(100, int((est_gb / total_gpu) * 100)) if total_gpu > 0 else 0
+        self.vram_bar.setValue(pct)
+        self.vram_detail_label.setText(f"Est. {est_gb:.1f} / {total_gpu} GB")
+
+        if pct >= 90:
+            chunk_color = COLORS["danger"]
+        elif pct >= 75:
+            chunk_color = COLORS["warning"]
+        else:
+            chunk_color = COLORS["accent"]
+        self.vram_bar.setStyleSheet(
+            f"QProgressBar {{ background-color: {COLORS['bg']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
+            f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
+        )
+
+    # ── LR Schedule Preview ─────────────────────────────────────────
+
+    def _preview_lr_schedule(self):
+        """Show ASCII LR schedule preview in the training log."""
+        from dataset_sorter.lr_preview import compute_lr_schedule, format_lr_ascii_graph
+        config = self.build_config()
+
+        # Estimate total steps if not set
+        total_steps = config.max_train_steps
+        if total_steps <= 0:
+            total_steps = 1000  # default preview length
+
+        points = compute_lr_schedule(
+            scheduler_type=config.lr_scheduler,
+            learning_rate=config.learning_rate,
+            total_steps=total_steps,
+            warmup_steps=config.warmup_steps,
+        )
+        graph = format_lr_ascii_graph(points, width=50, height=12)
+        self._log("")
+        self._log(graph)
+        self._log("")
+
+    # ── Training Config Save/Load ────────────────────────────────────
+
+    def _save_training_config(self):
+        """Save current training configuration to a JSON file."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Training Config", "training_config.json", "JSON (*.json)",
+        )
+        if not path:
+            return
+        config = self.build_config()
+        data = asdict(config)
+        try:
+            Path(path).write_text(
+                json.dumps(data, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            self._log(f"Training config saved: {path}")
+        except OSError as e:
+            self._log(f"ERROR saving config: {e}")
+
+    def _load_training_config(self):
+        """Load training configuration from a JSON file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Training Config", "", "JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            self._log(f"ERROR loading config: {e}")
+            return
+
+        config = TrainingConfig()
+        for key, value in data.items():
+            if hasattr(config, key):
+                try:
+                    # Handle list fields
+                    current = getattr(config, key)
+                    if isinstance(current, list) and isinstance(value, list):
+                        setattr(config, key, value)
+                    else:
+                        setattr(config, key, type(current)(value))
+                except (ValueError, TypeError):
+                    setattr(config, key, value)
+        self.apply_config(config)
+        self._log(f"Training config loaded: {path}")
 
     def _stop_vram_monitor(self):
         """Stop the VRAM monitor thread if running."""

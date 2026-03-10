@@ -2,5 +2,11 @@
 
 from dataset_sorter.ui.main_window import run
 
-if __name__ == "__main__":
+
+def main():
+    """Console script entry point."""
     run()
+
+
+if __name__ == "__main__":
+    main()

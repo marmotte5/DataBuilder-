@@ -814,6 +814,90 @@ class AugmentationSection(QWidget):
         return self._state
 
 
+class DuplicateSection(QWidget):
+    """Duplicate / near-duplicate image detection."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries: list[ImageEntry] = []
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = QLabel("Duplicate Image Detection")
+        header.setStyleSheet(SECTION_HEADER_STYLE)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Detect exact and near-duplicate images using file hashing and perceptual hashing (aHash). "
+            "Near-duplicates are images that look similar but differ in resolution, compression, or minor edits."
+        )
+        desc.setStyleSheet(MUTED_LABEL_STYLE)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+
+        ctrl.addWidget(QLabel("Sensitivity:"))
+        self.threshold_spin = QSpinBox()
+        self.threshold_spin.setRange(0, 20)
+        self.threshold_spin.setValue(5)
+        self.threshold_spin.setToolTip(
+            "Hamming distance threshold for perceptual matching. "
+            "0=exact visual match, 5=similar, 10=loose match."
+        )
+        self.threshold_spin.setMaximumWidth(70)
+        ctrl.addWidget(self.threshold_spin)
+
+        self.exact_only_check = QCheckBox("Exact only")
+        self.exact_only_check.setToolTip("Only detect byte-identical files (faster)")
+        ctrl.addWidget(self.exact_only_check)
+
+        ctrl.addStretch()
+
+        self.btn_detect = QPushButton("Find Duplicates")
+        self.btn_detect.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_detect.clicked.connect(self._run_detection)
+        ctrl.addWidget(self.btn_detect)
+
+        self.result_badge = QLabel("")
+        self.result_badge.setStyleSheet(TAG_BADGE_STYLE)
+        ctrl.addWidget(self.result_badge)
+        layout.addLayout(ctrl)
+
+        self.results_text = QTextEdit()
+        self.results_text.setReadOnly(True)
+        layout.addWidget(self.results_text, 1)
+
+    def set_entries(self, entries: list[ImageEntry]):
+        self._entries = entries
+
+    def _run_detection(self):
+        if not self._entries:
+            self.results_text.setPlainText("No dataset loaded. Scan a dataset first.")
+            return
+
+        self.btn_detect.setEnabled(False)
+        self.result_badge.setText("Scanning...")
+        self.results_text.setPlainText("Analyzing images for duplicates...")
+
+        from dataset_sorter.duplicate_detector import find_duplicates, format_duplicate_report
+        paths = [e.image_path for e in self._entries]
+        duplicates = find_duplicates(
+            paths,
+            exact_only=self.exact_only_check.isChecked(),
+            hash_threshold=self.threshold_spin.value(),
+        )
+        report = format_duplicate_report(duplicates, paths)
+        self.results_text.setPlainText(report)
+        self.result_badge.setText(f"{len(duplicates)} pair(s)")
+        self.btn_detect.setEnabled(True)
+
+
 class DatasetTab(QWidget):
     """Dataset Management tab — combines all dataset analysis features.
 
@@ -823,6 +907,7 @@ class DatasetTab(QWidget):
     - Tag Histogram: frequency distribution visualization
     - Spell Check: typo detection and semantic suggestions
     - Augmentation: image augmentation config
+    - Duplicates: duplicate/near-duplicate image detection
     """
 
     apply_tag_fix = pyqtSignal(str, str)  # (old_tag, new_tag) for spell-check apply
@@ -861,6 +946,10 @@ class DatasetTab(QWidget):
         self.augmentation_section = AugmentationSection()
         tabs.addTab(self.augmentation_section, "Augmentation")
 
+        # 6. Duplicates
+        self.duplicate_section = DuplicateSection()
+        tabs.addTab(self.duplicate_section, "Duplicates")
+
         layout.addWidget(tabs)
 
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter):
@@ -880,6 +969,9 @@ class DatasetTab(QWidget):
 
         # Spell check
         self.spellcheck_section.set_tag_counts(tag_counts)
+
+        # Duplicates
+        self.duplicate_section.set_entries(entries)
 
     def get_augmentation_state(self) -> dict:
         return self.augmentation_section.get_state()

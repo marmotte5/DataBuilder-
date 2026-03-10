@@ -5,10 +5,12 @@ Supports drag-and-drop, keyboard shortcuts, dark/light theme toggle,
 and progress persistence across restarts.
 """
 
+import copy
 import json
 import logging
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -75,8 +77,19 @@ class DragDropLineEdit(QLineEdit):
         super().dropEvent(event)
 
 
+@dataclass
+class TagSnapshot:
+    """Snapshot for undo/redo of tag operations."""
+    entry_tags: list[list[str]] = field(default_factory=list)
+    manual_overrides: dict = field(default_factory=dict)
+    deleted_tags: set = field(default_factory=set)
+    description: str = ""
+
+
 class MainWindow(QMainWindow):
     """Main window — orchestrates all panels."""
+
+    _MAX_UNDO = 50
 
     def __init__(self):
         super().__init__()
@@ -94,6 +107,10 @@ class MainWindow(QMainWindow):
         }
         self.deleted_tags: set[str] = set()
         self.tag_auto_buckets: dict[str, int] = {}
+
+        # Undo/redo stacks for tag operations
+        self._undo_stack: list[TagSnapshot] = []
+        self._redo_stack: list[TagSnapshot] = []
 
         self._scan_worker: Optional[ScanWorker] = None
         self._export_worker: Optional[ExportWorker] = None
@@ -281,6 +298,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+R"), self, self._start_scan)
         QShortcut(QKeySequence("Ctrl+T"), self, self._toggle_theme)
         QShortcut(QKeySequence("Ctrl+D"), self, self._dry_run)
+        QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
         QShortcut(QKeySequence("Escape"), self, self._cancel_operation)
 
     def _toggle_theme(self):
@@ -559,6 +578,57 @@ class MainWindow(QMainWindow):
         )
         self.dataset_tab.set_data(self.entries, self.tag_counts)
 
+    # -- Undo / Redo --
+
+    def _take_snapshot(self, description: str) -> TagSnapshot:
+        """Capture current tag state for undo."""
+        return TagSnapshot(
+            entry_tags=[list(e.tags) for e in self.entries],
+            manual_overrides=dict(self.manual_overrides),
+            deleted_tags=set(self.deleted_tags),
+            description=description,
+        )
+
+    def _push_undo(self, description: str):
+        """Save current state to undo stack before a modification."""
+        if not self.entries:
+            return
+        snap = self._take_snapshot(description)
+        self._undo_stack.append(snap)
+        if len(self._undo_stack) > self._MAX_UNDO:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+
+    def _restore_snapshot(self, snap: TagSnapshot):
+        """Restore tag state from a snapshot."""
+        for entry, tags in zip(self.entries, snap.entry_tags):
+            entry.tags = list(tags)
+        self.manual_overrides = dict(snap.manual_overrides)
+        self.deleted_tags = set(snap.deleted_tags)
+        self._rebuild_tag_index()
+        self._compute_auto_buckets()
+        self._assign_entries_to_buckets()
+        self._refresh_all_ui()
+
+    def _undo(self):
+        if not self._undo_stack:
+            self.statusBar().showMessage("Nothing to undo.")
+            return
+        # Save current state to redo stack
+        self._redo_stack.append(self._take_snapshot("redo"))
+        snap = self._undo_stack.pop()
+        self._restore_snapshot(snap)
+        self.statusBar().showMessage(f"Undo: {snap.description}")
+
+    def _redo(self):
+        if not self._redo_stack:
+            self.statusBar().showMessage("Nothing to redo.")
+            return
+        self._undo_stack.append(self._take_snapshot("undo"))
+        snap = self._redo_stack.pop()
+        self._restore_snapshot(snap)
+        self.statusBar().showMessage(f"Redo: {snap.description}")
+
     def _after_tag_edit(self):
         self._rebuild_tag_index()
         self._compute_auto_buckets()
@@ -616,6 +686,7 @@ class MainWindow(QMainWindow):
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
+        self._push_undo(f"Delete {len(tags)} tag(s)")
         self.deleted_tags.update(tags)
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
@@ -625,6 +696,7 @@ class MainWindow(QMainWindow):
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
+        self._push_undo(f"Restore {len(tags)} tag(s)")
         for tag in tags:
             self.deleted_tags.discard(tag)
         self._assign_entries_to_buckets()
@@ -633,6 +705,7 @@ class MainWindow(QMainWindow):
 
     def _restore_all_tags(self):
         n = len(self.deleted_tags)
+        self._push_undo(f"Restore all {n} tags")
         self.deleted_tags.clear()
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
@@ -648,6 +721,7 @@ class MainWindow(QMainWindow):
         if not tags:
             self.override_panel.set_editor_info("Select a tag first.")
             return
+        self._push_undo(f"Rename {len(tags)} tag(s) to '{new_name}'")
         count = 0
         for old_tag in tags:
             if old_tag == new_name:
@@ -679,6 +753,7 @@ class MainWindow(QMainWindow):
         if len(tags) < 2:
             self.override_panel.set_editor_info("Select at least 2 tags to merge.")
             return
+        self._push_undo(f"Merge {len(tags)} tags to '{target}'")
         count = 0
         for tag in tags:
             if tag == target:
@@ -702,6 +777,7 @@ class MainWindow(QMainWindow):
         if not search:
             self.override_panel.set_editor_info("Enter search text.")
             return
+        self._push_undo(f"Search/replace '{search}' -> '{replace}'")
         modified = 0
         for entry in self.entries:
             new_tags: list[str] = []
@@ -856,6 +932,7 @@ class MainWindow(QMainWindow):
         """Apply a spell-check rename from old_tag to new_tag."""
         if not old_tag or not new_tag or old_tag == new_tag:
             return
+        self._push_undo(f"Spellcheck '{old_tag}' -> '{new_tag}'")
         count = 0
         for idx in list(self.tag_to_entries.get(old_tag, [])):
             entry = self.entries[idx]
