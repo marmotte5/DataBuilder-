@@ -440,10 +440,12 @@ class Trainer:
         # persistent_workers: keeps worker processes alive between epochs (saves startup)
         # prefetch_factor: pre-load next batches while GPU is busy
         # num_workers: adaptive based on dataset size and cached state
-        use_workers = min(4, max(1, len(self.dataset) // 100))
-        if config.cache_latents and config.cache_text_encoder:
-            # Everything is cached in RAM — minimal IO, fewer workers needed
-            use_workers = min(2, use_workers)
+        from dataset_sorter.io_speed import compute_optimal_workers
+        use_workers = compute_optimal_workers(
+            dataset_size=len(self.dataset),
+            latents_cached=config.cache_latents,
+            te_cached=config.cache_text_encoder,
+        )
 
         if self._bucket_sampler is not None:
             # Aspect ratio bucketing: use custom batch sampler (handles shuffle + grouping)

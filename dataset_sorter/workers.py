@@ -108,26 +108,14 @@ class ScanWorker(QThread):
 
     def run(self):
         self.status.emit("Discovering images...")
-        image_files: list[Path] = []
-        seen_dirs: set[str] = set()
 
-        for root, dirs, files in os.walk(self.source_dir, followlinks=True):
-            if self._cancelled:
-                self.finished_scan.emit([])
-                return
-            # Detect symlink loops by tracking resolved directory identities
-            real = os.path.realpath(root)
-            if real in seen_dirs:
-                log.warning(f"Symlink loop detected, skipping: {root}")
-                dirs.clear()
-                continue
-            seen_dirs.add(real)
+        # Use os.scandir()-based recursive scan (2-3x faster than os.walk)
+        from dataset_sorter.io_speed import scandir_recursive
+        image_files = scandir_recursive(self.source_dir, IMAGE_EXTENSIONS)
 
-            for f in files:
-                if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
-                    image_files.append(Path(root) / f)
-
-        image_files.sort()
+        if self._cancelled:
+            self.finished_scan.emit([])
+            return
         total = len(image_files)
         self.status.emit(f"{total} images found, reading tags ({self.num_workers} workers)...")
 

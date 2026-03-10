@@ -80,6 +80,11 @@ class TrainingConfig:
     cache_latents_to_disk: bool = False
     cache_text_encoder: bool = True     # Cache TE outputs
     cache_text_encoder_to_disk: bool = False
+    fast_image_decoder: bool = True     # Use turbojpeg/cv2 if available
+    safetensors_cache: bool = True      # Use safetensors format for cache files
+    fp16_latent_cache: bool = True      # Store latents in fp16 (50% RAM savings)
+    cache_to_ram_disk: bool = False     # Use /dev/shm tmpfs for cache (Linux)
+    lmdb_cache: bool = False            # Use LMDB single-file cache backend
 
     # CUDA optimizations
     xformers: bool = False
