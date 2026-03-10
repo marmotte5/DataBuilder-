@@ -195,6 +195,11 @@ def _get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         except ImportError:
             log.warning("schedulefree not installed, falling back to AdamW")
             return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
+    elif config.optimizer == "SGD":
+        return torch.optim.SGD(
+            param_groups, lr=lr, weight_decay=config.weight_decay,
+            momentum=0.9,
+        )
     else:
         # Default: fused AdamW (fastest native option, PyTorch 2.0+)
         try:
@@ -211,8 +216,23 @@ def _get_optimizer(config: TrainingConfig, param_groups: list[dict]):
 def _get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
     """Create LR scheduler."""
     from diffusers.optimization import get_scheduler
+
+    # Supported scheduler names in diffusers
+    supported = {
+        "linear", "cosine", "cosine_with_restarts", "polynomial",
+        "constant", "constant_with_warmup", "piecewise_constant",
+    }
+
+    scheduler_name = config.lr_scheduler
+    if scheduler_name not in supported:
+        log.warning(
+            f"LR scheduler '{scheduler_name}' not supported by diffusers, "
+            f"falling back to 'cosine'"
+        )
+        scheduler_name = "cosine"
+
     return get_scheduler(
-        config.lr_scheduler,
+        scheduler_name,
         optimizer=optimizer,
         num_warmup_steps=config.warmup_steps,
         num_training_steps=num_training_steps,
@@ -347,10 +367,10 @@ class Trainer:
                 self.backend.text_encoder_2.to(self.device)
                 te2 = self.backend.text_encoder_2
                 tok2 = self.backend.tokenizer_2
-            if self.backend.text_encoder_3 is not None:
+            if getattr(self.backend, "text_encoder_3", None) is not None:
                 self.backend.text_encoder_3.to(self.device)
                 te3 = self.backend.text_encoder_3
-                tok3 = self.backend.tokenizer_3
+                tok3 = getattr(self.backend, "tokenizer_3", None)
 
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
@@ -423,7 +443,6 @@ class Trainer:
         config = self.config
         self.state.phase = "training"
         self.state.running = True
-        self.state.global_step = 0
 
         # ── Optimized DataLoader ──
         # persistent_workers: keeps worker processes alive between epochs (saves startup)
@@ -455,7 +474,7 @@ class Trainer:
         if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
             trainable_params += [p for p in self.backend.text_encoder_2.parameters() if p.requires_grad]
 
-        for epoch in range(config.epochs):
+        for epoch in range(self.state.epoch, config.epochs):
             if not self.state.running:
                 break
 
@@ -595,12 +614,8 @@ class Trainer:
         # ── Delegate to backend training step (handles model-specific logic) ──
         bsz = latents.shape[0]
 
-        # Flow matching models (Flux, SD3, Z-Image) have custom training_step
-        if self.backend.prediction_type == "flow":
+        with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=self.device.type == "cuda"):
             return self.backend.training_step(latents, te_out, bsz)
-
-        # Standard models (SD 1.5, SDXL, Pony) use shared training_step
-        return self.backend.training_step(latents, te_out, bsz)
 
     def _save_checkpoint(self, name: str):
         """Save checkpoint to the checkpoints subfolder."""
@@ -613,20 +628,26 @@ class Trainer:
 
         if is_lora:
             self.backend.save_lora(save_dir)
-        else:
+        elif self.backend.pipeline is not None:
             self.backend.pipeline.save_pretrained(str(save_dir))
+        else:
+            log.warning("No pipeline available for full model save; saving UNet only")
+            self.backend.unet.save_pretrained(str(save_dir / "unet"))
 
         # Save EMA weights
         if self.ema_model is not None:
             torch.save(self.ema_model.state_dict(), str(save_dir / "ema_weights.pt"))
 
         # Save training state for resume
-        torch.save({
+        state_dict = {
             "global_step": self.state.global_step,
             "epoch": self.state.epoch,
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
-        }, str(save_dir / "training_state.pt"))
+        }
+        if self.grad_scaler is not None:
+            state_dict["grad_scaler"] = self.grad_scaler.state_dict()
+        torch.save(state_dict, str(save_dir / "training_state.pt"))
 
         self._cleanup_old_checkpoints()
         self.state.phase = "training"
@@ -817,22 +838,28 @@ class Trainer:
         weights_dir.mkdir(exist_ok=True)
         if is_lora:
             self.backend.save_lora(weights_dir)
-        else:
+        elif self.backend.pipeline is not None:
             self.backend.pipeline.save_pretrained(str(weights_dir))
+        else:
+            log.warning("No pipeline available for full model backup; saving UNet only")
+            self.backend.unet.save_pretrained(str(weights_dir / "unet"))
 
         # Save EMA
         if self.ema_model is not None:
             torch.save(self.ema_model.state_dict(), str(backup_dir / "ema_weights.pt"))
 
         # Save optimizer + scheduler state
-        torch.save({
+        backup_state = {
             "global_step": self.state.global_step,
             "epoch": self.state.epoch,
             "loss": self.state.loss,
             "lr": self.state.lr,
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
-        }, str(backup_dir / "training_state.pt"))
+        }
+        if self.grad_scaler is not None:
+            backup_state["grad_scaler"] = self.grad_scaler.state_dict()
+        torch.save(backup_state, str(backup_dir / "training_state.pt"))
 
         # Save config
         config_path = backup_dir / "config.json"
@@ -863,6 +890,46 @@ class Trainer:
         if self.scheduler is not None and "scheduler" in state:
             self.scheduler.load_state_dict(state["scheduler"])
 
+        # Restore GradScaler state
+        if self.grad_scaler is not None and "grad_scaler" in state:
+            self.grad_scaler.load_state_dict(state["grad_scaler"])
+
+        # Restore model weights (LoRA or full)
+        is_lora = self.config.model_type.endswith("_lora")
+        if is_lora:
+            from peft import PeftModel
+            # Check for LoRA adapter files
+            adapter_config = checkpoint_dir / "adapter_config.json"
+            if adapter_config.exists() and self.backend.unet is not None:
+                try:
+                    if isinstance(self.backend.unet, PeftModel):
+                        self.backend.unet.load_adapter(str(checkpoint_dir), "default")
+                    else:
+                        from peft import set_peft_model_state_dict
+                        from safetensors.torch import load_file
+                        lora_path = checkpoint_dir / "adapter_model.safetensors"
+                        if lora_path.exists():
+                            lora_state = load_file(str(lora_path))
+                            set_peft_model_state_dict(self.backend.unet, lora_state)
+                    log.info("Restored LoRA weights from checkpoint")
+                except Exception as e:
+                    log.warning(f"Could not restore LoRA weights: {e}")
+        else:
+            # Full finetune — pipeline.save_pretrained was used to save
+            # Weights are already loaded via load_model(), so only needed
+            # if checkpoint contains updated weights
+            pass
+
+        # Restore EMA state
+        ema_path = checkpoint_dir / "ema_weights.pt"
+        if self.ema_model is not None and ema_path.exists():
+            try:
+                ema_state = torch.load(str(ema_path), map_location="cpu", weights_only=True)
+                self.ema_model.load_state_dict(ema_state)
+                log.info("Restored EMA state from checkpoint")
+            except Exception as e:
+                log.warning(f"Could not restore EMA state: {e}")
+
         log.info(f"Resumed from checkpoint: step {self.state.global_step}, epoch {self.state.epoch}")
         return True
 
@@ -885,9 +952,13 @@ class Trainer:
                 except Exception:
                     pass
 
+        # Re-initialize all cleaned attributes to None
         self.backend = None
         self.optimizer = None
         self.scheduler = None
+        self.ema_model = None
+        self.dataset = None
+        self.grad_scaler = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

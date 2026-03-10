@@ -215,6 +215,8 @@ class CachedTrainDataset(Dataset):
                 )
 
                 te_result = (hidden_states, pooled)
+                hidden_states_2 = None
+                pooled_2 = None
 
                 # Second text encoder (SDXL)
                 if tokenizer_2 is not None and text_encoder_2 is not None:

@@ -38,7 +38,7 @@ def _cuda_status_text() -> str:
         if not torch.cuda.is_available():
             return "CUDA: Not available (CPU only — training will be very slow)"
         name = torch.cuda.get_device_name(0)
-        vram = round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)
+        vram = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
         cuda_ver = torch.version.cuda or "?"
         bf16 = torch.cuda.is_bf16_supported()
         return (
