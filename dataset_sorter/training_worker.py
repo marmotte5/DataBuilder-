@@ -2,8 +2,10 @@
 
 Runs training in a background thread with signal-based progress updates.
 Supports pause/resume/save-now/sample-now/backup during training.
+Includes periodic VRAM usage monitoring (CUDA/MPS).
 """
 
+import time
 import traceback
 from pathlib import Path
 
@@ -11,6 +13,35 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.trainer import Trainer
+from dataset_sorter.disk_space import get_vram_snapshot, reset_peak_vram
+
+
+class VRAMMonitor(QThread):
+    """Lightweight thread that polls VRAM usage at regular intervals.
+
+    Emits vram_update signal every interval_ms milliseconds with current
+    GPU memory stats. Automatically stops when stop() is called.
+    """
+
+    vram_update = pyqtSignal(float, float, float, float)  # allocated_gb, reserved_gb, total_gb, peak_gb
+
+    def __init__(self, interval_ms: int = 2000, parent=None):
+        super().__init__(parent)
+        self._running = True
+        self._interval_ms = interval_ms
+
+    def run(self):
+        while self._running:
+            snap = get_vram_snapshot()
+            if snap.total_bytes > 0:
+                self.vram_update.emit(
+                    snap.allocated_gb, snap.reserved_gb,
+                    snap.total_gb, snap.peak_allocated_gb,
+                )
+            time.sleep(self._interval_ms / 1000.0)
+
+    def stop(self):
+        self._running = False
 
 
 class TrainingWorker(QThread):

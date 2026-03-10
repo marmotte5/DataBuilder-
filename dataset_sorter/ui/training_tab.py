@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QTextEdit, QFileDialog, QGroupBox, QTabWidget,
-    QScrollArea, QFrame, QProgressBar, QSplitter,
+    QScrollArea, QFrame, QProgressBar, QSplitter, QMessageBox,
 )
 
 from dataset_sorter.constants import (
@@ -140,6 +140,47 @@ class TrainingTab(QWidget):
         self.loss_label = QLabel("")
         self.loss_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; background: transparent; font-family: 'JetBrains Mono', monospace;")
         right_layout.addWidget(self.loss_label)
+
+        # VRAM usage bar
+        vram_row = QHBoxLayout()
+        vram_row.setSpacing(6)
+        vram_lbl = QLabel("VRAM:")
+        vram_lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
+            f"background: transparent;"
+        )
+        vram_row.addWidget(vram_lbl)
+
+        self.vram_bar = QProgressBar()
+        self.vram_bar.setRange(0, 100)
+        self.vram_bar.setValue(0)
+        self.vram_bar.setTextVisible(True)
+        self.vram_bar.setFormat("%v%")
+        self.vram_bar.setMaximumHeight(18)
+        self.vram_bar.setStyleSheet(
+            f"QProgressBar {{ background-color: {COLORS['bg']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
+            f"QProgressBar::chunk {{ background-color: {COLORS['accent']}; border-radius: 3px; }}"
+        )
+        vram_row.addWidget(self.vram_bar, 1)
+
+        self.vram_detail_label = QLabel("")
+        self.vram_detail_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent; "
+            f"font-family: 'JetBrains Mono', monospace;"
+        )
+        vram_row.addWidget(self.vram_detail_label)
+        right_layout.addLayout(vram_row)
+
+        # Disk space info
+        self.disk_label = QLabel("")
+        self.disk_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; padding: 2px 6px; "
+            f"background: transparent;"
+        )
+        self.disk_label.setVisible(False)
+        right_layout.addWidget(self.disk_label)
 
         # Training log
         self.log_output = QTextEdit()
@@ -1078,6 +1119,45 @@ class TrainingTab(QWidget):
 
         config = self.build_config()
 
+        # ── Disk space check ──
+        from dataset_sorter.disk_space import check_disk_space_for_training
+        total_steps = config.max_train_steps if config.max_train_steps > 0 else (
+            len(image_paths) // max(1, config.batch_size * config.gradient_accumulation) * config.epochs
+        )
+        disk_check = check_disk_space_for_training(
+            output_dir=output_dir,
+            model_type=config.model_type,
+            num_images=len(image_paths),
+            resolution=config.resolution,
+            keep_n_checkpoints=config.save_last_n_checkpoints,
+            cache_latents=config.cache_latents,
+            cache_to_disk=config.cache_latents_to_disk,
+            cache_te=config.cache_text_encoder,
+            sample_every_n=config.sample_every_n_steps,
+            total_steps=total_steps,
+            num_sample_images=config.num_sample_images,
+        )
+        self._log(f"Disk space: {disk_check.free_gb:.1f} GB free, ~{disk_check.required_gb:.1f} GB needed")
+        self._log(disk_check.details)
+        self.disk_label.setText(
+            f"Disk: {disk_check.free_gb:.1f} GB free  |  Est. {disk_check.required_gb:.1f} GB needed"
+        )
+        self.disk_label.setVisible(True)
+
+        if not disk_check.ok:
+            self._log(f"WARNING: {disk_check.warning}")
+            reply = QMessageBox.warning(
+                self, "Low Disk Space", disk_check.warning + "\n\nProceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self._log("Training cancelled due to insufficient disk space.")
+                return
+        elif disk_check.warning:
+            self._log(f"NOTE: {disk_check.warning}")
+
+        self._log("")
         self._log(f"Starting training: {len(image_paths)} images")
         self._log(f"Model: {model_path}")
         self._log(f"Output: {output_dir}")
@@ -1094,7 +1174,7 @@ class TrainingTab(QWidget):
             self._training_worker.wait(3000)
             self._training_worker = None
 
-        from dataset_sorter.training_worker import TrainingWorker
+        from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
         self._training_worker = TrainingWorker(
             config=config,
             model_path=model_path,
@@ -1110,6 +1190,11 @@ class TrainingTab(QWidget):
         self._training_worker.error.connect(self._on_error)
         self._training_worker.finished_training.connect(self._on_finished)
         self._training_worker.paused_changed.connect(self._on_paused_changed)
+
+        # Start VRAM monitor
+        self._vram_monitor = VRAMMonitor(interval_ms=2000)
+        self._vram_monitor.vram_update.connect(self._on_vram_update)
+        self._vram_monitor.start()
 
         self._set_training_ui(True)
         self._loss_history.clear()
@@ -1133,6 +1218,7 @@ class TrainingTab(QWidget):
         if self._training_worker:
             self._log("Stopping training...")
             self._training_worker.stop()
+            self._stop_vram_monitor()
 
     def _pause_training(self):
         if self._training_worker:
@@ -1205,13 +1291,50 @@ class TrainingTab(QWidget):
         else:
             self._log("Training resumed.")
 
+    def _on_vram_update(self, allocated_gb, reserved_gb, total_gb, peak_gb):
+        """Update VRAM usage display from monitor thread."""
+        pct = int((allocated_gb / total_gb) * 100) if total_gb > 0 else 0
+        self.vram_bar.setValue(pct)
+        self.vram_detail_label.setText(
+            f"{allocated_gb:.1f} / {total_gb:.1f} GB  (peak: {peak_gb:.1f})"
+        )
+        # Color the bar based on usage
+        if pct >= 90:
+            chunk_color = COLORS["danger"]
+        elif pct >= 75:
+            chunk_color = COLORS["warning"]
+        else:
+            chunk_color = COLORS["accent"]
+        self.vram_bar.setStyleSheet(
+            f"QProgressBar {{ background-color: {COLORS['bg']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
+            f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
+        )
+
     def _on_error(self, error_msg):
         self._log(f"ERROR: {error_msg}")
 
+    def _stop_vram_monitor(self):
+        """Stop the VRAM monitor thread if running."""
+        if hasattr(self, '_vram_monitor') and self._vram_monitor is not None:
+            self._vram_monitor.stop()
+            self._vram_monitor.wait(3000)
+            self._vram_monitor = None
+
     def _on_finished(self, success, message):
+        self._stop_vram_monitor()
         self._set_training_ui(False)
         self.status_label.setText(message)
         self._log(f"\n{'=' * 40}")
         self._log(f"Training {'completed' if success else 'failed'}: {message}")
         self._log(f"{'=' * 40}")
+        # Log final VRAM peak
+        try:
+            from dataset_sorter.disk_space import get_vram_snapshot
+            snap = get_vram_snapshot()
+            if snap.total_bytes > 0:
+                self._log(f"Peak VRAM: {snap.peak_allocated_gb:.2f} / {snap.total_gb:.1f} GB")
+        except Exception:
+            pass
         self._training_worker = None

@@ -775,6 +775,23 @@ class MainWindow(QMainWindow):
         self._do_export()
 
     def _do_export(self):
+        # Disk space check before export
+        from dataset_sorter.disk_space import check_disk_space_for_export
+        output_dir = self.output_input.text().strip()
+        disk_check = check_disk_space_for_export(output_dir, len(self.entries))
+        if not disk_check.ok:
+            reply = QMessageBox.warning(
+                self, "Low Disk Space",
+                disk_check.warning + "\n\nProceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.statusBar().showMessage("Export cancelled: insufficient disk space.")
+                return
+        elif disk_check.warning:
+            self.statusBar().showMessage(disk_check.warning)
+
         # Clean up previous worker
         if self._export_worker is not None:
             if self._export_worker.isRunning():
