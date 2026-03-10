@@ -13,6 +13,8 @@ Full-featured inference UI supporting:
 from pathlib import Path
 from datetime import datetime
 
+from PIL import Image as PILImage
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QImage
 from PyQt6.QtWidgets import (
@@ -256,6 +258,13 @@ class GenerateTab(QWidget):
         self.negative_prompt.setFont(QFont("Consolas", 11))
         pg.addWidget(self.negative_prompt)
 
+        # Token counter
+        self.token_count_label = QLabel("Tokens: 0 / 77")
+        self.token_count_label.setStyleSheet(MUTED_LABEL_STYLE)
+        pg.addWidget(self.token_count_label)
+        self.positive_prompt.textChanged.connect(self._update_token_count)
+        self.negative_prompt.textChanged.connect(self._update_token_count)
+
         left.addWidget(prompt_grp)
 
         # -- Generation parameters --
@@ -298,6 +307,11 @@ class GenerateTab(QWidget):
         self.btn_random_seed.setToolTip("Set random seed (-1)")
         self.btn_random_seed.clicked.connect(lambda: self.seed_spin.setValue(-1))
         seed_row.addWidget(self.btn_random_seed)
+        self.btn_reuse_seed = QToolButton()
+        self.btn_reuse_seed.setText("Reuse")
+        self.btn_reuse_seed.setToolTip("Reuse seed from the currently displayed image")
+        self.btn_reuse_seed.clicked.connect(self._reuse_last_seed)
+        seed_row.addWidget(self.btn_reuse_seed)
         params.addLayout(seed_row, 1, 3)
 
         # Resolution
@@ -323,7 +337,77 @@ class GenerateTab(QWidget):
         self.batch_spin.setValue(1)
         params.addWidget(self.batch_spin, 3, 1)
 
+        # Custom resolution
+        params.addWidget(QLabel("Custom W:"), 3, 2)
+        self.custom_w_spin = QSpinBox()
+        self.custom_w_spin.setRange(64, 4096)
+        self.custom_w_spin.setSingleStep(64)
+        self.custom_w_spin.setValue(0)
+        self.custom_w_spin.setSpecialValueText("—")
+        self.custom_w_spin.setToolTip("0 = use preset above. Set both W and H to override.")
+        params.addWidget(self.custom_w_spin, 3, 3)
+
+        params.addWidget(QLabel("Custom H:"), 4, 2)
+        self.custom_h_spin = QSpinBox()
+        self.custom_h_spin.setRange(64, 4096)
+        self.custom_h_spin.setSingleStep(64)
+        self.custom_h_spin.setValue(0)
+        self.custom_h_spin.setSpecialValueText("—")
+        self.custom_h_spin.setToolTip("0 = use preset above. Set both W and H to override.")
+        params.addWidget(self.custom_h_spin, 4, 3)
+
         left.addWidget(params_grp)
+
+        # -- img2img / Inpainting group --
+        i2i_grp = QGroupBox("Image-to-Image / Inpainting")
+        i2i_layout = QGridLayout(i2i_grp)
+        i2i_layout.setSpacing(6)
+
+        i2i_layout.addWidget(QLabel("Init image:"), 0, 0)
+        self.init_image_path = QLineEdit()
+        self.init_image_path.setPlaceholderText("Optional — leave empty for txt2img")
+        i2i_layout.addWidget(self.init_image_path, 0, 1, 1, 2)
+        btn_browse_init = QPushButton("Browse")
+        btn_browse_init.clicked.connect(self._browse_init_image)
+        i2i_layout.addWidget(btn_browse_init, 0, 3)
+        btn_clear_init = QToolButton()
+        btn_clear_init.setText("X")
+        btn_clear_init.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
+        btn_clear_init.setToolTip("Clear init image (back to txt2img)")
+        btn_clear_init.clicked.connect(self._clear_init_image)
+        i2i_layout.addWidget(btn_clear_init, 0, 4)
+
+        i2i_layout.addWidget(QLabel("Mask image:"), 1, 0)
+        self.mask_image_path = QLineEdit()
+        self.mask_image_path.setPlaceholderText("Optional — white = inpaint, black = keep")
+        i2i_layout.addWidget(self.mask_image_path, 1, 1, 1, 2)
+        btn_browse_mask = QPushButton("Browse")
+        btn_browse_mask.clicked.connect(self._browse_mask_image)
+        i2i_layout.addWidget(btn_browse_mask, 1, 3)
+        btn_clear_mask = QToolButton()
+        btn_clear_mask.setText("X")
+        btn_clear_mask.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
+        btn_clear_mask.setToolTip("Clear mask (back to img2img)")
+        btn_clear_mask.clicked.connect(self._clear_mask_image)
+        i2i_layout.addWidget(btn_clear_mask, 1, 4)
+
+        i2i_layout.addWidget(QLabel("Strength:"), 2, 0)
+        self.strength_spin = QDoubleSpinBox()
+        self.strength_spin.setRange(0.01, 1.0)
+        self.strength_spin.setSingleStep(0.05)
+        self.strength_spin.setValue(0.75)
+        self.strength_spin.setToolTip("Denoising strength: 0 = no change, 1 = full regeneration")
+        i2i_layout.addWidget(self.strength_spin, 2, 1)
+
+        self.init_preview = QLabel()
+        self.init_preview.setFixedSize(80, 80)
+        self.init_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.init_preview.setStyleSheet(
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; background: {COLORS['surface']};"
+        )
+        i2i_layout.addWidget(self.init_preview, 2, 2, 1, 2, Qt.AlignmentFlag.AlignLeft)
+
+        left.addWidget(i2i_grp)
 
         # -- Generate / Stop buttons --
         gen_row = QHBoxLayout()
@@ -536,10 +620,30 @@ class GenerateTab(QWidget):
         self._worker.seed = self.seed_spin.value()
         self._worker.num_images = self.batch_spin.value()
         self._worker.clip_skip = self.clip_skip_spin.value()
+        self._worker.strength = self.strength_spin.value()
 
-        res = self.resolution_combo.currentData()
-        if res:
-            self._worker.width, self._worker.height = res
+        # Resolution: custom overrides preset
+        custom_w = self.custom_w_spin.value()
+        custom_h = self.custom_h_spin.value()
+        if custom_w > 0 and custom_h > 0:
+            self._worker.width = custom_w
+            self._worker.height = custom_h
+        else:
+            res = self.resolution_combo.currentData()
+            if res:
+                self._worker.width, self._worker.height = res
+
+        # img2img / inpainting
+        init_path = self.init_image_path.text().strip()
+        mask_path = self.mask_image_path.text().strip()
+        if init_path and Path(init_path).is_file():
+            self._worker.init_image = PILImage.open(init_path)
+        else:
+            self._worker.init_image = None
+        if mask_path and Path(mask_path).is_file():
+            self._worker.mask_image = PILImage.open(mask_path)
+        else:
+            self._worker.mask_image = None
 
         self.btn_generate.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -643,7 +747,93 @@ class GenerateTab(QWidget):
                 w.deleteLater()
         self.thumb_layout.addStretch()
 
+    # ── img2img / inpainting helpers ────────────────────────────────────
+
+    def _browse_init_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select init image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)"
+        )
+        if path:
+            self.init_image_path.setText(path)
+            self._show_init_preview(path)
+
+    def _browse_mask_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select mask image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)"
+        )
+        if path:
+            self.mask_image_path.setText(path)
+
+    def _clear_init_image(self):
+        self.init_image_path.clear()
+        self.init_preview.clear()
+
+    def _clear_mask_image(self):
+        self.mask_image_path.clear()
+
+    def _show_init_preview(self, path: str):
+        try:
+            img = PILImage.open(path).convert("RGB")
+            pixmap = _pil_to_qpixmap(img, 80, 80)
+            self.init_preview.setPixmap(pixmap)
+        except Exception:
+            self.init_preview.clear()
+
+    # ── Token counter ────────────────────────────────────────────────
+
+    def _update_token_count(self):
+        """Estimate token count using simple whitespace/comma splitting.
+
+        A proper tokenizer would require loading the model's tokenizer,
+        but this gives a close-enough estimate for prompt planning.
+        CLIP tokenizers typically produce ~1.3 tokens per word.
+        """
+        pos_text = self.positive_prompt.toPlainText().strip()
+        neg_text = self.negative_prompt.toPlainText().strip()
+
+        def _estimate_tokens(text: str) -> int:
+            if not text:
+                return 0
+            # Split on commas and whitespace, approximate CLIP tokenization
+            words = [w.strip() for w in text.replace(",", " ").split() if w.strip()]
+            return max(1, int(len(words) * 1.3))
+
+        pos_tokens = _estimate_tokens(pos_text)
+        neg_tokens = _estimate_tokens(neg_text)
+        self.token_count_label.setText(
+            f"Tokens: ~{pos_tokens} / 77 (pos) | ~{neg_tokens} / 77 (neg)"
+        )
+
+    # ── Seed reuse ───────────────────────────────────────────────────
+
+    def _reuse_last_seed(self):
+        """Extract seed from the currently displayed image's info string."""
+        if not self._generated_images:
+            return
+        _, info = self._generated_images[self._current_gallery_idx]
+        # Parse "Seed: 12345 | ..."
+        for part in info.split("|"):
+            part = part.strip()
+            if part.startswith("Seed:"):
+                try:
+                    seed = int(part.split(":")[1].strip())
+                    self.seed_spin.setValue(seed)
+                    return
+                except (ValueError, IndexError):
+                    pass
+
     # ── Save images ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _save_with_metadata(pil_img, path: str):
+        """Save image with embedded PNG metadata if available."""
+        pnginfo = pil_img.info.get("pnginfo", None)
+        if pnginfo and path.lower().endswith(".png"):
+            pil_img.save(path, pnginfo=pnginfo)
+        else:
+            pil_img.save(path)
 
     def _save_current_image(self):
         if not self._generated_images:
@@ -657,7 +847,7 @@ class GenerateTab(QWidget):
             "PNG (*.png);;JPEG (*.jpg *.jpeg);;WebP (*.webp);;All files (*)"
         )
         if path:
-            pil_img.save(path)
+            self._save_with_metadata(pil_img, path)
             self.status_label.setText(f"Saved: {path}")
 
     def _save_all_images(self):
@@ -670,6 +860,6 @@ class GenerateTab(QWidget):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         for i, (pil_img, info) in enumerate(self._generated_images):
             path = Path(folder) / f"generated_{timestamp}_{i:03d}.png"
-            pil_img.save(str(path))
+            self._save_with_metadata(pil_img, str(path))
 
         self.status_label.setText(f"Saved {len(self._generated_images)} images to {folder}")

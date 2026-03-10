@@ -1602,6 +1602,201 @@ class TestLoadSchedulerFunction:
             _load_scheduler(mock_pipe, "nonexistent_scheduler")
 
 
+class TestGenerateWorkerNewFeatures:
+    """Test new generation features: metadata, img2img, inpainting."""
+
+    def test_worker_has_img2img_fields(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        assert w.init_image is None
+        assert w.mask_image is None
+        assert w.strength == 0.75
+
+    def _extract_chunk_text(self, pnginfo, key: str) -> str:
+        """Helper: extract text value from PngInfo chunks by key name."""
+        prefix = key.encode("latin-1") + b"\x00"
+        for chunk_tag, chunk_data, _ in pnginfo.chunks:
+            if chunk_data.startswith(prefix):
+                return chunk_data[len(prefix):].decode("latin-1")
+        return ""
+
+    def _get_chunk_keys(self, pnginfo) -> list[str]:
+        """Helper: get all text chunk keys from PngInfo."""
+        keys = []
+        for chunk_tag, chunk_data, _ in pnginfo.chunks:
+            if b"\x00" in chunk_data:
+                key = chunk_data.split(b"\x00", 1)[0].decode("latin-1")
+                keys.append(key)
+        return keys
+
+    def test_png_metadata_builder(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w._model_path = "/models/test-sdxl.safetensors"
+        w._model_type = "sdxl"
+        w._lora_adapters = []
+        w.positive_prompt = "a cat"
+        w.negative_prompt = "bad quality"
+        w.steps = 20
+        w.cfg_scale = 7.0
+        w.scheduler_name = "euler_a"
+        w.width = 1024
+        w.height = 1024
+        w.clip_skip = 0
+
+        pnginfo = w._build_png_metadata(seed=42)
+        keys = self._get_chunk_keys(pnginfo)
+
+        assert "parameters" in keys
+        assert "seed" in keys
+        assert "steps" in keys
+        assert "cfg_scale" in keys
+        assert "sampler" in keys
+        assert "model" in keys
+        assert self._extract_chunk_text(pnginfo, "seed") == "42"
+
+    def test_png_metadata_with_lora(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w._model_path = "/models/sdxl.safetensors"
+        w._model_type = "sdxl"
+        w._lora_adapters = [
+            {"name": "style_v1", "weight": 0.8, "path": "/loras/style_v1.safetensors"},
+            {"name": "character", "weight": 1.0, "path": "/loras/character.safetensors"},
+        ]
+        w.positive_prompt = "test"
+        w.negative_prompt = ""
+        w.steps = 28
+        w.cfg_scale = 7.0
+        w.scheduler_name = "euler_a"
+        w.width = 1024
+        w.height = 1024
+        w.clip_skip = 0
+
+        pnginfo = w._build_png_metadata(seed=123)
+        params_text = self._extract_chunk_text(pnginfo, "parameters")
+        assert "lora:style_v1:0.8" in params_text
+        assert "lora:character:1.0" in params_text
+
+    def test_png_metadata_img2img_strength(self):
+        from PIL import Image as PILImage
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w._model_path = "/models/sdxl.safetensors"
+        w._model_type = "sdxl"
+        w._lora_adapters = []
+        w.positive_prompt = "test"
+        w.negative_prompt = ""
+        w.steps = 20
+        w.cfg_scale = 7.0
+        w.scheduler_name = "euler_a"
+        w.width = 512
+        w.height = 512
+        w.clip_skip = 0
+        w.init_image = PILImage.new("RGB", (512, 512))
+        w.strength = 0.65
+
+        pnginfo = w._build_png_metadata(seed=99)
+        params_text = self._extract_chunk_text(pnginfo, "parameters")
+        assert "Denoising strength: 0.65" in params_text
+
+    def test_get_pipeline_for_mode_txt2img(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w._model_type = "sdxl"
+        w.init_image = None
+        w.mask_image = None
+        mock_pipe = MagicMock()
+        w.pipe = mock_pipe
+
+        with patch.dict("sys.modules", {"diffusers": MagicMock()}):
+            result = w._get_pipeline_for_mode()
+        assert result is mock_pipe
+
+    def test_get_pipeline_for_mode_img2img(self):
+        from PIL import Image as PILImage
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w._model_type = "sdxl"
+        w.init_image = PILImage.new("RGB", (512, 512))
+        w.mask_image = None
+        mock_pipe = MagicMock()
+        w.pipe = mock_pipe
+
+        mock_diffusers = MagicMock()
+        mock_img2img_cls = MagicMock()
+        mock_diffusers.StableDiffusionXLImg2ImgPipeline = mock_img2img_cls
+        mock_pipe.components = {"unet": MagicMock()}
+
+        with patch.dict("sys.modules", {"diffusers": mock_diffusers}):
+            result = w._get_pipeline_for_mode()
+            mock_img2img_cls.assert_called_once()
+
+
+class TestGenerateTabNewFeatures:
+    """Test generate tab new UI features."""
+
+    def test_save_with_metadata_png(self):
+        """Test that _save_with_metadata writes pnginfo for PNG files."""
+        from dataset_sorter.ui.generate_tab import GenerateTab
+        from PIL import Image as PILImage
+        from PIL.PngImagePlugin import PngInfo
+
+        img = PILImage.new("RGB", (64, 64), color="red")
+        pnginfo = PngInfo()
+        pnginfo.add_text("seed", "42")
+        pnginfo.add_text("parameters", "test prompt\nSteps: 20")
+        img.info["pnginfo"] = pnginfo
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        try:
+            GenerateTab._save_with_metadata(img, path)
+            # Re-open and check metadata
+            saved = PILImage.open(path)
+            assert "seed" in saved.info or "parameters" in saved.info
+        finally:
+            os.unlink(path)
+
+    def test_save_with_metadata_jpg_no_crash(self):
+        """Saving as JPEG should work even with pnginfo attached."""
+        from dataset_sorter.ui.generate_tab import GenerateTab
+        from PIL import Image as PILImage
+        from PIL.PngImagePlugin import PngInfo
+
+        img = PILImage.new("RGB", (64, 64), color="blue")
+        pnginfo = PngInfo()
+        pnginfo.add_text("seed", "42")
+        img.info["pnginfo"] = pnginfo
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            path = f.name
+        try:
+            GenerateTab._save_with_metadata(img, path)
+            # Should save without crash (JPEG doesn't support pnginfo)
+            saved = PILImage.open(path)
+            assert saved.size == (64, 64)
+        finally:
+            os.unlink(path)
+
+    def test_token_estimation(self):
+        """Test the token counting approximation."""
+        # Simple check: the method shouldn't crash
+        from dataset_sorter.ui.generate_tab import GenerateTab
+        # Just verify the class has the method
+        assert hasattr(GenerateTab, "_update_token_count")
+
+    def test_resolutions_list(self):
+        from dataset_sorter.ui.generate_tab import RESOLUTIONS
+        # Should include common resolutions
+        assert (1024, 1024) in RESOLUTIONS
+        assert (512, 512) in RESOLUTIONS
+        # All should be positive and multiples of 64
+        for w, h in RESOLUTIONS:
+            assert w > 0 and h > 0
+            assert w % 64 == 0 and h % 64 == 0
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUCKET SAMPLER TESTS
 # ═══════════════════════════════════════════════════════════════════════════════

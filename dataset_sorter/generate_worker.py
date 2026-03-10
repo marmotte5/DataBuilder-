@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from PyQt6.QtCore import QThread, pyqtSignal
 
 log = logging.getLogger(__name__)
@@ -121,6 +122,11 @@ class GenerateWorker(QThread):
         self.seed = -1  # -1 = random
         self.num_images = 1
         self.clip_skip = 0
+
+        # img2img / inpainting
+        self.init_image: Optional[Image.Image] = None   # img2img input
+        self.mask_image: Optional[Image.Image] = None    # inpainting mask
+        self.strength = 0.75  # img2img denoising strength (0-1)
 
         # Modes
         self._mode = "generate"  # "load" or "generate"
@@ -350,6 +356,97 @@ class GenerateWorker(QThread):
 
     # ── Image generation ────────────────────────────────────────────────
 
+    def _build_png_metadata(self, seed: int) -> PngInfo:
+        """Build PNG text chunks with generation parameters (A1111-compatible)."""
+        pnginfo = PngInfo()
+
+        # Build parameters string (compatible with A1111 / civitai metadata readers)
+        params_parts = [self.positive_prompt]
+        if self.negative_prompt:
+            params_parts.append(f"Negative prompt: {self.negative_prompt}")
+
+        settings = [
+            f"Steps: {self.steps}",
+            f"Sampler: {self.scheduler_name}",
+            f"CFG scale: {self.cfg_scale}",
+            f"Seed: {seed}",
+            f"Size: {self.width}x{self.height}",
+            f"Model: {Path(self._model_path).stem}",
+        ]
+        if self.clip_skip > 0:
+            settings.append(f"Clip skip: {self.clip_skip}")
+        if self.init_image is not None:
+            settings.append(f"Denoising strength: {self.strength}")
+
+        # LoRA info
+        lora_parts = []
+        for adapter in self._lora_adapters:
+            name = adapter.get("name", "")
+            weight = adapter.get("weight", 1.0)
+            if name:
+                lora_parts.append(f"<lora:{name}:{weight}>")
+        if lora_parts:
+            settings.append(f"LoRA: {', '.join(lora_parts)}")
+
+        params_parts.append(", ".join(settings))
+        pnginfo.add_text("parameters", "\n".join(params_parts))
+
+        # Individual fields for programmatic access
+        pnginfo.add_text("seed", str(seed))
+        pnginfo.add_text("steps", str(self.steps))
+        pnginfo.add_text("cfg_scale", str(self.cfg_scale))
+        pnginfo.add_text("sampler", self.scheduler_name)
+        pnginfo.add_text("model", self._model_path)
+        pnginfo.add_text("width", str(self.width))
+        pnginfo.add_text("height", str(self.height))
+
+        return pnginfo
+
+    def _get_pipeline_for_mode(self):
+        """Get the right pipeline for txt2img / img2img / inpainting."""
+        import diffusers
+
+        model_type = self._model_type
+
+        if self.mask_image is not None and self.init_image is not None:
+            # Inpainting mode
+            inpaint_map = {
+                "sd15": "StableDiffusionInpaintPipeline",
+                "sd2": "StableDiffusionInpaintPipeline",
+                "sdxl": "StableDiffusionXLInpaintPipeline",
+                "pony": "StableDiffusionXLInpaintPipeline",
+            }
+            cls_name = inpaint_map.get(model_type)
+            if cls_name and hasattr(diffusers, cls_name):
+                cls = getattr(diffusers, cls_name)
+                try:
+                    return cls(**self.pipe.components)
+                except Exception as e:
+                    log.warning(f"Could not create inpaint pipeline: {e}, falling back to txt2img")
+            return self.pipe
+
+        if self.init_image is not None:
+            # img2img mode
+            img2img_map = {
+                "sd15": "StableDiffusionImg2ImgPipeline",
+                "sd2": "StableDiffusionImg2ImgPipeline",
+                "sdxl": "StableDiffusionXLImg2ImgPipeline",
+                "pony": "StableDiffusionXLImg2ImgPipeline",
+                "sd3": "StableDiffusion3Img2ImgPipeline",
+                "sd35": "StableDiffusion3Img2ImgPipeline",
+                "flux": "FluxImg2ImgPipeline",
+            }
+            cls_name = img2img_map.get(model_type)
+            if cls_name and hasattr(diffusers, cls_name):
+                cls = getattr(diffusers, cls_name)
+                try:
+                    return cls(**self.pipe.components)
+                except Exception as e:
+                    log.warning(f"Could not create img2img pipeline: {e}, falling back to txt2img")
+            return self.pipe
+
+        return self.pipe
+
     def _do_generate(self):
         import torch
 
@@ -364,6 +461,9 @@ class GenerateWorker(QThread):
 
         # Set scheduler
         _load_scheduler(self.pipe, self.scheduler_name)
+
+        # Get appropriate pipeline (txt2img / img2img / inpaint)
+        active_pipe = self._get_pipeline_for_mode()
 
         for i in range(total):
             if self._stop_requested:
@@ -388,11 +488,21 @@ class GenerateWorker(QThread):
                 "generator": generator,
             }
 
-            # Resolution
-            if hasattr(self.pipe, "__class__") and "Flux" not in self.pipe.__class__.__name__:
-                kwargs["width"] = self.width
-                kwargs["height"] = self.height
+            # img2img / inpainting inputs
+            if self.init_image is not None:
+                init_img = self.init_image.convert("RGB").resize(
+                    (self.width, self.height), Image.Resampling.LANCZOS,
+                )
+                kwargs["image"] = init_img
+                kwargs["strength"] = self.strength
+
+                if self.mask_image is not None:
+                    mask = self.mask_image.convert("L").resize(
+                        (self.width, self.height), Image.Resampling.LANCZOS,
+                    )
+                    kwargs["mask_image"] = mask
             else:
+                # txt2img needs explicit resolution
                 kwargs["width"] = self.width
                 kwargs["height"] = self.height
 
@@ -407,19 +517,37 @@ class GenerateWorker(QThread):
                 kwargs["guidance_scale"] = self.cfg_scale
 
             # Clip skip (for SD 1.5 / SDXL)
-            if self.clip_skip > 0 and hasattr(self.pipe, "text_encoder"):
+            if self.clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
                 kwargs["clip_skip"] = self.clip_skip
 
             try:
                 with torch.inference_mode():
-                    result = self.pipe(**kwargs)
+                    result = active_pipe(**kwargs)
                     img = result.images[0]
+
+                # Embed generation parameters as PNG metadata
+                pnginfo = self._build_png_metadata(current_seed)
+                img.info["pnginfo"] = pnginfo
+                # Store parameters string for UI display
+                for chunk_tag, chunk_data, _ in pnginfo.chunks:
+                    if chunk_data.startswith(b"parameters\x00"):
+                        img.info["parameters"] = chunk_data.split(b"\x00", 1)[1].decode("latin-1")
+                        break
+
+                # Build display info
+                mode_str = "txt2img"
+                if self.mask_image is not None and self.init_image is not None:
+                    mode_str = "inpaint"
+                elif self.init_image is not None:
+                    mode_str = f"img2img (str={self.strength})"
 
                 info = (
                     f"Seed: {current_seed} | "
                     f"Steps: {self.steps} | "
                     f"CFG: {self.cfg_scale} | "
-                    f"Sampler: {self.scheduler_name}"
+                    f"Sampler: {self.scheduler_name} | "
+                    f"{self.width}x{self.height} | "
+                    f"{mode_str}"
                 )
                 self.image_generated.emit(img, i, info)
 
