@@ -33,6 +33,18 @@ MODEL_TYPES = {
     "pony_full":    "Pony Diffusion Full Finetune",
     "zimage_lora":  "Z-Image LoRA",
     "zimage_full":  "Z-Image Full Finetune",
+    "pixart_lora":  "PixArt Sigma LoRA",
+    "pixart_full":  "PixArt Sigma Full Finetune",
+    "cascade_lora": "Stable Cascade LoRA",
+    "cascade_full": "Stable Cascade Full Finetune",
+    "hunyuan_lora": "Hunyuan DiT LoRA",
+    "hunyuan_full": "Hunyuan DiT Full Finetune",
+    "kolors_lora":  "Kolors LoRA",
+    "kolors_full":  "Kolors Full Finetune",
+    "auraflow_lora": "AuraFlow LoRA",
+    "auraflow_full": "AuraFlow Full Finetune",
+    "sana_lora":    "Sana LoRA",
+    "sana_full":    "Sana Full Finetune",
 }
 
 MODEL_TYPE_KEYS = list(MODEL_TYPES.keys())
@@ -76,6 +88,18 @@ MODEL_RESOLUTIONS: dict[str, int] = {
     "pony_full":    1024,
     "zimage_lora":  1024,
     "zimage_full":  1024,
+    "pixart_lora":  1024,
+    "pixart_full":  1024,
+    "cascade_lora": 1024,
+    "cascade_full": 1024,
+    "hunyuan_lora": 1024,
+    "hunyuan_full": 1024,
+    "kolors_lora":  1024,
+    "kolors_full":  1024,
+    "auraflow_lora": 1024,
+    "auraflow_full": 1024,
+    "sana_lora":    1024,
+    "sana_full":    1024,
 }
 
 # ── LR Schedulers ─────────────────────────────────────────────────────
@@ -142,6 +166,18 @@ MODEL_CLIP_SKIP: dict[str, int] = {
     "pony_full":    2,
     "zimage_lora":  0,
     "zimage_full":  0,
+    "pixart_lora":  0,
+    "pixart_full":  0,
+    "cascade_lora": 0,
+    "cascade_full": 0,
+    "hunyuan_lora": 0,
+    "hunyuan_full": 0,
+    "kolors_lora":  0,
+    "kolors_full":  0,
+    "auraflow_lora": 0,
+    "auraflow_full": 0,
+    "sana_lora":    0,
+    "sana_full":    0,
 }
 
 # ── Default prediction type per model ─────────────────────────────────
@@ -158,6 +194,18 @@ MODEL_PREDICTION_TYPE: dict[str, str] = {
     "pony_full":    "epsilon",
     "zimage_lora":  "flow",
     "zimage_full":  "flow",
+    "pixart_lora":  "flow",
+    "pixart_full":  "flow",
+    "cascade_lora": "epsilon",
+    "cascade_full": "epsilon",
+    "hunyuan_lora": "epsilon",
+    "hunyuan_full": "epsilon",
+    "kolors_lora":  "epsilon",
+    "kolors_full":  "epsilon",
+    "auraflow_lora": "flow",
+    "auraflow_full": "flow",
+    "sana_lora":    "flow",
+    "sana_full":    "flow",
 }
 
 # ── Default timestep sampling per model ───────────────────────────────
@@ -174,6 +222,18 @@ MODEL_TIMESTEP_SAMPLING: dict[str, str] = {
     "pony_full":    "uniform",
     "zimage_lora":  "sigmoid",
     "zimage_full":  "sigmoid",
+    "pixart_lora":  "logit_normal",
+    "pixart_full":  "logit_normal",
+    "cascade_lora": "uniform",
+    "cascade_full": "uniform",
+    "hunyuan_lora": "uniform",
+    "hunyuan_full": "uniform",
+    "kolors_lora":  "uniform",
+    "kolors_full":  "uniform",
+    "auraflow_lora": "logit_normal",
+    "auraflow_full": "logit_normal",
+    "sana_lora":    "logit_normal",
+    "sana_full":    "logit_normal",
 }
 
 # ── Recommended CUDA version ──────────────────────────────────────────

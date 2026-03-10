@@ -1,6 +1,7 @@
 """Training tab — Full functional trainer UI.
 
-OneTrainer-grade controls for SDXL / Z-Image / SD 1.5 training
+OneTrainer-grade controls for SD 1.5, SDXL, Pony, Flux, SD3, Z-Image,
+PixArt, Stable Cascade, Hunyuan DiT, Kolors, AuraFlow, Sana training
 with real-time loss display, sample preview, and full configuration.
 """
 
@@ -506,7 +507,7 @@ class TrainingTab(QWidget):
         self.ip_noise_spin.setValue(0.1)
         g1l.addWidget(self.ip_noise_spin, 2, 1)
 
-        self.debiased_check = QCheckBox("Debiased Estimation (Flux/SD3/Z-Image)")
+        self.debiased_check = QCheckBox("Debiased Estimation (flow-matching models)")
         g1l.addWidget(self.debiased_check, 3, 0, 1, 2)
 
         g1.setLayout(g1l)

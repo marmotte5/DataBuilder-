@@ -1,0 +1,130 @@
+"""Hunyuan DiT training backend.
+
+Architecture: HunyuanDiT2DModel (DiT with cross-attention).
+Prediction: epsilon prediction with DDPM scheduler.
+Resolution: 1024x1024 native.
+Text encoders: CLIP-L (bilingual) + T5 (mT5-xl for Chinese support).
+
+Key differences from SDXL:
+- Uses DiT transformer instead of UNet
+- Bilingual CLIP + mT5 for Chinese/English
+- Resolution/aspect ratio conditioning
+- Supports both Chinese and English prompts natively
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn.functional as F
+
+from dataset_sorter.models import TrainingConfig
+from dataset_sorter.train_backend_base import TrainBackendBase
+
+log = logging.getLogger(__name__)
+
+
+class HunyuanDiTBackend(TrainBackendBase):
+    """Hunyuan DiT training backend."""
+
+    model_name = "hunyuan"
+    default_resolution = 1024
+    supports_dual_te = True
+    prediction_type = "epsilon"
+
+    def load_model(self, model_path: str):
+        from diffusers import HunyuanDiTPipeline
+
+        pipe = HunyuanDiTPipeline.from_pretrained(
+            model_path, torch_dtype=self.dtype,
+        )
+
+        self.pipeline = pipe
+        self.tokenizer = pipe.tokenizer           # CLIP tokenizer
+        self.tokenizer_2 = pipe.tokenizer_2       # T5/mT5 tokenizer
+        self.text_encoder = pipe.text_encoder     # CLIP-L (bilingual)
+        self.text_encoder_2 = pipe.text_encoder_2 # mT5-xl
+        self.unet = pipe.transformer              # HunyuanDiT2DModel
+        self.vae = pipe.vae
+        self.noise_scheduler = pipe.scheduler
+
+        self.vae.to(self.device, dtype=self.dtype)
+        self.vae.requires_grad_(False)
+
+        log.info(f"Loaded Hunyuan DiT model from {model_path}")
+
+    def _get_lora_target_modules(self) -> list[str]:
+        """Hunyuan DiT target modules for LoRA."""
+        return [
+            "to_q", "to_k", "to_v", "to_out.0",
+            "attn1.to_q", "attn1.to_k", "attn1.to_v", "attn1.to_out.0",
+            "attn2.to_q", "attn2.to_k", "attn2.to_v", "attn2.to_out.0",
+            "proj_in", "proj_out",
+        ]
+
+    def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Encode with CLIP-L + mT5."""
+        # CLIP-L
+        tokens_1 = self.tokenizer(
+            captions, padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True, return_tensors="pt",
+        ).input_ids.to(self.device)
+
+        with torch.no_grad():
+            out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
+            clip_hidden = out_1.hidden_states[-2]
+            pooled = out_1.pooler_output
+
+        # mT5
+        tokens_2 = self.tokenizer_2(
+            captions, padding="max_length",
+            max_length=256,
+            truncation=True, return_tensors="pt",
+        ).input_ids.to(self.device)
+
+        with torch.no_grad():
+            out_2 = self.text_encoder_2(tokens_2)
+            t5_hidden = out_2.last_hidden_state
+
+        # Concatenate hidden states
+        encoder_hidden = torch.cat([clip_hidden, t5_hidden], dim=1)
+
+        return (encoder_hidden, pooled)
+
+    def compute_loss(
+        self, noise_pred: torch.Tensor, noise: torch.Tensor,
+        latents: torch.Tensor, timesteps: torch.Tensor,
+    ) -> torch.Tensor:
+        """Epsilon prediction loss."""
+        loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="none")
+        return loss.mean(dim=list(range(1, len(loss.shape))))
+
+    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+        """Hunyuan DiT conditioning."""
+        if pooled is None:
+            return None
+        resolution = self.config.resolution
+        added_cond = {
+            "text_embedding_mask": None,
+            "encoder_hidden_states_t5": None,
+            "text_embedding_mask_t5": None,
+            "image_meta_size": torch.tensor(
+                [resolution, resolution, resolution, resolution, 0, 0],
+            ).repeat(batch_size, 1).to(self.device, dtype=self.dtype),
+            "style": torch.zeros(batch_size, dtype=torch.long, device=self.device),
+        }
+        return added_cond
+
+    def generate_sample(self, prompt: str, seed: int):
+        return self.pipeline(
+            prompt=prompt,
+            num_inference_steps=self.config.sample_steps,
+            guidance_scale=self.config.sample_cfg_scale,
+            generator=torch.Generator(self.device).manual_seed(seed),
+        ).images[0]
+
+    def save_lora(self, save_dir: Path):
+        self.unet.save_pretrained(str(save_dir))
+        log.info(f"Saved Hunyuan DiT LoRA to {save_dir}")

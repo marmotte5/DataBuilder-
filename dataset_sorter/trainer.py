@@ -13,7 +13,8 @@ Speed optimizations applied:
 - Reduced torch.cuda.empty_cache() calls (avoid GPU stalls)
 - GradScaler for fp16 stability
 
-Supports: SD 1.5, SDXL, Pony, Flux, SD3, Z-Image (LoRA + Full)
+Supports: SD 1.5, SDXL, Pony, Flux, SD3, Z-Image, PixArt, Stable Cascade,
+Hunyuan DiT, Kolors, AuraFlow, Sana (LoRA + Full)
 """
 
 import gc
@@ -66,6 +67,24 @@ def _get_backend(config: TrainingConfig, device, dtype):
     elif base_type in ("sd3", "zimage"):
         from dataset_sorter.train_backend_sd3 import SD3Backend
         return SD3Backend(config, device, dtype)
+    elif base_type == "pixart":
+        from dataset_sorter.train_backend_pixart import PixArtBackend
+        return PixArtBackend(config, device, dtype)
+    elif base_type == "cascade":
+        from dataset_sorter.train_backend_cascade import StableCascadeBackend
+        return StableCascadeBackend(config, device, dtype)
+    elif base_type == "hunyuan":
+        from dataset_sorter.train_backend_hunyuan import HunyuanDiTBackend
+        return HunyuanDiTBackend(config, device, dtype)
+    elif base_type == "kolors":
+        from dataset_sorter.train_backend_kolors import KolorsBackend
+        return KolorsBackend(config, device, dtype)
+    elif base_type == "auraflow":
+        from dataset_sorter.train_backend_auraflow import AuraFlowBackend
+        return AuraFlowBackend(config, device, dtype)
+    elif base_type == "sana":
+        from dataset_sorter.train_backend_sana import SanaBackend
+        return SanaBackend(config, device, dtype)
     else:
         # Fallback to SDXL backend (most common)
         from dataset_sorter.train_backend_sdxl import SDXLBackend
