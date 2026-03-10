@@ -19,42 +19,43 @@ SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_\-. ]")
 # Default number of dataloader workers for parallel scanning
 DEFAULT_NUM_WORKERS = 4
 
-# Supported model types
+
+def _expand_variants(base: dict, suffixes=("_lora", "_full")) -> dict:
+    """Expand a base-model dict into _lora/_full keyed dict."""
+    out = {}
+    for key, val in base.items():
+        for s in suffixes:
+            out[f"{key}{s}"] = val
+    return out
+
+
+# ── Model definitions (base name → display label) ────────────────────
+_BASE_MODELS = {
+    "sd15":     "SD 1.5",
+    "sdxl":     "SDXL",
+    "flux":     "Flux",
+    "sd3":      "SD3",
+    "pony":     "Pony Diffusion",
+    "zimage":   "Z-Image",
+    "pixart":   "PixArt Sigma",
+    "cascade":  "Stable Cascade",
+    "hunyuan":  "Hunyuan DiT",
+    "kolors":   "Kolors",
+    "auraflow": "AuraFlow",
+    "sana":     "Sana",
+    "sd2":      "SD 2.x",
+    "sd35":     "SD 3.5",
+    "hidream":  "HiDream",
+    "chroma":   "Chroma",
+    "flux2":    "Flux 2",
+}
+
+_VARIANT_LABELS = {"_lora": "LoRA", "_full": "Full Finetune"}
+
 MODEL_TYPES = {
-    "sd15_lora":    "SD 1.5 LoRA",
-    "sd15_full":    "SD 1.5 Full Finetune",
-    "sdxl_lora":    "SDXL LoRA",
-    "sdxl_full":    "SDXL Full Finetune",
-    "flux_lora":    "Flux LoRA",
-    "flux_full":    "Flux Full Finetune",
-    "sd3_lora":     "SD3 LoRA",
-    "sd3_full":     "SD3 Full Finetune",
-    "pony_lora":    "Pony Diffusion LoRA",
-    "pony_full":    "Pony Diffusion Full Finetune",
-    "zimage_lora":  "Z-Image LoRA",
-    "zimage_full":  "Z-Image Full Finetune",
-    "pixart_lora":  "PixArt Sigma LoRA",
-    "pixart_full":  "PixArt Sigma Full Finetune",
-    "cascade_lora": "Stable Cascade LoRA",
-    "cascade_full": "Stable Cascade Full Finetune",
-    "hunyuan_lora": "Hunyuan DiT LoRA",
-    "hunyuan_full": "Hunyuan DiT Full Finetune",
-    "kolors_lora":  "Kolors LoRA",
-    "kolors_full":  "Kolors Full Finetune",
-    "auraflow_lora": "AuraFlow LoRA",
-    "auraflow_full": "AuraFlow Full Finetune",
-    "sana_lora":    "Sana LoRA",
-    "sana_full":    "Sana Full Finetune",
-    "sd2_lora":     "SD 2.x LoRA",
-    "sd2_full":     "SD 2.x Full Finetune",
-    "sd35_lora":    "SD 3.5 LoRA",
-    "sd35_full":    "SD 3.5 Full Finetune",
-    "hidream_lora": "HiDream LoRA",
-    "hidream_full": "HiDream Full Finetune",
-    "chroma_lora":  "Chroma LoRA",
-    "chroma_full":  "Chroma Full Finetune",
-    "flux2_lora":   "Flux 2 LoRA",
-    "flux2_full":   "Flux 2 Full Finetune",
+    f"{k}{s}": f"{label} {_VARIANT_LABELS[s]}"
+    for k, label in _BASE_MODELS.items()
+    for s in _VARIANT_LABELS
 }
 
 MODEL_TYPE_KEYS = list(MODEL_TYPES.keys())
@@ -84,43 +85,14 @@ OPTIMIZERS = {
     "SGD":                "SGD — Simple, stable",
 }
 
-# Resolutions per model
-MODEL_RESOLUTIONS: dict[str, int] = {
-    "sd15_lora":    512,
-    "sd15_full":    512,
-    "sdxl_lora":    1024,
-    "sdxl_full":    1024,
-    "flux_lora":    1024,
-    "flux_full":    1024,
-    "sd3_lora":     1024,
-    "sd3_full":     1024,
-    "pony_lora":    1024,
-    "pony_full":    1024,
-    "zimage_lora":  1024,
-    "zimage_full":  1024,
-    "pixart_lora":  1024,
-    "pixart_full":  1024,
-    "cascade_lora": 1024,
-    "cascade_full": 1024,
-    "hunyuan_lora": 1024,
-    "hunyuan_full": 1024,
-    "kolors_lora":  1024,
-    "kolors_full":  1024,
-    "auraflow_lora": 1024,
-    "auraflow_full": 1024,
-    "sana_lora":    1024,
-    "sana_full":    1024,
-    "sd2_lora":     768,
-    "sd2_full":     768,
-    "sd35_lora":    1024,
-    "sd35_full":    1024,
-    "hidream_lora": 1024,
-    "hidream_full": 1024,
-    "chroma_lora":  1024,
-    "chroma_full":  1024,
-    "flux2_lora":   1024,
-    "flux2_full":   1024,
-}
+# ── Per-model defaults (defined once, expanded to _lora/_full) ───────
+
+# Resolutions per base model (non-standard only; default is 1024)
+MODEL_RESOLUTIONS: dict[str, int] = _expand_variants({
+    **{k: 1024 for k in _BASE_MODELS},
+    "sd15": 512,
+    "sd2":  768,
+})
 
 # ── LR Schedulers ─────────────────────────────────────────────────────
 LR_SCHEDULERS = {
@@ -172,119 +144,54 @@ SAVE_PRECISIONS = {
     "fp32":   "Float32 — Full precision (large files)",
 }
 
-# ── Clip Skip per model (defaults) ────────────────────────────────────
-MODEL_CLIP_SKIP: dict[str, int] = {
-    "sd15_lora":    1,
-    "sd15_full":    1,
-    "sdxl_lora":    0,  # 0 = no clip skip for SDXL
-    "sdxl_full":    0,
-    "flux_lora":    0,
-    "flux_full":    0,
-    "sd3_lora":     0,
-    "sd3_full":     0,
-    "pony_lora":    2,  # Pony always clip_skip=2
-    "pony_full":    2,
-    "zimage_lora":  0,
-    "zimage_full":  0,
-    "pixart_lora":  0,
-    "pixart_full":  0,
-    "cascade_lora": 0,
-    "cascade_full": 0,
-    "hunyuan_lora": 0,
-    "hunyuan_full": 0,
-    "kolors_lora":  0,
-    "kolors_full":  0,
-    "auraflow_lora": 0,
-    "auraflow_full": 0,
-    "sana_lora":    0,
-    "sana_full":    0,
-    "sd2_lora":     0,
-    "sd2_full":     0,
-    "sd35_lora":    0,
-    "sd35_full":    0,
-    "hidream_lora": 0,
-    "hidream_full": 0,
-    "chroma_lora":  0,
-    "chroma_full":  0,
-    "flux2_lora":   0,
-    "flux2_full":   0,
-}
+# Clip skip (non-zero only; default is 0)
+MODEL_CLIP_SKIP: dict[str, int] = _expand_variants({
+    **{k: 0 for k in _BASE_MODELS},
+    "sd15": 1,
+    "pony": 2,
+})
 
-# ── Default prediction type per model ─────────────────────────────────
-MODEL_PREDICTION_TYPE: dict[str, str] = {
-    "sd15_lora":    "epsilon",
-    "sd15_full":    "epsilon",
-    "sdxl_lora":    "epsilon",
-    "sdxl_full":    "epsilon",
-    "flux_lora":    "raw",
-    "flux_full":    "raw",
-    "sd3_lora":     "flow",
-    "sd3_full":     "flow",
-    "pony_lora":    "epsilon",
-    "pony_full":    "epsilon",
-    "zimage_lora":  "flow",
-    "zimage_full":  "flow",
-    "pixart_lora":  "flow",
-    "pixart_full":  "flow",
-    "cascade_lora": "epsilon",
-    "cascade_full": "epsilon",
-    "hunyuan_lora": "epsilon",
-    "hunyuan_full": "epsilon",
-    "kolors_lora":  "epsilon",
-    "kolors_full":  "epsilon",
-    "auraflow_lora": "flow",
-    "auraflow_full": "flow",
-    "sana_lora":    "flow",
-    "sana_full":    "flow",
-    "sd2_lora":     "v_prediction",
-    "sd2_full":     "v_prediction",
-    "sd35_lora":    "flow",
-    "sd35_full":    "flow",
-    "hidream_lora": "flow",
-    "hidream_full": "flow",
-    "chroma_lora":  "flow",
-    "chroma_full":  "flow",
-    "flux2_lora":   "flow",
-    "flux2_full":   "flow",
-}
+# Default prediction type per model
+MODEL_PREDICTION_TYPE: dict[str, str] = _expand_variants({
+    "sd15":     "epsilon",
+    "sdxl":     "epsilon",
+    "pony":     "epsilon",
+    "cascade":  "epsilon",
+    "hunyuan":  "epsilon",
+    "kolors":   "epsilon",
+    "sd2":      "v_prediction",
+    "flux":     "raw",
+    "sd3":      "flow",
+    "sd35":     "flow",
+    "zimage":   "flow",
+    "pixart":   "flow",
+    "auraflow": "flow",
+    "sana":     "flow",
+    "hidream":  "flow",
+    "chroma":   "flow",
+    "flux2":    "flow",
+})
 
-# ── Default timestep sampling per model ───────────────────────────────
-MODEL_TIMESTEP_SAMPLING: dict[str, str] = {
-    "sd15_lora":    "uniform",
-    "sd15_full":    "uniform",
-    "sdxl_lora":    "uniform",
-    "sdxl_full":    "uniform",
-    "flux_lora":    "sigmoid",
-    "flux_full":    "sigmoid",
-    "sd3_lora":     "logit_normal",
-    "sd3_full":     "logit_normal",
-    "pony_lora":    "uniform",
-    "pony_full":    "uniform",
-    "zimage_lora":  "sigmoid",
-    "zimage_full":  "sigmoid",
-    "pixart_lora":  "logit_normal",
-    "pixart_full":  "logit_normal",
-    "cascade_lora": "uniform",
-    "cascade_full": "uniform",
-    "hunyuan_lora": "uniform",
-    "hunyuan_full": "uniform",
-    "kolors_lora":  "uniform",
-    "kolors_full":  "uniform",
-    "auraflow_lora": "logit_normal",
-    "auraflow_full": "logit_normal",
-    "sana_lora":    "logit_normal",
-    "sana_full":    "logit_normal",
-    "sd2_lora":     "uniform",
-    "sd2_full":     "uniform",
-    "sd35_lora":    "logit_normal",
-    "sd35_full":    "logit_normal",
-    "hidream_lora": "logit_normal",
-    "hidream_full": "logit_normal",
-    "chroma_lora":  "logit_normal",
-    "chroma_full":  "logit_normal",
-    "flux2_lora":   "sigmoid",
-    "flux2_full":   "sigmoid",
-}
+# Default timestep sampling per model
+MODEL_TIMESTEP_SAMPLING: dict[str, str] = _expand_variants({
+    "sd15":     "uniform",
+    "sdxl":     "uniform",
+    "pony":     "uniform",
+    "cascade":  "uniform",
+    "hunyuan":  "uniform",
+    "kolors":   "uniform",
+    "sd2":      "uniform",
+    "flux":     "sigmoid",
+    "flux2":    "sigmoid",
+    "zimage":   "sigmoid",
+    "sd3":      "logit_normal",
+    "sd35":     "logit_normal",
+    "pixart":   "logit_normal",
+    "auraflow": "logit_normal",
+    "sana":     "logit_normal",
+    "hidream":  "logit_normal",
+    "chroma":   "logit_normal",
+})
 
 # ── Recommended CUDA version ──────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"

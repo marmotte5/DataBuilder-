@@ -5,6 +5,7 @@ optional GPU-accelerated image validation, and cancellation.
 Optimized for 1M+ image datasets.
 """
 
+import logging
 import os
 import shutil
 import uuid
@@ -18,14 +19,20 @@ from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.utils import is_path_inside, sanitize_folder_name
 
+log = logging.getLogger(__name__)
+
 # Chunk size for submitting futures (avoids 1M-entry dict)
 _SCAN_CHUNK = 5000
 # Progress emit interval
 _PROGRESS_INTERVAL = 200
 
 
-def _parse_single_image(args: tuple) -> ImageEntry:
-    """Parse a single image+txt pair. Runs in a worker thread."""
+def _parse_single_image(args: tuple) -> ImageEntry | tuple[ImageEntry, str]:
+    """Parse a single image+txt pair. Runs in a worker thread.
+
+    Returns ImageEntry on success, or (ImageEntry, error_msg) if GPU
+    validation fails (so the caller can log it).
+    """
     i, img_path, use_gpu = args
 
     txt_path = img_path.with_suffix(".txt")
@@ -40,34 +47,39 @@ def _parse_single_image(args: tuple) -> ImageEntry:
         except OSError:
             tags = []
 
+    error_msg = None
     if use_gpu:
         try:
             import torch
             from torchvision.io import read_image, ImageReadMode
             read_image(str(img_path), mode=ImageReadMode.RGB)
-        except Exception:
-            pass
+        except Exception as e:
+            error_msg = f"{img_path}: GPU validation failed: {e}"
 
     unique_id = f"{i:06d}_{uuid.uuid4().hex[:8]}"
-    return ImageEntry(
+    entry = ImageEntry(
         image_path=img_path,
         txt_path=txt_found,
         tags=tags,
         assigned_bucket=1,
         unique_id=unique_id,
     )
+    if error_msg is not None:
+        return entry, error_msg
+    return entry
 
 
 class ScanWorker(QThread):
     """Scans source directory for images and txt files.
 
     Uses ThreadPoolExecutor with chunked submission for memory efficiency.
-    Supports cancellation via cancel().
+    Supports cancellation via cancel(). Follows symlinks but detects loops.
     """
 
     progress = pyqtSignal(int, int)       # current, total
     finished_scan = pyqtSignal(list)       # list[ImageEntry]
     status = pyqtSignal(str)
+    scan_errors = pyqtSignal(int)          # number of errors encountered
 
     def __init__(
         self,
@@ -85,14 +97,32 @@ class ScanWorker(QThread):
     def cancel(self):
         self._cancelled = True
 
+    def _collect_result(self, result, idx, entries, error_log):
+        """Unpack _parse_single_image result into entries and error_log."""
+        if isinstance(result, tuple):
+            entry, err = result
+            entries[idx] = entry
+            error_log.append(err)
+        else:
+            entries[idx] = result
+
     def run(self):
         self.status.emit("Discovering images...")
         image_files: list[Path] = []
+        seen_dirs: set[str] = set()
 
-        for root, _dirs, files in os.walk(self.source_dir):
+        for root, dirs, files in os.walk(self.source_dir, followlinks=True):
             if self._cancelled:
                 self.finished_scan.emit([])
                 return
+            # Detect symlink loops by tracking resolved directory identities
+            real = os.path.realpath(root)
+            if real in seen_dirs:
+                log.warning(f"Symlink loop detected, skipping: {root}")
+                dirs.clear()
+                continue
+            seen_dirs.add(real)
+
             for f in files:
                 if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
                     image_files.append(Path(root) / f)
@@ -106,6 +136,7 @@ class ScanWorker(QThread):
             return
 
         entries: list[ImageEntry] = [None] * total  # type: ignore[list-item]
+        error_log: list[str] = []
         completed = 0
 
         if self.num_workers <= 1:
@@ -114,21 +145,22 @@ class ScanWorker(QThread):
                     self.finished_scan.emit([])
                     return
                 try:
-                    entry = _parse_single_image((i, img_path, self.use_gpu))
-                except Exception:
-                    entry = ImageEntry(
+                    result = _parse_single_image((i, img_path, self.use_gpu))
+                    self._collect_result(result, i, entries, error_log)
+                except Exception as e:
+                    entries[i] = ImageEntry(
                         image_path=img_path,
                         unique_id=f"{i:06d}_{uuid.uuid4().hex[:8]}",
                     )
-                entries[i] = entry
+                    error_log.append(f"{img_path}: {e}")
                 completed += 1
                 if completed % _PROGRESS_INTERVAL == 0 or completed == total:
                     self.progress.emit(completed, total)
         else:
-            # Process in chunks to avoid holding 1M futures in memory
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                 for chunk_start in range(0, total, _SCAN_CHUNK):
                     if self._cancelled:
+                        executor.shutdown(wait=False, cancel_futures=True)
                         self.finished_scan.emit([])
                         return
 
@@ -149,15 +181,21 @@ class ScanWorker(QThread):
 
                         idx = futures[future]
                         try:
-                            entries[idx] = future.result()
-                        except Exception:
+                            result = future.result()
+                            self._collect_result(result, idx, entries, error_log)
+                        except Exception as e:
                             entries[idx] = ImageEntry(
                                 image_path=image_files[idx],
                                 unique_id=f"{idx:06d}_{uuid.uuid4().hex[:8]}",
                             )
+                            error_log.append(f"{image_files[idx]}: {e}")
                         completed += 1
                         if completed % _PROGRESS_INTERVAL == 0 or completed == total:
                             self.progress.emit(completed, total)
+
+        if error_log:
+            log.warning(f"Scan completed with {len(error_log)} error(s)")
+            self.scan_errors.emit(len(error_log))
 
         self.finished_scan.emit(entries)
 
@@ -219,6 +257,13 @@ class ExportWorker(QThread):
             return
         if is_path_inside(self.source_dir, self.output_dir):
             self.finished_export.emit(0, -2)
+            return
+
+        # Check write permission on output directory
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(str(self.output_dir), os.W_OK):
+            log.error(f"No write permission on {self.output_dir}")
+            self.finished_export.emit(0, -3)
             return
 
         self.status.emit("Preparing export...")

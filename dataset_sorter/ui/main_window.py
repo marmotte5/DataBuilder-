@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
         )
         self._scan_worker.progress.connect(self._on_scan_progress)
         self._scan_worker.status.connect(self._on_worker_status)
+        self._scan_worker.scan_errors.connect(self._on_scan_errors)
         self._scan_worker.finished_scan.connect(self._on_scan_finished)
         self._scan_worker.start()
 
@@ -284,6 +285,9 @@ class MainWindow(QMainWindow):
 
     def _on_worker_status(self, msg):
         self.statusBar().showMessage(msg)
+
+    def _on_scan_errors(self, count):
+        self.statusBar().showMessage(f"Scan had {count} error(s) — check logs for details.")
 
     def _on_scan_finished(self, entries):
         self.entries = entries
@@ -302,9 +306,9 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
 
-        if not self._selection_connected:
-            self.tag_panel.connect_selection()
-            self._selection_connected = True
+        # Reconnect selection model (tag panel rebuilds its model on populate)
+        self.tag_panel.connect_selection()
+        self._selection_connected = True
 
         n_txt = sum(1 for e in self.entries if e.txt_path is not None)
         self.statusBar().showMessage(
@@ -769,6 +773,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Security Error", "Output directory is inside the source directory.")
         elif errors == -2:
             QMessageBox.critical(self, "Security Error", "Source directory is inside the output directory.")
+        elif errors == -3:
+            QMessageBox.critical(self, "Permission Error", "No write permission on the output directory.")
         elif errors > 0:
             self.statusBar().showMessage(f"Export done: {copied} copied, {errors} error(s). See export_errors.log.")
         else:

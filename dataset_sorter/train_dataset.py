@@ -11,6 +11,7 @@ Handles:
 """
 
 import hashlib
+import logging
 import random
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,8 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
+
+log = logging.getLogger(__name__)
 
 
 class CachedTrainDataset(Dataset):
@@ -81,7 +84,11 @@ class CachedTrainDataset(Dataset):
                 latent = torch.flip(latent, [-1])
             result["latent"] = latent
         else:
-            img = Image.open(self.image_paths[idx]).convert("RGB")
+            try:
+                img = Image.open(self.image_paths[idx]).convert("RGB")
+            except Exception as e:
+                log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
+                img = Image.new("RGB", (self.resolution, self.resolution))
             if self.random_flip and random.random() < 0.5:
                 img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             pixel_values = self._transforms(img)
@@ -135,7 +142,12 @@ class CachedTrainDataset(Dataset):
                         progress_fn(idx + 1, len(self))
                     continue
 
-            img = Image.open(self.image_paths[idx]).convert("RGB")
+            try:
+                img = Image.open(self.image_paths[idx]).convert("RGB")
+            except Exception as e:
+                log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
+                img = Image.new("RGB", (self.resolution, self.resolution))
+
             pixel_values = self._transforms(img).unsqueeze(0).to(
                 device, dtype=dtype, memory_format=torch.channels_last,
             )
