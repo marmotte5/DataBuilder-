@@ -1443,5 +1443,164 @@ class TestRecommenderNewFeatures:
         assert hasattr(cfg, "prefetch_factor")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENERATE WORKER TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGenerateWorkerConstants:
+    """Test generate_worker module constants and helpers."""
+
+    def test_scheduler_map_keys(self):
+        from dataset_sorter.generate_worker import SCHEDULER_MAP
+        assert "euler_a" in SCHEDULER_MAP
+        assert "euler" in SCHEDULER_MAP
+        assert "dpm++_2m" in SCHEDULER_MAP
+        assert "ddim" in SCHEDULER_MAP
+        assert "unipc" in SCHEDULER_MAP
+
+    def test_pipeline_map_coverage(self):
+        from dataset_sorter.generate_worker import PIPELINE_MAP
+        # Core models must be mapped
+        for model in ["sd15", "sdxl", "flux", "sd3", "sd35", "pixart", "sana"]:
+            assert model in PIPELINE_MAP, f"{model} missing from PIPELINE_MAP"
+
+    def test_cfg_models_and_flow_models_disjoint(self):
+        from dataset_sorter.generate_worker import CFG_MODELS, FLOW_GUIDANCE_MODELS
+        overlap = CFG_MODELS & FLOW_GUIDANCE_MODELS
+        assert len(overlap) == 0, f"Models in both CFG and flow sets: {overlap}"
+
+    def test_detect_model_type(self):
+        from dataset_sorter.generate_worker import _detect_model_type
+        assert _detect_model_type("/models/sdxl-base-v1.0") == "sdxl"
+        assert _detect_model_type("/models/flux-dev") == "flux"
+        assert _detect_model_type("/models/sd15-v1-5") == "sd15"
+        assert _detect_model_type("/models/pixart-sigma") == "pixart"
+        # Default fallback
+        assert _detect_model_type("/models/unknown-model") == "sdxl"
+
+    def test_detect_model_type_flux2_before_flux(self):
+        from dataset_sorter.generate_worker import _detect_model_type
+        # flux2 should be detected before flux
+        assert _detect_model_type("/models/flux2-dev") == "flux2"
+
+    def test_trust_remote_code_models(self):
+        from dataset_sorter.generate_worker import TRUST_REMOTE_CODE_MODELS
+        assert "zimage" in TRUST_REMOTE_CODE_MODELS
+        assert "flux2" in TRUST_REMOTE_CODE_MODELS
+        assert "chroma" in TRUST_REMOTE_CODE_MODELS
+        assert "hidream" in TRUST_REMOTE_CODE_MODELS
+
+
+class TestGenerateWorkerLogic:
+    """Test GenerateWorker state management (no GPU needed)."""
+
+    def test_worker_initial_state(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        assert w.pipe is None
+        assert w.is_loaded is False
+        assert w.positive_prompt == ""
+        assert w.negative_prompt == ""
+        assert w.steps == 28
+        assert w.cfg_scale == 7.0
+        assert w.seed == -1
+        assert w.num_images == 1
+
+    def test_worker_default_params(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        assert w.width == 1024
+        assert w.height == 1024
+        assert w.scheduler_name == "euler_a"
+        assert w.clip_skip == 0
+
+    def test_worker_unload_when_empty(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        # Should not raise
+        w.unload_model()
+        assert w.pipe is None
+
+    def test_worker_stop_flag(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        assert w._stop_requested is False
+        w.stop()
+        assert w._stop_requested is True
+
+    def test_load_model_sets_mode(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        # Monkey-patch start to prevent actual thread start
+        w.start = lambda: None
+        w.load_model("/fake/model", model_type="sdxl", dtype="fp16")
+        assert w._mode == "load"
+        assert w._model_type == "sdxl"
+        assert w._model_path == "/fake/model"
+
+    def test_generate_sets_mode(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w.start = lambda: None
+        w.generate()
+        assert w._mode == "generate"
+        assert w._stop_requested is False
+
+    def test_auto_detect_model_type(self):
+        from dataset_sorter.generate_worker import GenerateWorker
+        w = GenerateWorker()
+        w.start = lambda: None
+        w.load_model("/path/to/flux-dev-v1")
+        assert w._model_type == "flux"
+
+
+class TestGenerateTabConstants:
+    """Test generate_tab UI constants."""
+
+    def test_model_types_include_auto(self):
+        from dataset_sorter.ui.generate_tab import GEN_MODEL_TYPES
+        assert "auto" in GEN_MODEL_TYPES
+
+    def test_model_types_cover_all_base_models(self):
+        from dataset_sorter.ui.generate_tab import GEN_MODEL_TYPES
+        from dataset_sorter.constants import _BASE_MODELS
+        for model in _BASE_MODELS:
+            assert model in GEN_MODEL_TYPES, f"{model} missing from GEN_MODEL_TYPES"
+
+    def test_schedulers_non_empty(self):
+        from dataset_sorter.ui.generate_tab import GEN_SCHEDULERS
+        assert len(GEN_SCHEDULERS) >= 6
+
+    def test_resolutions_valid(self):
+        from dataset_sorter.ui.generate_tab import RESOLUTIONS
+        for w, h in RESOLUTIONS:
+            assert w > 0 and h > 0
+            assert w % 64 == 0 and h % 64 == 0, f"Resolution {w}x{h} not divisible by 64"
+
+    def test_pil_to_qpixmap_function_exists(self):
+        from dataset_sorter.ui.generate_tab import _pil_to_qpixmap
+        assert callable(_pil_to_qpixmap)
+
+    def test_gen_precisions(self):
+        from dataset_sorter.ui.generate_tab import GEN_PRECISIONS
+        assert "bf16" in GEN_PRECISIONS
+        assert "fp16" in GEN_PRECISIONS
+        assert "fp32" in GEN_PRECISIONS
+
+
+class TestLoadSchedulerFunction:
+    """Test the _load_scheduler helper."""
+
+    def test_load_scheduler_unknown(self):
+        """Unknown scheduler name should not raise."""
+        mock_diffusers = MagicMock()
+        with patch.dict("sys.modules", {"diffusers": mock_diffusers}):
+            from dataset_sorter.generate_worker import _load_scheduler
+            mock_pipe = MagicMock()
+            mock_pipe.scheduler.config = {}
+            # Should not raise even with bad scheduler name
+            _load_scheduler(mock_pipe, "nonexistent_scheduler")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

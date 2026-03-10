@@ -37,6 +37,7 @@ from dataset_sorter.ui.preview_tab import PreviewTab
 from dataset_sorter.ui.reco_tab import RecoTab
 from dataset_sorter.ui.image_tab import ImageTab
 from dataset_sorter.ui.training_tab import TrainingTab
+from dataset_sorter.ui.generate_tab import GenerateTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 
 
@@ -170,6 +171,8 @@ class MainWindow(QMainWindow):
         right_tabs.addTab(self.image_tab, "Images")
         self.training_tab = TrainingTab()
         right_tabs.addTab(self.training_tab, "Training")
+        self.generate_tab = GenerateTab()
+        right_tabs.addTab(self.generate_tab, "Generate")
         splitter.addWidget(right_tabs)
 
         splitter.setSizes([500, 300, 400])
