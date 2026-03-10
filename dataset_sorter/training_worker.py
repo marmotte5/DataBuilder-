@@ -1,6 +1,7 @@
 """QThread wrapper for the training engine.
 
 Runs training in a background thread with signal-based progress updates.
+Supports pause/resume/save-now/sample-now/backup during training.
 """
 
 import traceback
@@ -22,6 +23,7 @@ class TrainingWorker(QThread):
     phase_changed = pyqtSignal(str)               # phase name
     error = pyqtSignal(str)                       # error message
     finished_training = pyqtSignal(bool, str)     # success, message
+    paused_changed = pyqtSignal(bool)             # is_paused
 
     def __init__(
         self,
@@ -31,6 +33,7 @@ class TrainingWorker(QThread):
         captions: list[str],
         output_dir: str,
         sample_prompts: list[str] = None,
+        resume_from: str = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -39,6 +42,7 @@ class TrainingWorker(QThread):
         self.image_paths = image_paths
         self.captions = captions
         self.output_dir = Path(output_dir)
+        self.resume_from = Path(resume_from) if resume_from else None
         self.trainer: Trainer | None = None
 
         if sample_prompts:
@@ -57,6 +61,11 @@ class TrainingWorker(QThread):
                 output_dir=self.output_dir,
                 progress_fn=self._on_progress,
             )
+
+            # Resume from checkpoint if requested
+            if self.resume_from is not None:
+                self.phase_changed.emit("resuming")
+                self.trainer.resume_from_checkpoint(self.resume_from)
 
             # Train
             self.phase_changed.emit("training")
@@ -85,6 +94,39 @@ class TrainingWorker(QThread):
         """Signal trainer to stop gracefully."""
         if self.trainer:
             self.trainer.stop()
+
+    def pause(self):
+        """Pause training at next step boundary."""
+        if self.trainer:
+            self.trainer.pause()
+            self.paused_changed.emit(True)
+
+    def resume(self):
+        """Resume paused training."""
+        if self.trainer:
+            self.trainer.resume()
+            self.paused_changed.emit(False)
+
+    def request_save(self):
+        """Request an immediate checkpoint save."""
+        if self.trainer:
+            self.trainer.request_save()
+
+    def request_sample(self):
+        """Request immediate sample generation."""
+        if self.trainer:
+            self.trainer.request_sample()
+
+    def request_backup(self):
+        """Request a full project backup."""
+        if self.trainer:
+            self.trainer.request_backup()
+
+    @property
+    def is_paused(self) -> bool:
+        if self.trainer:
+            return self.trainer.state.paused
+        return False
 
     def _on_progress(self, current, total, message):
         self.progress.emit(current, total, message)

@@ -162,7 +162,31 @@ class TrainingTab(QWidget):
         splitter.setSizes([500, 500])
         main_layout.addWidget(splitter, 1)
 
-        # Bottom: Train / Stop buttons
+        # Bottom row 1: mid-training actions
+        action_row = QHBoxLayout()
+        action_row.addStretch()
+
+        self.btn_save_now = QPushButton("Save Now")
+        self.btn_save_now.setToolTip("Save a checkpoint immediately")
+        self.btn_save_now.setEnabled(False)
+        self.btn_save_now.clicked.connect(self._save_now)
+        action_row.addWidget(self.btn_save_now)
+
+        self.btn_sample_now = QPushButton("Sample Now")
+        self.btn_sample_now.setToolTip("Generate sample images immediately")
+        self.btn_sample_now.setEnabled(False)
+        self.btn_sample_now.clicked.connect(self._sample_now)
+        action_row.addWidget(self.btn_sample_now)
+
+        self.btn_backup = QPushButton("Backup Project")
+        self.btn_backup.setToolTip("Create a full timestamped backup of the project")
+        self.btn_backup.setEnabled(False)
+        self.btn_backup.clicked.connect(self._backup_now)
+        action_row.addWidget(self.btn_backup)
+
+        main_layout.addLayout(action_row)
+
+        # Bottom row 2: Train / Pause / Resume / Stop
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
@@ -170,6 +194,21 @@ class TrainingTab(QWidget):
         self.btn_apply_reco.setToolTip("Auto-fill settings from the Recommendations tab")
         self.btn_apply_reco.clicked.connect(self._apply_recommendations)
         btn_row.addWidget(self.btn_apply_reco)
+
+        self.btn_pause = QPushButton("Pause")
+        self.btn_pause.setToolTip("Pause training at the next step boundary")
+        self.btn_pause.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.clicked.connect(self._pause_training)
+        btn_row.addWidget(self.btn_pause)
+
+        self.btn_resume = QPushButton("Resume")
+        self.btn_resume.setToolTip("Resume paused training")
+        self.btn_resume.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_resume.setEnabled(False)
+        self.btn_resume.setVisible(False)
+        self.btn_resume.clicked.connect(self._resume_training)
+        btn_row.addWidget(self.btn_resume)
 
         self.btn_stop = QPushButton("Stop Training")
         self.btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
@@ -996,18 +1035,55 @@ class TrainingTab(QWidget):
         self._training_worker.phase_changed.connect(self._on_phase)
         self._training_worker.error.connect(self._on_error)
         self._training_worker.finished_training.connect(self._on_finished)
+        self._training_worker.paused_changed.connect(self._on_paused_changed)
 
-        self.btn_train.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-        self.train_progress.setVisible(True)
+        self._set_training_ui(True)
         self._loss_history.clear()
 
         self._training_worker.start()
+
+    def _set_training_ui(self, training: bool):
+        """Toggle button states for training vs idle."""
+        self.btn_train.setEnabled(not training)
+        self.btn_stop.setEnabled(training)
+        self.btn_pause.setEnabled(training)
+        self.btn_pause.setVisible(training)
+        self.btn_resume.setEnabled(False)
+        self.btn_resume.setVisible(False)
+        self.btn_save_now.setEnabled(training)
+        self.btn_sample_now.setEnabled(training)
+        self.btn_backup.setEnabled(training)
+        self.train_progress.setVisible(training)
 
     def _stop_training(self):
         if self._training_worker:
             self._log("Stopping training...")
             self._training_worker.stop()
+
+    def _pause_training(self):
+        if self._training_worker:
+            self._log("Pausing training...")
+            self._training_worker.pause()
+
+    def _resume_training(self):
+        if self._training_worker:
+            self._log("Resuming training...")
+            self._training_worker.resume()
+
+    def _save_now(self):
+        if self._training_worker:
+            self._log("Requesting immediate save...")
+            self._training_worker.request_save()
+
+    def _sample_now(self):
+        if self._training_worker:
+            self._log("Requesting immediate sample generation...")
+            self._training_worker.request_sample()
+
+    def _backup_now(self):
+        if self._training_worker:
+            self._log("Requesting project backup...")
+            self._training_worker.request_backup()
 
     def _on_progress(self, current, total, message):
         self.train_progress.setMaximum(max(total, 1))
@@ -1044,13 +1120,22 @@ class TrainingTab(QWidget):
     def _on_phase(self, phase):
         self._log(f"Phase: {phase}")
 
+    def _on_paused_changed(self, is_paused):
+        """Toggle pause/resume button visibility."""
+        self.btn_pause.setVisible(not is_paused)
+        self.btn_pause.setEnabled(not is_paused)
+        self.btn_resume.setVisible(is_paused)
+        self.btn_resume.setEnabled(is_paused)
+        if is_paused:
+            self._log("Training paused.")
+        else:
+            self._log("Training resumed.")
+
     def _on_error(self, error_msg):
         self._log(f"ERROR: {error_msg}")
 
     def _on_finished(self, success, message):
-        self.btn_train.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-        self.train_progress.setVisible(False)
+        self._set_training_ui(False)
         self.status_label.setText(message)
         self._log(f"\n{'=' * 40}")
         self._log(f"Training {'completed' if success else 'failed'}: {message}")

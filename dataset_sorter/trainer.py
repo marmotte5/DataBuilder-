@@ -19,9 +19,12 @@ Chroma (LoRA + Full)
 """
 
 import gc
+import json
 import logging
 import shutil
+import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -119,6 +122,7 @@ class TrainingState:
     loss: float = 0.0
     lr: float = 0.0
     running: bool = True
+    paused: bool = False
     phase: str = "idle"
 
 
@@ -239,6 +243,14 @@ class Trainer:
         self.ema_model: Optional[EMAModel] = None
         self.grad_scaler = None
 
+        # On-demand action flags (set from UI thread, consumed in training loop)
+        self._save_now = threading.Event()
+        self._sample_now = threading.Event()
+        self._backup_now = threading.Event()
+        self._pause_event = threading.Event()    # set = paused
+        self._resume_event = threading.Event()   # set = resume requested
+        self._resume_event.set()                 # start unpaused
+
     def setup(
         self,
         model_path: str,
@@ -249,7 +261,7 @@ class Trainer:
     ):
         """Load model, prepare dataset, create optimizer."""
         self.output_dir = output_dir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._create_project_folders(output_dir)
         self.state.phase = "loading"
         config = self.config
 
@@ -444,6 +456,11 @@ class Trainer:
                 if not self.state.running:
                     break
 
+                # ── Pause gate ──
+                self._handle_pause(progress_fn)
+                if not self.state.running:
+                    break
+
                 # ── Forward + loss ──
                 loss = self._training_step(batch)
                 loss = loss / grad_accum_steps
@@ -503,6 +520,9 @@ class Trainer:
                             self.state.global_step % config.sample_every_n_steps == 0 and
                             sample_fn):
                         self._generate_samples(sample_fn)
+
+                    # ── On-demand actions (triggered from UI) ──
+                    self._handle_on_demand_actions(sample_fn, progress_fn)
 
                     # Max steps check
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
@@ -569,9 +589,9 @@ class Trainer:
         return self.backend.training_step(latents, te_out, bsz)
 
     def _save_checkpoint(self, name: str):
-        """Save checkpoint."""
+        """Save checkpoint to the checkpoints subfolder."""
         self.state.phase = "saving"
-        save_dir = self.output_dir / name
+        save_dir = self.output_dir / "checkpoints" / name
         save_dir.mkdir(parents=True, exist_ok=True)
 
         config = self.config
@@ -602,8 +622,11 @@ class Trainer:
         keep = self.config.save_last_n_checkpoints
         if keep <= 0:
             return
+        ckpt_dir = self.output_dir / "checkpoints"
+        if not ckpt_dir.exists():
+            return
         dirs = sorted(
-            [d for d in self.output_dir.iterdir() if d.is_dir() and d.name.startswith("step_")],
+            [d for d in ckpt_dir.iterdir() if d.is_dir() and d.name.startswith("step_")],
             key=lambda d: d.name,
         )
         while len(dirs) > keep:
@@ -648,9 +671,186 @@ class Trainer:
 
         self.state.phase = "training"
 
+    # ── Pause / Resume / On-Demand Actions ───────────────────────────────
+
+    def _handle_pause(self, progress_fn):
+        """Block the training loop while paused. Wakes on resume or stop."""
+        if not self._pause_event.is_set():
+            return
+        self.state.phase = "paused"
+        self.state.paused = True
+        if progress_fn:
+            progress_fn(
+                self.state.global_step, self.total_steps,
+                f"Paused at step {self.state.global_step}. Click Resume to continue.",
+            )
+        # Wait until resumed or stopped — check every 0.25s so stop is responsive
+        while self._pause_event.is_set() and self.state.running:
+            self._resume_event.wait(timeout=0.25)
+        self.state.paused = False
+        if self.state.running:
+            self.state.phase = "training"
+            if progress_fn:
+                progress_fn(
+                    self.state.global_step, self.total_steps,
+                    f"Resumed at step {self.state.global_step}",
+                )
+
+    def _handle_on_demand_actions(self, sample_fn, progress_fn):
+        """Process save-now / sample-now / backup-now flags."""
+        if self._save_now.is_set():
+            self._save_now.clear()
+            log.info("On-demand save requested")
+            self._save_checkpoint(f"manual_{self.state.global_step:06d}")
+            if progress_fn:
+                progress_fn(
+                    self.state.global_step, self.total_steps,
+                    f"Manual save at step {self.state.global_step}",
+                )
+
+        if self._sample_now.is_set():
+            self._sample_now.clear()
+            log.info("On-demand sample requested")
+            if sample_fn:
+                self._generate_samples(sample_fn)
+
+        if self._backup_now.is_set():
+            self._backup_now.clear()
+            log.info("On-demand backup requested")
+            self._backup_project(progress_fn)
+
+    def pause(self):
+        """Pause training (blocks at next step boundary)."""
+        self._pause_event.set()
+        self._resume_event.clear()
+        log.info("Pause requested")
+
+    def resume(self):
+        """Resume paused training."""
+        self._pause_event.clear()
+        self._resume_event.set()
+        log.info("Resume requested")
+
+    def request_save(self):
+        """Request an immediate checkpoint save."""
+        self._save_now.set()
+
+    def request_sample(self):
+        """Request immediate sample generation."""
+        self._sample_now.set()
+
+    def request_backup(self):
+        """Request a full project backup."""
+        self._backup_now.set()
+
     def stop(self):
-        """Signal graceful stop."""
+        """Signal graceful stop (also unblocks pause)."""
         self.state.running = False
+        # Unblock pause gate so the loop can exit
+        self._pause_event.clear()
+        self._resume_event.set()
+
+    # ── Project Folder Structure ──────────────────────────────────────────
+
+    def _create_project_folders(self, output_dir: Path):
+        """Create the standard project directory tree."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        folders = [
+            output_dir / "checkpoints",     # Step/epoch saves
+            output_dir / "samples",          # Generated sample images
+            output_dir / "backups",          # Full project backups
+            output_dir / "logs",             # Training logs
+            output_dir / ".cache",           # Latent / TE caches
+        ]
+        for folder in folders:
+            folder.mkdir(parents=True, exist_ok=True)
+
+        # Write a project info file
+        info_path = output_dir / "project.json"
+        if not info_path.exists():
+            info = {
+                "created": datetime.now().isoformat(),
+                "model_type": self.config.model_type,
+                "resolution": self.config.resolution,
+                "optimizer": self.config.optimizer,
+                "lora_rank": self.config.lora_rank,
+            }
+            info_path.write_text(json.dumps(info, indent=2))
+
+        log.info(f"Project folders ready at {output_dir}")
+
+    # ── Save / Backup Helpers ────────────────────────────────────────────
+
+    def _backup_project(self, progress_fn=None):
+        """Create a timestamped backup of the entire project."""
+        self.state.phase = "backup"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"backup_{ts}_step{self.state.global_step:06d}"
+        backup_dir = self.output_dir / "backups" / backup_name
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        if progress_fn:
+            progress_fn(
+                self.state.global_step, self.total_steps,
+                f"Creating backup: {backup_name}...",
+            )
+
+        # Save model weights
+        config = self.config
+        is_lora = config.model_type.endswith("_lora")
+        weights_dir = backup_dir / "weights"
+        weights_dir.mkdir(exist_ok=True)
+        if is_lora:
+            self.backend.save_lora(weights_dir)
+        else:
+            self.backend.pipeline.save_pretrained(str(weights_dir))
+
+        # Save EMA
+        if self.ema_model is not None:
+            torch.save(self.ema_model.state_dict(), str(backup_dir / "ema_weights.pt"))
+
+        # Save optimizer + scheduler state
+        torch.save({
+            "global_step": self.state.global_step,
+            "epoch": self.state.epoch,
+            "loss": self.state.loss,
+            "lr": self.state.lr,
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+        }, str(backup_dir / "training_state.pt"))
+
+        # Save config
+        config_path = backup_dir / "config.json"
+        config_dict = {k: v for k, v in self.config.__dict__.items()
+                       if not k.startswith("_")}
+        # Convert non-serializable types
+        for k, v in config_dict.items():
+            if isinstance(v, Path):
+                config_dict[k] = str(v)
+        config_path.write_text(json.dumps(config_dict, indent=2, default=str))
+
+        log.info(f"Backup saved to {backup_dir}")
+        self.state.phase = "training"
+
+    def resume_from_checkpoint(self, checkpoint_dir: Path):
+        """Resume training from a saved checkpoint."""
+        state_path = checkpoint_dir / "training_state.pt"
+        if not state_path.exists():
+            log.warning(f"No training_state.pt found in {checkpoint_dir}")
+            return False
+
+        state = torch.load(str(state_path), map_location="cpu", weights_only=True)
+        self.state.global_step = state["global_step"]
+        self.state.epoch = state["epoch"]
+
+        if self.optimizer is not None and "optimizer" in state:
+            self.optimizer.load_state_dict(state["optimizer"])
+        if self.scheduler is not None and "scheduler" in state:
+            self.scheduler.load_state_dict(state["scheduler"])
+
+        log.info(f"Resumed from checkpoint: step {self.state.global_step}, epoch {self.state.epoch}")
+        return True
 
     def cleanup(self):
         """Free all resources (safe even if setup() failed)."""
