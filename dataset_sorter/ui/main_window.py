@@ -38,6 +38,7 @@ from dataset_sorter.ui.reco_tab import RecoTab
 from dataset_sorter.ui.image_tab import ImageTab
 from dataset_sorter.ui.training_tab import TrainingTab
 from dataset_sorter.ui.generate_tab import GenerateTab
+from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 
 
@@ -169,6 +170,8 @@ class MainWindow(QMainWindow):
         right_tabs.addTab(self.reco_tab, "Recommendations")
         self.image_tab = ImageTab()
         right_tabs.addTab(self.image_tab, "Images")
+        self.dataset_tab = DatasetTab()
+        right_tabs.addTab(self.dataset_tab, "Dataset Mgmt")
         self.training_tab = TrainingTab()
         right_tabs.addTab(self.training_tab, "Training")
         self.generate_tab = GenerateTab()
@@ -217,6 +220,8 @@ class MainWindow(QMainWindow):
 
         self.image_tab.force_bucket.connect(self._force_image_bucket)
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
+
+        self.dataset_tab.apply_tag_fix.connect(self._apply_spellcheck_fix)
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
@@ -400,6 +405,7 @@ class MainWindow(QMainWindow):
         self.image_tab.set_data(
             self.entries, self.deleted_tags, self.manual_overrides,
         )
+        self.dataset_tab.set_data(self.entries, self.tag_counts)
 
     def _after_tag_edit(self):
         self._rebuild_tag_index()
@@ -691,6 +697,30 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Recommendations applied to Training tab.")
         else:
             self.statusBar().showMessage("No recommendations yet. Click Recalculate first.")
+
+    # -- Dataset tab --
+
+    def _apply_spellcheck_fix(self, old_tag: str, new_tag: str):
+        """Apply a spell-check rename from old_tag to new_tag."""
+        if not old_tag or not new_tag or old_tag == new_tag:
+            return
+        count = 0
+        for idx in list(self.tag_to_entries.get(old_tag, [])):
+            entry = self.entries[idx]
+            if new_tag in entry.tags:
+                entry.tags = [t for t in entry.tags if t != old_tag]
+            else:
+                entry.tags = [new_tag if t == old_tag else t for t in entry.tags]
+            count += 1
+        if old_tag in self.manual_overrides:
+            if new_tag not in self.manual_overrides:
+                self.manual_overrides[new_tag] = self.manual_overrides.pop(old_tag)
+            else:
+                self.manual_overrides.pop(old_tag)
+        if old_tag in self.deleted_tags:
+            self.deleted_tags.discard(old_tag)
+        self._after_tag_edit()
+        self.statusBar().showMessage(f"Renamed \"{old_tag}\" -> \"{new_tag}\" ({count} entries).")
 
     # -- Image tab --
 
