@@ -20,7 +20,6 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ class SD2Backend(TrainBackendBase):
     prediction_type = "v_prediction"
 
     def load_model(self, model_path: str):
-        from diffusers import StableDiffusionPipeline
+        from diffusers import DDPMScheduler, StableDiffusionPipeline
 
         pipe = StableDiffusionPipeline.from_pretrained(
             model_path, torch_dtype=self.dtype,
@@ -46,7 +45,9 @@ class SD2Backend(TrainBackendBase):
         self.text_encoder = pipe.text_encoder     # OpenCLIP ViT-H/14
         self.unet = pipe.unet
         self.vae = pipe.vae
-        self.noise_scheduler = pipe.scheduler
+        # Use DDPMScheduler explicitly to ensure alphas_cumprod is available
+        # (the pipeline default may be PNDMScheduler or EulerDiscreteScheduler)
+        self.noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
         self.vae.to(self.device, dtype=self.dtype)
         self.vae.requires_grad_(False)

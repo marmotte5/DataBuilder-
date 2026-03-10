@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 from dataset_sorter.constants import (
     MODEL_TYPE_KEYS, MODEL_TYPE_LABELS, VRAM_TIERS,
-    NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
+    NETWORK_TYPES, OPTIMIZERS,
     ATTENTION_MODES,
 )
 from dataset_sorter.ui.theme import (

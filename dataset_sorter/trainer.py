@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset_sorter.ema import EMAModel
@@ -147,19 +146,27 @@ def _get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             warmup_init=config.adafactor_warmup_init,
         )
     elif config.optimizer == "Prodigy":
-        from prodigyopt import Prodigy
-        return Prodigy(
-            param_groups, lr=lr, weight_decay=config.weight_decay,
-            d_coef=config.prodigy_d_coef,
-            decouple=config.prodigy_decouple,
-            safeguard_warmup=config.prodigy_safeguard_warmup,
-            use_bias_correction=config.prodigy_use_bias_correction,
-        )
+        try:
+            from prodigyopt import Prodigy
+            return Prodigy(
+                param_groups, lr=lr, weight_decay=config.weight_decay,
+                d_coef=config.prodigy_d_coef,
+                decouple=config.prodigy_decouple,
+                safeguard_warmup=config.prodigy_safeguard_warmup,
+                use_bias_correction=config.prodigy_use_bias_correction,
+            )
+        except ImportError:
+            log.warning("prodigyopt not installed, falling back to AdamW")
+            return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "AdamW8bit":
-        import bitsandbytes as bnb
-        return bnb.optim.AdamW8bit(
-            param_groups, lr=lr, weight_decay=config.weight_decay,
-        )
+        try:
+            import bitsandbytes as bnb
+            return bnb.optim.AdamW8bit(
+                param_groups, lr=lr, weight_decay=config.weight_decay,
+            )
+        except ImportError:
+            log.warning("bitsandbytes not installed, falling back to AdamW")
+            return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "Lion":
         try:
             from lion_pytorch import Lion

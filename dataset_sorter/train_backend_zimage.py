@@ -25,7 +25,6 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)
@@ -48,8 +47,6 @@ class ZImageBackend(TrainBackendBase):
         - ZImageTransformer2DModel
         - FlowMatchEulerDiscreteScheduler
         """
-        from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
-
         # Try loading as a diffusers pipeline first
         try:
             from diffusers import DiffusionPipeline

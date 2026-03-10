@@ -24,11 +24,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from dataset_sorter.ema import EMAModel
 from dataset_sorter.models import TrainingConfig
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class TrainBackendBase(ABC):
         ...
 
     @abstractmethod
-    def generate_sample(self, prompt: str, seed: int) -> "Image":
+    def generate_sample(self, prompt: str, seed: int) -> Image.Image:
         """Generate a single sample image for preview."""
         ...
 
@@ -175,9 +175,14 @@ class TrainBackendBase(ABC):
         self.unet = get_peft_model(self.unet, lora_config)
         self.unet.train()
 
-        # Update pipeline reference
+        # Update pipeline reference (handle both UNet and transformer models)
         if self.pipeline is not None:
-            self.pipeline.unet = self.unet
+            if hasattr(self.pipeline, "transformer") and not hasattr(self.pipeline, "unet"):
+                self.pipeline.transformer = self.unet
+            elif hasattr(self.pipeline, "prior") and not hasattr(self.pipeline, "unet"):
+                self.pipeline.prior = self.unet
+            else:
+                self.pipeline.unet = self.unet
 
         return self.unet
 

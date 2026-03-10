@@ -14,14 +14,12 @@ Key differences from SDXL:
 """
 
 import logging
-import math
 from pathlib import Path
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
 
-from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)

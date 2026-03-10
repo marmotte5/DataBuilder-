@@ -22,7 +22,6 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)

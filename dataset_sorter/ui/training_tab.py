@@ -6,7 +6,6 @@ AuraFlow, Sana, HiDream, Chroma training with real-time loss display,
 sample preview, and full configuration.
 """
 
-import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal

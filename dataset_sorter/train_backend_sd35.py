@@ -17,11 +17,6 @@ Key differences from SD3:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
-
-import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_sd3 import SD3Backend
 
