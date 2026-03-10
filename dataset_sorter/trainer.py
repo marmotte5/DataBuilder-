@@ -45,7 +45,7 @@ def get_cuda_info() -> dict:
         info["available"] = True
         info["version"] = torch.version.cuda or "Unknown"
         info["device"] = torch.cuda.get_device_name(0)
-        info["vram_gb"] = round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)
+        info["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
         info["bf16_support"] = torch.cuda.is_bf16_supported()
         info["flash_sdp"] = hasattr(torch.backends.cuda, "enable_flash_sdp")
         info["cudnn"] = torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None
@@ -341,15 +341,22 @@ class Trainer:
             self.backend.text_encoder.to(self.device)
             te2 = None
             tok2 = None
+            te3 = None
+            tok3 = None
             if self.backend.text_encoder_2 is not None:
                 self.backend.text_encoder_2.to(self.device)
                 te2 = self.backend.text_encoder_2
                 tok2 = self.backend.tokenizer_2
+            if self.backend.text_encoder_3 is not None:
+                self.backend.text_encoder_3.to(self.device)
+                te3 = self.backend.text_encoder_3
+                tok3 = self.backend.tokenizer_3
 
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
                 self.device, self.dtype,
                 tokenizer_2=tok2, text_encoder_2=te2,
+                tokenizer_3=tok3, text_encoder_3=te3,
                 to_disk=config.cache_text_encoder_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching TE {c}/{t}") if progress_fn else None,
             )

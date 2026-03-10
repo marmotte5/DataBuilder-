@@ -75,7 +75,11 @@ class CachedTrainDataset(Dataset):
 
         # --- Image / Latent ---
         if self._latents_cached and idx in self._latent_cache:
-            result["latent"] = self._latent_cache[idx]
+            latent = self._latent_cache[idx]
+            # Apply random horizontal flip to cached latents (flip the width dim)
+            if self.random_flip and random.random() < 0.5:
+                latent = torch.flip(latent, [-1])
+            result["latent"] = latent
         else:
             img = Image.open(self.image_paths[idx]).convert("RGB")
             if self.random_flip and random.random() < 0.5:
@@ -154,6 +158,7 @@ class CachedTrainDataset(Dataset):
     def cache_text_encoder_outputs(
         self, tokenizer, text_encoder, device, dtype,
         tokenizer_2=None, text_encoder_2=None,
+        tokenizer_3=None, text_encoder_3=None,
         to_disk=False, progress_fn=None,
     ):
         """Pre-compute and cache text encoder outputs."""
@@ -162,6 +167,9 @@ class CachedTrainDataset(Dataset):
         if text_encoder_2 is not None:
             text_encoder_2.eval()
             text_encoder_2.requires_grad_(False)
+        if text_encoder_3 is not None:
+            text_encoder_3.eval()
+            text_encoder_3.requires_grad_(False)
 
         if to_disk and self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -199,7 +207,12 @@ class CachedTrainDataset(Dataset):
 
                 encoder_output = text_encoder(tokens, output_hidden_states=True)
                 hidden_states = encoder_output.hidden_states[-2].cpu()
-                pooled = encoder_output[0].cpu() if hasattr(encoder_output, '__getitem__') else None
+                # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state
+                pooled = (
+                    encoder_output.pooler_output.cpu()
+                    if hasattr(encoder_output, "pooler_output") and encoder_output.pooler_output is not None
+                    else None
+                )
 
                 te_result = (hidden_states, pooled)
 
@@ -213,9 +226,26 @@ class CachedTrainDataset(Dataset):
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
                     hidden_states_2 = encoder_output_2.hidden_states[-2].cpu()
-                    pooled_2 = encoder_output_2[0].cpu()
+                    pooled_2 = (
+                        encoder_output_2.pooler_output.cpu()
+                        if hasattr(encoder_output_2, "pooler_output") and encoder_output_2.pooler_output is not None
+                        else None
+                    )
 
                     te_result = (hidden_states, pooled, hidden_states_2, pooled_2)
+
+                # Third text encoder (SD3 / SD 3.5 — T5-XXL)
+                if tokenizer_3 is not None and text_encoder_3 is not None:
+                    tokens_3 = tokenizer_3(
+                        caption, padding="max_length",
+                        max_length=tokenizer_3.model_max_length,
+                        truncation=True, return_tensors="pt",
+                    ).input_ids.to(device)
+
+                    encoder_output_3 = text_encoder_3(tokens_3)
+                    hidden_states_3 = encoder_output_3.last_hidden_state.cpu()
+
+                    te_result = (hidden_states, pooled, hidden_states_2, pooled_2, hidden_states_3)
 
             for idx in indices:
                 self._te_cache[idx] = te_result
