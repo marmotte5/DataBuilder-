@@ -1,9 +1,12 @@
 """Main application window — Dataset Sorter.
 
 Optimized for datasets up to 1,000,000 images.
+Supports drag-and-drop, keyboard shortcuts, dark/light theme toggle,
+and progress persistence across restarts.
 """
 
 import json
+import logging
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -11,7 +14,8 @@ from typing import Optional
 
 import numpy as np
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QMimeData
+from PyQt6.QtGui import QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
@@ -29,7 +33,7 @@ from dataset_sorter import recommender
 from dataset_sorter.ui.theme import (
     get_stylesheet, COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
     SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, DANGER_BUTTON_STYLE,
-    NAV_BUTTON_STYLE,
+    NAV_BUTTON_STYLE, toggle_theme, get_current_theme,
 )
 from dataset_sorter.ui.tag_panel import TagPanel
 from dataset_sorter.ui.override_panel import OverridePanel
@@ -41,6 +45,35 @@ from dataset_sorter.ui.generate_tab import GenerateTab
 from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 
+log = logging.getLogger(__name__)
+
+# Persistence file for progress state
+_PROGRESS_FILE = Path.home() / ".dataset_sorter_state.json"
+
+
+class DragDropLineEdit(QLineEdit):
+    """QLineEdit that accepts directory drops."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if Path(path).is_dir():
+                self.setText(path)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
+
 
 class MainWindow(QMainWindow):
     """Main window — orchestrates all panels."""
@@ -49,6 +82,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Dataset Sorter")
         self.setMinimumSize(1400, 900)
+        self.setAcceptDrops(True)
 
         # State
         self.entries: list[ImageEntry] = []
@@ -68,8 +102,11 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._setup_shortcuts()
+        self._load_progress_state()
         self.statusBar().showMessage(
-            "Ready. Select a source folder and start scanning."
+            "Ready. Select a source folder and start scanning. "
+            "(Ctrl+S save, Ctrl+O load, Ctrl+T theme, Ctrl+E export)"
         )
 
     def _build_ui(self):
@@ -79,23 +116,33 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
-        # Top bar — paths
+        # Top bar — paths (drag-and-drop enabled)
         top = QHBoxLayout()
         top.setSpacing(10)
         top.addWidget(self._label("Source"))
-        self.source_input = QLineEdit()
-        self.source_input.setPlaceholderText("Source directory path...")
+        self.source_input = DragDropLineEdit()
+        self.source_input.setPlaceholderText("Source directory path (or drag & drop)...")
+        self.source_input.setToolTip("Path to the source image directory. Drag and drop a folder here.")
         top.addWidget(self.source_input, 2)
         btn_src = QPushButton("Browse")
         btn_src.clicked.connect(self._browse_source)
         top.addWidget(btn_src)
         top.addWidget(self._label("Output"))
-        self.output_input = QLineEdit()
-        self.output_input.setPlaceholderText("Output directory path...")
+        self.output_input = DragDropLineEdit()
+        self.output_input.setPlaceholderText("Output directory path (or drag & drop)...")
+        self.output_input.setToolTip("Path for exported dataset. Drag and drop a folder here.")
         top.addWidget(self.output_input, 2)
         btn_out = QPushButton("Browse")
         btn_out.clicked.connect(self._browse_output)
         top.addWidget(btn_out)
+
+        # Theme toggle
+        self.btn_theme = QPushButton("Light")
+        self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
+        self.btn_theme.setMaximumWidth(60)
+        self.btn_theme.clicked.connect(self._toggle_theme)
+        top.addWidget(self.btn_theme)
+
         root.addLayout(top)
 
         # Scan settings bar — workers, GPU, scan button, cancel button
@@ -225,6 +272,111 @@ class MainWindow(QMainWindow):
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
+
+    def _setup_shortcuts(self):
+        """Register global keyboard shortcuts."""
+        QShortcut(QKeySequence("Ctrl+S"), self, self._save_config)
+        QShortcut(QKeySequence("Ctrl+O"), self, self._load_config)
+        QShortcut(QKeySequence("Ctrl+E"), self, self._start_export)
+        QShortcut(QKeySequence("Ctrl+R"), self, self._start_scan)
+        QShortcut(QKeySequence("Ctrl+T"), self, self._toggle_theme)
+        QShortcut(QKeySequence("Ctrl+D"), self, self._dry_run)
+        QShortcut(QKeySequence("Escape"), self, self._cancel_operation)
+
+    def _toggle_theme(self):
+        """Switch between dark and light themes."""
+        new_mode = toggle_theme()
+        QApplication.instance().setStyleSheet(get_stylesheet())
+        self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
+        self.statusBar().showMessage(f"Switched to {new_mode} theme.")
+
+    # -- Progress persistence --
+
+    def _save_progress_state(self):
+        """Save current session state for persistence across restarts."""
+        state = {
+            "source_dir": self.source_input.text(),
+            "output_dir": self.output_input.text(),
+            "theme": get_current_theme(),
+            "manual_overrides": self.manual_overrides,
+            "bucket_names": {str(k): v for k, v in self.bucket_names.items()},
+            "deleted_tags": sorted(self.deleted_tags),
+            "workers": self.workers_spinner.value(),
+        }
+        try:
+            _PROGRESS_FILE.write_text(
+                json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def _load_progress_state(self):
+        """Restore session state from previous run."""
+        if not _PROGRESS_FILE.exists():
+            return
+        try:
+            state = json.loads(_PROGRESS_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        if state.get("source_dir"):
+            self.source_input.setText(state["source_dir"])
+        if state.get("output_dir"):
+            self.output_input.setText(state["output_dir"])
+        if state.get("theme") == "light":
+            from dataset_sorter.ui.theme import set_theme
+            set_theme("light")
+            QApplication.instance().setStyleSheet(get_stylesheet())
+            self.btn_theme.setText("Dark")
+        if "workers" in state:
+            self.workers_spinner.setValue(state["workers"])
+
+        raw_overrides = state.get("manual_overrides", {})
+        if isinstance(raw_overrides, dict):
+            for k, v in raw_overrides.items():
+                try:
+                    val = int(v)
+                    if 1 <= val <= MAX_BUCKETS:
+                        self.manual_overrides[str(k)] = val
+                except (ValueError, TypeError):
+                    pass
+
+        raw_names = state.get("bucket_names", {})
+        if isinstance(raw_names, dict):
+            for k, v in raw_names.items():
+                try:
+                    key = int(k)
+                    if 1 <= key <= MAX_BUCKETS:
+                        self.bucket_names[key] = sanitize_folder_name(str(v))
+                except (ValueError, TypeError):
+                    pass
+
+        raw_deleted = state.get("deleted_tags", [])
+        if isinstance(raw_deleted, list):
+            self.deleted_tags = {str(t) for t in raw_deleted if isinstance(t, str)}
+
+        log.info("Restored session state from previous run.")
+
+    def closeEvent(self, event):
+        """Save progress state on window close."""
+        self._save_progress_state()
+        super().closeEvent(event)
+
+    # -- Drag and drop on main window --
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        """Drop a directory onto the main window -> set as source."""
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if Path(path).is_dir():
+                self.source_input.setText(path)
+                self.statusBar().showMessage(f"Source set to: {path}")
+                event.acceptProposedAction()
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable/disable data-dependent controls during scan/export."""
