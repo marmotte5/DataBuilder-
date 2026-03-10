@@ -45,6 +45,16 @@ MODEL_TYPES = {
     "auraflow_full": "AuraFlow Full Finetune",
     "sana_lora":    "Sana LoRA",
     "sana_full":    "Sana Full Finetune",
+    "sd2_lora":     "SD 2.x LoRA",
+    "sd2_full":     "SD 2.x Full Finetune",
+    "sd35_lora":    "SD 3.5 LoRA",
+    "sd35_full":    "SD 3.5 Full Finetune",
+    "hidream_lora": "HiDream LoRA",
+    "hidream_full": "HiDream Full Finetune",
+    "chroma_lora":  "Chroma LoRA",
+    "chroma_full":  "Chroma Full Finetune",
+    "flux2_lora":   "Flux 2 LoRA",
+    "flux2_full":   "Flux 2 Full Finetune",
 }
 
 MODEL_TYPE_KEYS = list(MODEL_TYPES.keys())
@@ -100,6 +110,16 @@ MODEL_RESOLUTIONS: dict[str, int] = {
     "auraflow_full": 1024,
     "sana_lora":    1024,
     "sana_full":    1024,
+    "sd2_lora":     768,
+    "sd2_full":     768,
+    "sd35_lora":    1024,
+    "sd35_full":    1024,
+    "hidream_lora": 1024,
+    "hidream_full": 1024,
+    "chroma_lora":  1024,
+    "chroma_full":  1024,
+    "flux2_lora":   1024,
+    "flux2_full":   1024,
 }
 
 # ── LR Schedulers ─────────────────────────────────────────────────────
@@ -178,6 +198,16 @@ MODEL_CLIP_SKIP: dict[str, int] = {
     "auraflow_full": 0,
     "sana_lora":    0,
     "sana_full":    0,
+    "sd2_lora":     0,
+    "sd2_full":     0,
+    "sd35_lora":    0,
+    "sd35_full":    0,
+    "hidream_lora": 0,
+    "hidream_full": 0,
+    "chroma_lora":  0,
+    "chroma_full":  0,
+    "flux2_lora":   0,
+    "flux2_full":   0,
 }
 
 # ── Default prediction type per model ─────────────────────────────────
@@ -206,6 +236,16 @@ MODEL_PREDICTION_TYPE: dict[str, str] = {
     "auraflow_full": "flow",
     "sana_lora":    "flow",
     "sana_full":    "flow",
+    "sd2_lora":     "v_prediction",
+    "sd2_full":     "v_prediction",
+    "sd35_lora":    "flow",
+    "sd35_full":    "flow",
+    "hidream_lora": "flow",
+    "hidream_full": "flow",
+    "chroma_lora":  "flow",
+    "chroma_full":  "flow",
+    "flux2_lora":   "flow",
+    "flux2_full":   "flow",
 }
 
 # ── Default timestep sampling per model ───────────────────────────────
@@ -234,6 +274,16 @@ MODEL_TIMESTEP_SAMPLING: dict[str, str] = {
     "auraflow_full": "logit_normal",
     "sana_lora":    "logit_normal",
     "sana_full":    "logit_normal",
+    "sd2_lora":     "uniform",
+    "sd2_full":     "uniform",
+    "sd35_lora":    "logit_normal",
+    "sd35_full":    "logit_normal",
+    "hidream_lora": "logit_normal",
+    "hidream_full": "logit_normal",
+    "chroma_lora":  "logit_normal",
+    "chroma_full":  "logit_normal",
+    "flux2_lora":   "sigmoid",
+    "flux2_full":   "sigmoid",
 }
 
 # ── Recommended CUDA version ──────────────────────────────────────────

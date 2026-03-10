@@ -13,8 +13,9 @@ Speed optimizations applied:
 - Reduced torch.cuda.empty_cache() calls (avoid GPU stalls)
 - GradScaler for fp16 stability
 
-Supports: SD 1.5, SDXL, Pony, Flux, SD3, Z-Image, PixArt, Stable Cascade,
-Hunyuan DiT, Kolors, AuraFlow, Sana (LoRA + Full)
+Supports: SD 1.5, SD 2.x, SDXL, Pony, Flux, Flux 2, SD3, SD 3.5, Z-Image,
+PixArt, Stable Cascade, Hunyuan DiT, Kolors, AuraFlow, Sana, HiDream,
+Chroma (LoRA + Full)
 """
 
 import gc
@@ -64,9 +65,18 @@ def _get_backend(config: TrainingConfig, device, dtype):
     elif base_type == "flux":
         from dataset_sorter.train_backend_flux import FluxBackend
         return FluxBackend(config, device, dtype)
-    elif base_type in ("sd3", "zimage"):
+    elif base_type == "sd3":
         from dataset_sorter.train_backend_sd3 import SD3Backend
         return SD3Backend(config, device, dtype)
+    elif base_type == "zimage":
+        from dataset_sorter.train_backend_zimage import ZImageBackend
+        return ZImageBackend(config, device, dtype)
+    elif base_type == "sd2":
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        return SD2Backend(config, device, dtype)
+    elif base_type == "sd35":
+        from dataset_sorter.train_backend_sd35 import SD35Backend
+        return SD35Backend(config, device, dtype)
     elif base_type == "pixart":
         from dataset_sorter.train_backend_pixart import PixArtBackend
         return PixArtBackend(config, device, dtype)
@@ -85,6 +95,15 @@ def _get_backend(config: TrainingConfig, device, dtype):
     elif base_type == "sana":
         from dataset_sorter.train_backend_sana import SanaBackend
         return SanaBackend(config, device, dtype)
+    elif base_type == "hidream":
+        from dataset_sorter.train_backend_hidream import HiDreamBackend
+        return HiDreamBackend(config, device, dtype)
+    elif base_type == "chroma":
+        from dataset_sorter.train_backend_chroma import ChromaBackend
+        return ChromaBackend(config, device, dtype)
+    elif base_type == "flux2":
+        from dataset_sorter.train_backend_flux2 import Flux2Backend
+        return Flux2Backend(config, device, dtype)
     else:
         # Fallback to SDXL backend (most common)
         from dataset_sorter.train_backend_sdxl import SDXLBackend

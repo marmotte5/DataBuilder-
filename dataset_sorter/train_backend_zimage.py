@@ -1,0 +1,267 @@
+"""Z-Image training backend.
+
+Architecture: ZImageTransformer2DModel (MMDiT variant).
+Prediction: flow matching (rectified flow).
+Resolution: 1024x1024 native.
+Text encoder: Qwen3ForCausalLM (via Qwen2Tokenizer with chat template).
+
+Z-Image uses a custom transformer architecture with Qwen3 as
+the text encoder. This is fundamentally different from SD3 despite
+both using flow matching.
+
+Key differences from SD3:
+- Qwen3 LLM text encoder (not CLIP/T5)
+- Chat-template tokenization with thinking enabled
+- ZImageTransformer2DModel (not SD3Transformer2DModel)
+- Custom latent scaling with shift_factor
+- Dynamic timestep shifting based on image dimensions
+- Only transformer is trained; VAE and TE are always frozen
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn.functional as F
+
+from dataset_sorter.models import TrainingConfig
+from dataset_sorter.train_backend_base import TrainBackendBase
+
+log = logging.getLogger(__name__)
+
+
+class ZImageBackend(TrainBackendBase):
+    """Z-Image training backend (Qwen3 + ZImageTransformer2D)."""
+
+    model_name = "zimage"
+    default_resolution = 1024
+    supports_dual_te = False
+    prediction_type = "flow"
+
+    def load_model(self, model_path: str):
+        """Load Z-Image model components.
+
+        Z-Image uses a custom pipeline structure:
+        - Qwen3ForCausalLM text encoder
+        - AutoencoderKL VAE with shift_factor
+        - ZImageTransformer2DModel
+        - FlowMatchEulerDiscreteScheduler
+        """
+        from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
+
+        # Try loading as a diffusers pipeline first
+        try:
+            from diffusers import DiffusionPipeline
+            pipe = DiffusionPipeline.from_pretrained(
+                model_path, torch_dtype=self.dtype,
+                trust_remote_code=True,
+            )
+            self.pipeline = pipe
+            self.tokenizer = pipe.tokenizer
+            self.text_encoder = pipe.text_encoder
+            self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
+            self.vae = pipe.vae
+            self.noise_scheduler = pipe.scheduler
+        except Exception:
+            # Manual component loading for custom Z-Image models
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+            from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
+
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_path, subfolder="tokenizer",
+                trust_remote_code=True,
+            )
+            self.text_encoder = AutoModelForCausalLM.from_pretrained(
+                model_path, subfolder="text_encoder",
+                torch_dtype=self.dtype, trust_remote_code=True,
+            )
+            self.vae = AutoencoderKL.from_pretrained(
+                model_path, subfolder="vae",
+                torch_dtype=self.dtype,
+            )
+
+            # Try to load the transformer
+            try:
+                from diffusers.models import Transformer2DModel
+                self.unet = Transformer2DModel.from_pretrained(
+                    model_path, subfolder="transformer",
+                    torch_dtype=self.dtype, trust_remote_code=True,
+                )
+            except Exception:
+                from diffusers import DiffusionPipeline
+                # Fallback: load full pipeline with trust_remote_code
+                pipe = DiffusionPipeline.from_pretrained(
+                    model_path, torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
+                self.pipeline = pipe
+                self.unet = getattr(pipe, 'transformer', pipe.unet)
+
+            self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+                model_path, subfolder="scheduler",
+            )
+            self.pipeline = None  # No full pipeline in manual mode
+
+        if self.vae is not None:
+            self.vae.to(self.device, dtype=self.dtype)
+            self.vae.requires_grad_(False)
+
+        # Store VAE scaling info
+        self._vae_shift_factor = getattr(
+            self.vae.config, 'shift_factor', 0.0
+        ) if self.vae is not None else 0.0
+        self._vae_scaling_factor = getattr(
+            self.vae.config, 'scaling_factor', 0.18215
+        ) if self.vae is not None else 0.18215
+
+        log.info(f"Loaded Z-Image model from {model_path}")
+
+    def _get_lora_target_modules(self) -> list[str]:
+        """Z-Image transformer target modules for LoRA."""
+        return [
+            "to_q", "to_k", "to_v", "to_out.0",
+            "proj_mlp", "proj_out",
+            "attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0",
+            "norm1.linear", "norm1_context.linear",
+        ]
+
+    def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Encode with Qwen3 using chat template.
+
+        Z-Image uses Qwen3ForCausalLM which requires chat-style
+        tokenization. Hidden states from intermediate layers are
+        used as the text conditioning.
+        """
+        # Format as chat messages for Qwen3
+        all_hidden_states = []
+
+        for caption in captions:
+            # Qwen3 chat template
+            messages = [{"role": "user", "content": caption}]
+
+            try:
+                text = self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False,
+                    enable_thinking=True,
+                )
+            except Exception:
+                # Fallback: use raw caption if chat template fails
+                text = caption
+
+            tokens = self.tokenizer(
+                text, padding="max_length",
+                max_length=512,
+                truncation=True, return_tensors="pt",
+            ).to(self.device)
+
+            with torch.no_grad():
+                out = self.text_encoder(
+                    **tokens,
+                    output_hidden_states=True,
+                )
+                # Use the last hidden state as conditioning
+                hidden = out.hidden_states[-1]
+                all_hidden_states.append(hidden)
+
+        encoder_hidden = torch.cat(all_hidden_states, dim=0)
+        return (encoder_hidden,)
+
+    def compute_loss(
+        self, noise_pred: torch.Tensor, noise: torch.Tensor,
+        latents: torch.Tensor, timesteps: torch.Tensor,
+    ) -> torch.Tensor:
+        """Flow matching loss."""
+        target = noise - latents
+        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        return loss.mean(dim=list(range(1, len(loss.shape))))
+
+    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
+        """Z-Image uses no additional conditioning beyond hidden states."""
+        return None
+
+    def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Encode pixel values with Z-Image's custom VAE scaling."""
+        with torch.no_grad():
+            latents = self.vae.encode(
+                pixel_values.to(memory_format=torch.channels_last)
+            ).latent_dist.sample()
+            # Apply Z-Image specific scaling
+            latents = (latents - self._vae_shift_factor) * self._vae_scaling_factor
+        return latents
+
+    def _get_timestep_shift(self, latents: torch.Tensor) -> float:
+        """Compute dynamic timestep shift based on image dimensions.
+
+        Z-Image uses resolution-dependent timestep shifting similar to
+        Flux but with its own formula based on patch sizes.
+        """
+        # Default shift for 1024x1024
+        h, w = latents.shape[-2:]
+        # Patch size is typically 2 for the latent space
+        num_patches = (h // 2) * (w // 2)
+        # Base shift value
+        base_shift = 0.5
+        max_shift = 1.15
+        # Linear interpolation based on number of patches
+        shift = base_shift + (max_shift - base_shift) * min(num_patches / 4096, 1.0)
+        return shift
+
+    def training_step(
+        self, latents: torch.Tensor, te_out: tuple, batch_size: int,
+    ) -> torch.Tensor:
+        """Z-Image training step with flow matching + dynamic timestep shift."""
+        config = self.config
+
+        # Flow matching timestep sampling
+        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
+        if config.timestep_sampling == "sigmoid":
+            u = torch.sigmoid(torch.randn_like(u) * 1.0)
+        elif config.timestep_sampling == "logit_normal":
+            u = torch.sigmoid(torch.randn_like(u))
+
+        # Apply dynamic timestep shift
+        shift = self._get_timestep_shift(latents)
+        t = shift * u / (1 + (shift - 1) * u)
+
+        noise = torch.randn_like(latents)
+        # Flow matching interpolation
+        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
+
+        encoder_hidden = te_out[0]
+        timesteps = (t * 1000).long()
+
+        with torch.autocast(device_type="cuda", dtype=self.dtype):
+            noise_pred = self.unet(
+                hidden_states=noisy_latents,
+                timestep=timesteps / 1000,
+                encoder_hidden_states=encoder_hidden,
+            ).sample
+
+        # Flow matching target
+        target = noise - latents
+        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        loss = loss.mean(dim=list(range(1, len(loss.shape))))
+
+        # Debiased estimation for flow matching
+        if config.debiased_estimation:
+            weight = 1.0 / (1.0 - t + 1e-6)
+            loss = loss * weight
+
+        return loss.mean()
+
+    def generate_sample(self, prompt: str, seed: int):
+        if self.pipeline is not None:
+            return self.pipeline(
+                prompt=prompt,
+                num_inference_steps=self.config.sample_steps,
+                guidance_scale=self.config.sample_cfg_scale,
+                generator=torch.Generator(self.device).manual_seed(seed),
+            ).images[0]
+        else:
+            log.warning("Z-Image sample generation requires full pipeline")
+            return None
+
+    def save_lora(self, save_dir: Path):
+        self.unet.save_pretrained(str(save_dir))
+        log.info(f"Saved Z-Image LoRA to {save_dir}")

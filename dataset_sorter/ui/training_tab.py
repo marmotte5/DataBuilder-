@@ -1,8 +1,9 @@
 """Training tab — Full functional trainer UI.
 
-OneTrainer-grade controls for SD 1.5, SDXL, Pony, Flux, SD3, Z-Image,
-PixArt, Stable Cascade, Hunyuan DiT, Kolors, AuraFlow, Sana training
-with real-time loss display, sample preview, and full configuration.
+OneTrainer-grade controls for SD 1.5, SD 2.x, SDXL, Pony, Flux, Flux 2,
+SD3, SD 3.5, Z-Image, PixArt, Stable Cascade, Hunyuan DiT, Kolors,
+AuraFlow, Sana, HiDream, Chroma training with real-time loss display,
+sample preview, and full configuration.
 """
 
 import os
