@@ -51,9 +51,9 @@ class KolorsBackend(TrainBackendBase):
         self.vae.to(self.device, dtype=self.dtype)
         self.vae.requires_grad_(False)
 
-        # Pre-cache time_ids (same as SDXL)
+        # Default time_ids; overridden per-batch when bucketing produces non-square.
         res = self.config.resolution
-        self._cached_time_ids = torch.tensor(
+        self._default_time_ids = torch.tensor(
             [res, res, 0, 0, res, res],
             dtype=self.dtype, device=self.device,
         )
@@ -88,11 +88,23 @@ class KolorsBackend(TrainBackendBase):
 
         return (encoder_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
-        """SDXL-style conditioning with time_ids."""
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
+                        image_hw: tuple[int, int] | None = None) -> Optional[dict]:
+        """SDXL-style conditioning with time_ids.
+
+        When image_hw is provided (from aspect ratio bucketing), use actual
+        batch dimensions instead of the static config.resolution.
+        """
         if pooled is None:
             return None
-        time_ids = self._cached_time_ids.unsqueeze(0).expand(batch_size, -1)
+        if image_hw is not None:
+            h, w = image_hw
+            time_ids = torch.tensor(
+                [h, w, 0, 0, h, w],
+                dtype=self.dtype, device=self.device,
+            ).unsqueeze(0).expand(batch_size, -1)
+        else:
+            time_ids = self._default_time_ids.unsqueeze(0).expand(batch_size, -1)
         return {
             "text_embeds": pooled,
             "time_ids": time_ids,

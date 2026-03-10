@@ -94,7 +94,8 @@ class TrainBackendBase(ABC):
         else:
             return self._compute_epsilon_loss(noise_pred, noise, latents, timesteps)
 
-    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
+                        image_hw: tuple[int, int] | None = None) -> Optional[dict]:
         """Return added_cond_kwargs for UNet forward. Override for model-specific."""
         return None
 
@@ -386,8 +387,14 @@ class TrainBackendBase(ABC):
         encoder_hidden = te_out[0]
         pooled = te_out[1] if len(te_out) > 1 else None
 
-        # Get model-specific conditioning
-        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out)
+        # Get model-specific conditioning.
+        # Derive actual image HxW from latent shape for SDXL time_ids.
+        # VAE downscales by 8x for all SD-family models.
+        _vae_sf = getattr(self, 'vae_scale_factor', 8)
+        lat_h, lat_w = latents.shape[2], latents.shape[3]
+        image_hw = (lat_h * _vae_sf, lat_w * _vae_sf)
+        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out,
+                                         image_hw=image_hw)
 
         # Forward pass with autocast for speed
         _act = autocast_device_type()
@@ -453,9 +460,22 @@ class TrainBackendBase(ABC):
                 instead of added_cond_kwargs dict.
         """
         config = self.config
-        t = self._sample_flow_timesteps(batch_size)
+
+        # Adaptive timestep sampling (shared with DDPM path)
+        if self._timestep_ema_sampler is not None:
+            # Convert discrete timesteps to [0,1] range for flow matching
+            discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
+            t = discrete_ts.float() / timestep_scale
+        else:
+            t = self._sample_flow_timesteps(batch_size)
 
         noise = torch.randn_like(latents)
+        # Apply noise_offset (was missing for flow models — Finding C3)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                latents.shape[0], latents.shape[1], 1, 1,
+                device=latents.device, dtype=latents.dtype,
+            )
         noisy_latents = self._flow_interpolate(latents, noise, t)
 
         encoder_hidden = te_out[0]
@@ -484,6 +504,27 @@ class TrainBackendBase(ABC):
         if config.debiased_estimation:
             weight = 1.0 / (1.0 - t + 1e-6)
             loss = loss * weight
+
+        # min_snr_gamma: not applicable to flow matching (requires alphas_cumprod).
+        # Log a one-time warning if the user enabled it for a flow model.
+        if config.min_snr_gamma > 0 and not getattr(self, '_warned_snr_flow', False):
+            log.warning("min_snr_gamma is not supported for flow matching models "
+                        "(Flux, SD3, etc.) and will be ignored.")
+            self._warned_snr_flow = True
+
+        # Token weighting (if enabled by UI)
+        if getattr(self, '_token_weight_mask', None) is not None:
+            mask = self._token_weight_mask
+            if mask.device != loss.device:
+                mask = mask.to(loss.device)
+            # For flow models, apply token weighting as per-sample weight
+            if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
+                # Average token weights per sample as a loss weight
+                sample_weight = mask.mean(dim=-1)
+                while sample_weight.dim() < loss.dim():
+                    sample_weight = sample_weight.unsqueeze(-1)
+                loss = loss * sample_weight
+            self._token_weight_mask = None  # Consumed
 
         return loss.mean()
 

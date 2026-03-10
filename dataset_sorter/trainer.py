@@ -333,11 +333,21 @@ class Trainer:
                 tokenizer_3=tok3, text_encoder_3=te3,
                 to_disk=config.cache_text_encoder_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching TE {c}/{t}") if progress_fn else None,
+                clip_skip=config.clip_skip,
             )
 
             # Offload text encoders to free VRAM for training
             if not config.train_text_encoder and not config.train_text_encoder_2:
                 self.backend.offload_text_encoders()
+        else:
+            # When TE caching is disabled, ensure text encoders are on the
+            # correct device so encode_text_batch() works every step.
+            # (Fix: previously TEs could remain on CPU after from_pretrained.)
+            self.backend.text_encoder.to(self.device)
+            if self.backend.text_encoder_2 is not None:
+                self.backend.text_encoder_2.to(self.device)
+            if getattr(self.backend, "text_encoder_3", None) is not None:
+                self.backend.text_encoder_3.to(self.device)
 
         if progress_fn:
             progress_fn(4, 6, "Setting up optimizer...")
@@ -498,12 +508,16 @@ class Trainer:
             log.info("Async optimizer step enabled (overlaps with next forward pass)")
 
         # ── CUDA Graph Training Wrapper ──
+        # NOTE: CUDA graphs capture torch.randn_like() calls and replay them
+        # deterministically, which destroys training stochasticity.
+        # This feature is disabled pending a proper implementation that
+        # re-generates noise outside the captured graph.
         if config.cuda_graph_training and self.device.type == "cuda":
-            from dataset_sorter.speed_optimizations import CUDAGraphWrapper
-            self._cuda_graph = CUDAGraphWrapper(
-                warmup_steps=config.cuda_graph_warmup, enabled=True,
+            log.warning(
+                "cuda_graph_training is currently disabled: CUDA graphs "
+                "replay captured random noise, destroying training stochasticity. "
+                "Use torch.compile (regional_compile=True) instead for speed."
             )
-            log.info(f"CUDA graph training enabled (warmup={config.cuda_graph_warmup} steps)")
 
         # Pre-collect trainable params for grad clipping (avoid re-filtering each step)
         trainable_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
@@ -701,11 +715,11 @@ class Trainer:
             self.backend._timestep_ema_sampler = self._timestep_ema
 
         # ── Delegate to backend training step (handles model-specific logic) ──
+        # Note: autocast is applied inside each backend's training_step/flow_training_step.
+        # Removed redundant outer autocast that caused double nesting and confused
+        # precision semantics (loss .float() casts ran under outer autocast).
         bsz = latents.shape[0]
-
-        _act = autocast_device_type()
-        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
-            loss = self.backend.training_step(latents, te_out, bsz)
+        loss = self.backend.training_step(latents, te_out, bsz)
 
         # ── Curriculum learning: update per-image loss tracking ──
         if self._curriculum_sampler is not None and "index" in batch:

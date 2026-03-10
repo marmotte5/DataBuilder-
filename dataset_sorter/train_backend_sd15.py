@@ -50,7 +50,11 @@ class SD15Backend(TrainBackendBase):
         log.info(f"Loaded SD 1.5 model from {model_path}")
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with single CLIP text encoder."""
+        """Encode with single CLIP text encoder.
+
+        Respects config.clip_skip: 0/1 = last hidden layer (index -2),
+        2 = skip last 2 layers (index -3), etc.
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=self.tokenizer.model_max_length,
@@ -59,6 +63,9 @@ class SD15Backend(TrainBackendBase):
 
         with torch.no_grad():
             output = self.text_encoder(tokens, output_hidden_states=True)
-            hidden = output.hidden_states[-2]
+            # clip_skip=0 or 1 → hidden_states[-2] (default, penultimate layer)
+            # clip_skip=2      → hidden_states[-3] (skip last 2)
+            skip = max(self.config.clip_skip, 1)
+            hidden = output.hidden_states[-(skip + 1)]
 
         return (hidden,)

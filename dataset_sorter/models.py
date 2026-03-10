@@ -158,6 +158,12 @@ class TrainingConfig:
     # ── Async Optimizer Step ─────────────────────────────────────────
     async_optimizer_step: bool = False  # Overlap optimizer.step() with next forward
 
+    # ── Liger-Kernel Fused Ops ─────────────────────────────────────
+    liger_kernels: bool = False        # Apply fused Triton kernels (LayerNorm, etc.)
+
+    # ── Regional torch.compile ─────────────────────────────────────
+    regional_compile: bool = False     # Compile individual attention/FF blocks
+
     # ── Curriculum Learning ──────────────────────────────────────────
     curriculum_learning: bool = False       # Loss-based adaptive image sampling
     curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)

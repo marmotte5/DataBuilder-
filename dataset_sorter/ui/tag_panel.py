@@ -185,6 +185,12 @@ class TagPanel(QWidget):
     def connect_selection(self):
         sel = self.table.selectionModel()
         if sel:
+            # Disconnect any existing connection to prevent duplicate firings
+            # after repeated scans (each scan calls connect_selection again).
+            try:
+                sel.selectionChanged.disconnect(self._on_selection)
+            except (TypeError, RuntimeError):
+                pass  # No existing connection — safe to ignore
             sel.selectionChanged.connect(self._on_selection)
 
     def _on_selection(self):

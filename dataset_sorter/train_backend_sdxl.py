@@ -57,9 +57,10 @@ class SDXLBackend(TrainBackendBase):
         self.vae.to(self.device, dtype=self.dtype)
         self.vae.requires_grad_(False)
 
-        # Pre-allocate time_ids (never changes during training)
+        # Default time_ids for square resolution; overridden per-batch when
+        # aspect ratio bucketing produces non-square images.
         res = self.config.resolution
-        self._cached_time_ids = torch.tensor(
+        self._default_time_ids = torch.tensor(
             [res, res, 0, 0, res, res],
             dtype=self.dtype, device=self.device,
         ).unsqueeze(0)
@@ -77,7 +78,9 @@ class SDXLBackend(TrainBackendBase):
 
         with torch.no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
-            hidden_1 = out_1.hidden_states[-2]
+            # Respect clip_skip for TE1 (Pony uses clip_skip=2)
+            skip = max(self.config.clip_skip, 1)
+            hidden_1 = out_1.hidden_states[-(skip + 1)]
 
         # TE2
         tokens_2 = self.tokenizer_2(
@@ -88,19 +91,35 @@ class SDXLBackend(TrainBackendBase):
 
         with torch.no_grad():
             out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
-            hidden_2 = out_2.hidden_states[-2]
+            hidden_2 = out_2.hidden_states[-(skip + 1)]
             pooled = out_2[0]
 
         # Concatenate hidden states from both encoders
         encoder_hidden = torch.cat([hidden_1, hidden_2], dim=-1)
         return (encoder_hidden, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
-        """SDXL requires time_ids and text_embeds as added conditioning."""
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
+                        image_hw: tuple[int, int] | None = None) -> Optional[dict]:
+        """SDXL requires time_ids and text_embeds as added conditioning.
+
+        When aspect ratio bucketing is active, *image_hw* provides the actual
+        (height, width) of the current batch so that time_ids match the real
+        dimensions instead of always being the square config.resolution.
+        """
         if pooled is None:
             return None
+
+        if image_hw is not None:
+            h, w = image_hw
+            time_ids = torch.tensor(
+                [h, w, 0, 0, h, w],
+                dtype=self.dtype, device=self.device,
+            ).unsqueeze(0).expand(batch_size, -1)
+        else:
+            time_ids = self._default_time_ids.expand(batch_size, -1)
+
         return {
             "text_embeds": pooled,
-            "time_ids": self._cached_time_ids.expand(batch_size, -1),
+            "time_ids": time_ids,
         }
 

@@ -107,8 +107,24 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
 
 
 def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
-    """Create LR scheduler."""
+    """Create LR scheduler.
+
+    When Adafactor is used with relative_step=True, it manages its own LR
+    internally. An external scheduler would overwrite its adaptive LR, so
+    we use a constant (no-op) scheduler instead.
+    """
     from diffusers.optimization import get_scheduler as _get_scheduler
+
+    # Adafactor with relative_step manages its own LR — don't compete.
+    if (config.optimizer == "Adafactor" and config.adafactor_relative_step):
+        log.info("Adafactor relative_step=True: using constant scheduler "
+                 "(Adafactor manages its own LR)")
+        return _get_scheduler(
+            "constant",
+            optimizer=optimizer,
+            num_warmup_steps=0,
+            num_training_steps=num_training_steps,
+        )
 
     # Supported scheduler names in diffusers
     supported = {

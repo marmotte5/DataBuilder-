@@ -473,6 +473,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Scan had {count} error(s) — check logs for details.")
 
     def _on_scan_finished(self, entries):
+        # Filter out None entries that can result from cancelled futures (M5 fix)
+        entries = [e for e in entries if e is not None]
         self.entries = entries
         self.progress_bar.setVisible(False)
         self._set_controls_enabled(True)
@@ -482,7 +484,10 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage(f"Processing {len(entries)} entries...")
-        QApplication.processEvents()
+        # Removed QApplication.processEvents() — re-entering the event loop here
+        # causes handlers to fire while tag_counts/tag_to_entries are stale,
+        # leading to state corruption. The status update will paint naturally
+        # once the synchronous processing below completes.
 
         self._rebuild_tag_index()
         self._compute_auto_buckets()
@@ -659,6 +664,7 @@ class MainWindow(QMainWindow):
         if not tags:
             self.statusBar().showMessage("No tag selected.")
             return
+        self._push_undo("override")
         if value == 0:
             for tag in tags:
                 self.manual_overrides.pop(tag, None)
@@ -740,8 +746,9 @@ class MainWindow(QMainWindow):
                     self.manual_overrides.pop(old_tag)
             if old_tag in self.deleted_tags:
                 self.deleted_tags.discard(old_tag)
-                if new_name not in self.tag_counts or new_name in self.deleted_tags:
-                    self.deleted_tags.add(new_name)
+                # Carry deleted status to the new name (the old tag was deleted,
+                # so the renamed version should be too).
+                self.deleted_tags.add(new_name)
         self._after_tag_edit()
         self.override_panel.set_editor_info(f"Renamed ({count} changes).")
 

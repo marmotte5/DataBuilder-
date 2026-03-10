@@ -284,6 +284,7 @@ class CachedTrainDataset(Dataset):
         tokenizer_2=None, text_encoder_2=None,
         tokenizer_3=None, text_encoder_3=None,
         to_disk=False, progress_fn=None,
+        clip_skip: int = 0,
     ):
         """Pre-compute and cache text encoder outputs.
 
@@ -346,7 +347,8 @@ class CachedTrainDataset(Dataset):
                 ).input_ids.to(device)
 
                 encoder_output = text_encoder(tokens, output_hidden_states=True)
-                hidden_states = encoder_output.hidden_states[-2].cpu()
+                _skip = max(clip_skip, 1)
+                hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
                 # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state
                 pooled = (
                     encoder_output.pooler_output.cpu()
@@ -370,7 +372,7 @@ class CachedTrainDataset(Dataset):
                     ).input_ids.to(device)
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-                    hidden_states_2 = encoder_output_2.hidden_states[-2].cpu()
+                    hidden_states_2 = encoder_output_2.hidden_states[-(_skip + 1)].cpu()
                     pooled_2 = (
                         encoder_output_2.pooler_output.cpu()
                         if hasattr(encoder_output_2, "pooler_output") and encoder_output_2.pooler_output is not None
