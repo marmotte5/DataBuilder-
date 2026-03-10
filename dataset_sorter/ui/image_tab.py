@@ -12,15 +12,18 @@ from PyQt6.QtWidgets import (
 
 from dataset_sorter.constants import MAX_BUCKETS
 from dataset_sorter.models import ImageEntry
-from dataset_sorter.ui.theme import COLORS, ACCENT_BUTTON_STYLE, MUTED_LABEL_STYLE
+from dataset_sorter.ui.theme import (
+    COLORS, ACCENT_BUTTON_STYLE, MUTED_LABEL_STYLE, NAV_BUTTON_STYLE,
+    TAG_BADGE_STYLE,
+)
 
 
 class ImageTab(QWidget):
     force_bucket = pyqtSignal(int, int)
     reset_bucket = pyqtSignal(int)
 
-    IMG_W = 420
-    IMG_H = 360
+    IMG_W = 440
+    IMG_H = 380
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,11 +33,13 @@ class ImageTab(QWidget):
         self._manual_overrides: dict[str, int] = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         nav = QHBoxLayout()
+        nav.setSpacing(8)
         self.btn_prev = QPushButton("Previous")
+        self.btn_prev.setStyleSheet(NAV_BUTTON_STYLE)
         self.btn_prev.clicked.connect(self._go_prev)
         nav.addWidget(self.btn_prev)
 
@@ -49,10 +54,14 @@ class ImageTab(QWidget):
 
         self.index_label = QLabel("0 / 0")
         self.index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.index_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-weight: 600; background: transparent;")
+        self.index_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 600; "
+            f"font-size: 13px; background: transparent;"
+        )
         nav.addWidget(self.index_label, 1)
 
         self.btn_next = QPushButton("Next")
+        self.btn_next.setStyleSheet(NAV_BUTTON_STYLE)
         self.btn_next.clicked.connect(self._go_next)
         nav.addWidget(self.btn_next)
         layout.addLayout(nav)
@@ -60,7 +69,10 @@ class ImageTab(QWidget):
         self.img_display = QLabel()
         self.img_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img_display.setMinimumSize(self.IMG_W, self.IMG_H)
-        self.img_display.setStyleSheet(f"background-color: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 10px;")
+        self.img_display.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 12px;"
+        )
         layout.addWidget(self.img_display)
 
         self.path_label = QLabel("")
@@ -69,7 +81,8 @@ class ImageTab(QWidget):
         layout.addWidget(self.path_label)
 
         self.bucket_label = QLabel("")
-        self.bucket_label.setStyleSheet(f"color: {COLORS['accent']}; font-weight: 700; font-size: 14px; background: transparent;")
+        self.bucket_label.setStyleSheet(TAG_BADGE_STYLE)
+        self.bucket_label.setFixedHeight(26)
         layout.addWidget(self.bucket_label)
 
         self.tags_text = QTextEdit()
@@ -78,8 +91,12 @@ class ImageTab(QWidget):
         layout.addWidget(self.tags_text)
 
         ov_row = QHBoxLayout()
+        ov_row.setSpacing(8)
         lbl = QLabel("Bucket:")
-        lbl.setStyleSheet(MUTED_LABEL_STYLE)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 500; "
+            f"font-size: 12px; background: transparent;"
+        )
         ov_row.addWidget(lbl)
         self.override_spinner = QSpinBox()
         self.override_spinner.setRange(0, MAX_BUCKETS)
@@ -127,7 +144,7 @@ class ImageTab(QWidget):
             pixmap = pixmap.scaled(self.IMG_W, self.IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.img_display.setPixmap(pixmap)
         self.path_label.setText(str(entry.image_path))
-        self.bucket_label.setText(f"Bucket: {entry.assigned_bucket}")
+        self.bucket_label.setText(f"  Bucket {entry.assigned_bucket}  ")
         parts = []
         for tag in entry.tags:
             if tag in self._deleted_tags:

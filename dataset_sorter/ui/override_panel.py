@@ -41,17 +41,21 @@ class OverridePanel(QWidget):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 4, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         self.selected_tag_label = QLabel("No tag selected")
         self.selected_tag_label.setWordWrap(True)
-        self.selected_tag_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-style: italic; padding: 6px; background: transparent;")
+        self.selected_tag_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-style: italic; "
+            f"padding: 8px 10px; background: {COLORS['surface']}; "
+            f"border-radius: 8px; border: 1px solid {COLORS['border']};"
+        )
         layout.addWidget(self.selected_tag_label)
 
         # Override card
         oc = self._card()
         ocl = QVBoxLayout(oc)
-        ocl.setSpacing(8)
+        ocl.setSpacing(10)
         ocl.addWidget(self._subheader("Bucket Override"))
         row = QHBoxLayout()
         self.override_spinner = QSpinBox()
@@ -72,7 +76,7 @@ class OverridePanel(QWidget):
         # Deletion card
         dc = self._card()
         dcl = QVBoxLayout(dc)
-        dcl.setSpacing(8)
+        dcl.setSpacing(10)
         dcl.addWidget(self._subheader("Tag Deletion"))
         dr = QHBoxLayout()
         bd = QPushButton("Delete Selection")
@@ -95,9 +99,9 @@ class OverridePanel(QWidget):
         # Editor card
         ec = self._card()
         ecl = QVBoxLayout(ec)
-        ecl.setSpacing(8)
+        ecl.setSpacing(10)
         ecl.addWidget(self._subheader("Tag Editor"))
-        ecl.addWidget(self._muted("Rename"))
+        ecl.addWidget(self._muted("RENAME"))
         rr = QHBoxLayout()
         self.rename_input = QLineEdit()
         self.rename_input.setPlaceholderText("New name...")
@@ -106,7 +110,7 @@ class OverridePanel(QWidget):
         brn.clicked.connect(lambda: self.rename_tag.emit(self.rename_input.text().strip()))
         rr.addWidget(brn)
         ecl.addLayout(rr)
-        ecl.addWidget(self._muted("Merge"))
+        ecl.addWidget(self._muted("MERGE"))
         mr = QHBoxLayout()
         self.merge_input = QLineEdit()
         self.merge_input.setPlaceholderText("Target tag...")
@@ -115,7 +119,7 @@ class OverridePanel(QWidget):
         bm.clicked.connect(lambda: self.merge_tags.emit(self.merge_input.text().strip()))
         mr.addWidget(bm)
         ecl.addLayout(mr)
-        ecl.addWidget(self._muted("Search & Replace"))
+        ecl.addWidget(self._muted("SEARCH & REPLACE"))
         sr = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search...")
@@ -136,7 +140,7 @@ class OverridePanel(QWidget):
         # Bucket names card
         bc = self._card()
         bcl = QVBoxLayout(bc)
-        bcl.setSpacing(8)
+        bcl.setSpacing(10)
         bcl.addWidget(self._subheader("Bucket Names"))
         bnr = QHBoxLayout()
         self.bucket_name_input = QLineEdit()
@@ -151,7 +155,7 @@ class OverridePanel(QWidget):
         # Config card
         cc = self._card()
         ccl = QVBoxLayout(cc)
-        ccl.setSpacing(8)
+        ccl.setSpacing(10)
         ccl.addWidget(self._subheader("Configuration"))
         cr = QHBoxLayout()
         bsc = QPushButton("Save Config")
@@ -166,9 +170,10 @@ class OverridePanel(QWidget):
         # Stats card
         sc = self._card()
         scl = QVBoxLayout(sc)
-        scl.setSpacing(4)
+        scl.setSpacing(6)
         scl.addWidget(self._subheader("Statistics"))
         sg = QHBoxLayout()
+        sg.setSpacing(0)
         self.stat_images = self._stat("0", "Images")
         self.stat_txt = self._stat("0", "Txt Files")
         self.stat_tags = self._stat("0", "Unique Tags")
@@ -200,15 +205,19 @@ class OverridePanel(QWidget):
 
     def _muted(self, t):
         l = QLabel(t)
-        l.setStyleSheet(MUTED_LABEL_STYLE)
+        l.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; "
+            f"font-weight: 600; background: transparent; "
+            f"letter-spacing: 1px;"
+        )
         return l
 
     def _stat(self, val, label):
         w = QWidget()
         w.setStyleSheet("background: transparent;")
         ly = QVBoxLayout(w)
-        ly.setContentsMargins(0, 0, 0, 0)
-        ly.setSpacing(0)
+        ly.setContentsMargins(4, 4, 4, 4)
+        ly.setSpacing(2)
         ly.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v = QLabel(val)
         v.setStyleSheet(STAT_VALUE_STYLE)

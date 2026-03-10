@@ -25,17 +25,18 @@ class RecoTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         # Row 1: Model & VRAM
         row1 = QHBoxLayout()
-        row1.addWidget(self._muted("Model"))
+        row1.setSpacing(10)
+        row1.addWidget(self._field_label("Model"))
         self.model_combo = QComboBox()
         self.model_combo.addItems(MODEL_TYPE_LABELS)
         self.model_combo.setCurrentIndex(2)  # SDXL LoRA default
         row1.addWidget(self.model_combo, 1)
-        row1.addWidget(self._muted("VRAM"))
+        row1.addWidget(self._field_label("VRAM"))
         self.vram_combo = QComboBox()
         self.vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
         self.vram_combo.setCurrentIndex(3)  # 24 GB default
@@ -44,12 +45,13 @@ class RecoTab(QWidget):
 
         # Row 2: Network & Optimizer
         row2 = QHBoxLayout()
-        row2.addWidget(self._muted("Network"))
+        row2.setSpacing(10)
+        row2.addWidget(self._field_label("Network"))
         self.network_combo = QComboBox()
         for key, label in NETWORK_TYPES.items():
             self.network_combo.addItem(label, key)
         row2.addWidget(self.network_combo, 1)
-        row2.addWidget(self._muted("Optimizer"))
+        row2.addWidget(self._field_label("Optimizer"))
         self.optimizer_combo = QComboBox()
         for key, label in OPTIMIZERS.items():
             self.optimizer_combo.addItem(label, key)
@@ -58,6 +60,7 @@ class RecoTab(QWidget):
 
         # Row 3: Advanced options
         row3 = QHBoxLayout()
+        row3.setSpacing(16)
 
         self.ema_cpu_check = QCheckBox("EMA CPU offload")
         self.ema_cpu_check.setChecked(True)
@@ -92,7 +95,8 @@ class RecoTab(QWidget):
 
         # Row 4: Attention
         row4 = QHBoxLayout()
-        row4.addWidget(self._muted("Attention"))
+        row4.setSpacing(10)
+        row4.addWidget(self._field_label("Attention"))
         self.attention_combo = QComboBox()
         for key, label in ATTENTION_MODES.items():
             self.attention_combo.addItem(label, key)
@@ -107,14 +111,15 @@ class RecoTab(QWidget):
 
         # Buttons row
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addStretch()
 
-        self.btn_export_toml = QPushButton("Export TOML (OneTrainer)")
+        self.btn_export_toml = QPushButton("Export TOML")
         self.btn_export_toml.setToolTip("Export config as OneTrainer-compatible TOML file")
         self.btn_export_toml.clicked.connect(self._export_toml)
         btn_row.addWidget(self.btn_export_toml)
 
-        self.btn_export_json = QPushButton("Export JSON (kohya)")
+        self.btn_export_json = QPushButton("Export JSON")
         self.btn_export_json.setToolTip("Export config as kohya_ss-compatible JSON file")
         self.btn_export_json.clicked.connect(self._export_json)
         btn_row.addWidget(self.btn_export_json)
@@ -132,12 +137,20 @@ class RecoTab(QWidget):
         self.text_output.setFont(font)
         self.text_output.setStyleSheet(
             f"QTextEdit {{ background-color: {COLORS['bg']}; color: {COLORS['text']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 8px; padding: 10px; }}"
+            f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 12px; }}"
         )
         layout.addWidget(self.text_output, 1)
 
         # Store last config for export
         self._last_config = None
+
+    def _field_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; "
+            f"font-weight: 500; background: transparent;"
+        )
+        return lbl
 
     def _muted(self, text):
         lbl = QLabel(text)

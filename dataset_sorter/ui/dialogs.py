@@ -14,16 +14,19 @@ class DryRunDialog(QDialog):
 
     def __init__(self, bucket_summary, total_images, hidden_empty, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Export Summary (Dry Run)")
-        self.setMinimumSize(550, 450)
+        self.setWindowTitle("Export Summary")
+        self.setMinimumSize(580, 480)
         self.accepted_export = False
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         info = QLabel(f"{total_images} images in {len(bucket_summary)} active buckets")
-        info.setStyleSheet(f"color: {COLORS['text']}; font-size: 16px; font-weight: 700; background: transparent;")
+        info.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 16px; font-weight: 700; "
+            f"background: transparent;"
+        )
         layout.addWidget(info)
 
         table = QTableWidget()
@@ -53,6 +56,7 @@ class DryRunDialog(QDialog):
             layout.addWidget(hid)
 
         btns = QHBoxLayout()
+        btns.setSpacing(10)
         btns.addStretch()
         bc = QPushButton("Cancel")
         bc.clicked.connect(self.reject)

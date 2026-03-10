@@ -29,6 +29,7 @@ from dataset_sorter import recommender
 from dataset_sorter.ui.theme import (
     get_stylesheet, COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
     SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, DANGER_BUTTON_STYLE,
+    NAV_BUTTON_STYLE,
 )
 from dataset_sorter.ui.tag_panel import TagPanel
 from dataset_sorter.ui.override_panel import OverridePanel
@@ -44,7 +45,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dataset Sorter — Sort datasets by tag rarity")
+        self.setWindowTitle("Dataset Sorter")
         self.setMinimumSize(1400, 900)
 
         # State
@@ -73,12 +74,12 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
 
         # Top bar — paths
         top = QHBoxLayout()
-        top.setSpacing(8)
+        top.setSpacing(10)
         top.addWidget(self._label("Source"))
         self.source_input = QLineEdit()
         self.source_input.setPlaceholderText("Source directory path...")
@@ -188,7 +189,10 @@ class MainWindow(QMainWindow):
 
     def _label(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet("background: transparent;")
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 500; "
+            f"font-size: 12px; background: transparent;"
+        )
         return lbl
 
     def _connect_signals(self):

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QAbstractItemView, QLabel,
 )
 
-from dataset_sorter.ui.theme import COLORS, SECTION_HEADER_STYLE
+from dataset_sorter.ui.theme import COLORS, SECTION_HEADER_STYLE, TAG_BADGE_STYLE
 
 
 _COLUMNS = ["Tag", "Count", "Bucket", "Override", "Del."]
@@ -143,8 +143,8 @@ class TagPanel(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(10)
 
         header_row = QHBoxLayout()
         header = QLabel("Dataset Tags")
@@ -152,17 +152,12 @@ class TagPanel(QWidget):
         header_row.addWidget(header)
         header_row.addStretch()
         self.tag_count_badge = QLabel("")
-        self.tag_count_badge.setStyleSheet(f"""
-            background-color: {COLORS['accent_subtle']};
-            color: {COLORS['accent']};
-            border-radius: 10px; padding: 2px 10px;
-            font-size: 11px; font-weight: 600;
-        """)
+        self.tag_count_badge.setStyleSheet(TAG_BADGE_STYLE)
         header_row.addWidget(self.tag_count_badge)
         layout.addLayout(header_row)
 
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("Filter tags...")
+        self.filter_input.setPlaceholderText("Search tags...")
         self.filter_input.setClearButtonEnabled(True)
         self.filter_input.textChanged.connect(self._on_filter_text_changed)
         layout.addWidget(self.filter_input)

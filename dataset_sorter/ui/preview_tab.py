@@ -12,17 +12,21 @@ from dataset_sorter.ui.theme import COLORS, MUTED_LABEL_STYLE
 
 class PreviewTab(QWidget):
     MAX_THUMBNAILS = 12
-    THUMB_W = 260
-    THUMB_H = 190
+    THUMB_W = 280
+    THUMB_H = 200
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         self.info_label = QLabel("Select a tag to view images.")
-        self.info_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px; padding: 4px; background: transparent;")
+        self.info_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 13px; "
+            f"padding: 8px 12px; background: {COLORS['surface']}; "
+            f"border-radius: 8px; border: 1px solid {COLORS['border']};"
+        )
         layout.addWidget(self.info_label)
 
         self.scroll = QScrollArea()
@@ -31,7 +35,7 @@ class PreviewTab(QWidget):
         self.container = QWidget()
         self.container.setStyleSheet("background: transparent;")
         self.grid = QGridLayout(self.container)
-        self.grid.setSpacing(10)
+        self.grid.setSpacing(12)
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll, 1)
 
@@ -48,10 +52,13 @@ class PreviewTab(QWidget):
         for i, idx in enumerate(shown):
             entry = entries[idx]
             wrapper = QWidget()
-            wrapper.setStyleSheet(f"QWidget {{ background-color: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px; }}")
+            wrapper.setStyleSheet(
+                f"QWidget {{ background-color: {COLORS['bg_alt']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 10px; }}"
+            )
             wl = QVBoxLayout(wrapper)
-            wl.setContentsMargins(6, 6, 6, 6)
-            wl.setSpacing(4)
+            wl.setContentsMargins(8, 8, 8, 8)
+            wl.setSpacing(6)
 
             img_label = QLabel()
             img_label.setStyleSheet("border: none; background: transparent;")
@@ -63,7 +70,10 @@ class PreviewTab(QWidget):
             wl.addWidget(img_label)
 
             name_label = QLabel(entry.image_path.name)
-            name_label.setStyleSheet(f"border: none; {MUTED_LABEL_STYLE}")
+            name_label.setStyleSheet(
+                f"border: none; color: {COLORS['text_muted']}; "
+                f"font-size: 11px; background: transparent;"
+            )
             name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             name_label.setWordWrap(True)
             wl.addWidget(name_label)

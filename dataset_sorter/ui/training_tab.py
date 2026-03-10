@@ -66,8 +66,8 @@ class TrainingTab(QWidget):
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(10)
 
         # Top: Model path + output dir
         paths_layout = QGridLayout()
@@ -118,21 +118,21 @@ class TrainingTab(QWidget):
         self.cuda_label = QLabel(_cuda_status_text())
         self.cuda_label.setWordWrap(True)
         self.cuda_label.setStyleSheet(
-            f"color: {COLORS['success']}; padding: 6px 8px; "
+            f"color: {COLORS['success']}; padding: 8px 12px; "
             f"background-color: {COLORS['success_bg']}; "
-            f"border: 1px solid {COLORS['success']}; border-radius: 6px; font-size: 11px;"
+            f"border: 1px solid #1a4a35; border-radius: 8px; font-size: 11px;"
         )
         right_layout.addWidget(self.cuda_label)
 
         # Status
         self.status_label = QLabel("Ready. Configure settings and click Train.")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; padding: 4px; background: transparent;")
+        self.status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; padding: 6px; background: transparent; font-size: 12px;")
         right_layout.addWidget(self.status_label)
 
         # Loss display
         self.loss_label = QLabel("")
-        self.loss_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: 700; background: transparent;")
+        self.loss_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; background: transparent; font-family: 'JetBrains Mono', monospace;")
         right_layout.addWidget(self.loss_label)
 
         # Training log
@@ -143,7 +143,7 @@ class TrainingTab(QWidget):
         self.log_output.setFont(log_font)
         self.log_output.setStyleSheet(
             f"QTextEdit {{ background-color: {COLORS['bg']}; color: {COLORS['text']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 6px; }}"
+            f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 10px; }}"
         )
         right_layout.addWidget(self.log_output, 1)
 
@@ -153,7 +153,7 @@ class TrainingTab(QWidget):
         self.sample_label.setMinimumHeight(200)
         self.sample_label.setStyleSheet(
             f"background-color: {COLORS['surface']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 8px; color: {COLORS['text_muted']};"
+            f"border-radius: 12px; color: {COLORS['text_muted']}; font-size: 12px;"
         )
         right_layout.addWidget(self.sample_label)
 
@@ -715,12 +715,6 @@ class TrainingTab(QWidget):
 
     def _group(self, title: str) -> QGroupBox:
         g = QGroupBox(title)
-        g.setStyleSheet(
-            f"QGroupBox {{ border: 1px solid {COLORS['border']}; border-radius: 8px; "
-            f"margin-top: 12px; padding-top: 16px; background-color: {COLORS['bg_alt']}; "
-            f"color: {COLORS['accent']}; font-weight: 600; }}"
-            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}"
-        )
         return g
 
     def _muted(self, text):
