@@ -193,5 +193,6 @@ MODEL_TIMESTEP_SAMPLING: dict[str, str] = _expand_variants({
     "chroma":   "logit_normal",
 })
 
-# ── Recommended CUDA version ──────────────────────────────────────────
+# ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
+MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"

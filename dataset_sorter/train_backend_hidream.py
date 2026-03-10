@@ -171,7 +171,8 @@ class HiDreamBackend(TrainBackendBase):
         super().offload_text_encoders()
         if self.text_encoder_4 is not None:
             self.text_encoder_4.cpu()
-        torch.cuda.empty_cache()
+        from dataset_sorter.utils import empty_cache
+        empty_cache()
 
     def cleanup(self):
         """Free all resources including 4th encoder."""

@@ -34,21 +34,33 @@ from torch.utils.data import DataLoader
 from dataset_sorter.ema import EMAModel
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_dataset import CachedTrainDataset
+from dataset_sorter.utils import get_device, empty_cache, autocast_device_type
 
 log = logging.getLogger(__name__)
 
 
-def get_cuda_info() -> dict:
-    """Return CUDA/GPU diagnostic info."""
-    info = {"available": False, "version": "N/A", "device": "CPU", "vram_gb": 0}
+def get_gpu_info() -> dict:
+    """Return GPU diagnostic info (CUDA or Apple Metal MPS)."""
+    info = {"available": False, "version": "N/A", "device": "CPU", "vram_gb": 0,
+            "backend": "cpu"}
     if torch.cuda.is_available():
         info["available"] = True
+        info["backend"] = "cuda"
         info["version"] = torch.version.cuda or "Unknown"
         info["device"] = torch.cuda.get_device_name(0)
         info["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
         info["bf16_support"] = torch.cuda.is_bf16_supported()
         info["flash_sdp"] = hasattr(torch.backends.cuda, "enable_flash_sdp")
         info["cudnn"] = torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None
+        info["torch_version"] = torch.__version__
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        info["available"] = True
+        info["backend"] = "mps"
+        info["version"] = "Metal"
+        info["device"] = "Apple Silicon (MPS)"
+        info["bf16_support"] = True
+        info["flash_sdp"] = False
+        info["cudnn"] = None
         info["torch_version"] = torch.__version__
     return info
 
@@ -230,15 +242,17 @@ class Trainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
         self.state = TrainingState()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = get_device()
 
         # Pick dtype
-        if config.mixed_precision == "bf16" and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        _is_cuda = self.device.type == "cuda"
+        _is_mps = self.device.type == "mps"
+        if config.mixed_precision == "bf16" and (_is_mps or (_is_cuda and torch.cuda.is_bf16_supported())):
             self.dtype = torch.bfloat16
         elif config.mixed_precision == "fp16":
             self.dtype = torch.float16
         else:
-            self.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+            self.dtype = torch.bfloat16 if (_is_mps or (_is_cuda and torch.cuda.is_bf16_supported())) else torch.float16
 
         self.backend = None
         self.dataset = None
@@ -297,8 +311,8 @@ class Trainer:
         if config.train_text_encoder_2 and self.backend.supports_dual_te:
             self.backend.unfreeze_text_encoder(2)
 
-        # ── 5. GradScaler for fp16 (not needed for bf16) ──
-        if self.dtype == torch.float16:
+        # ── 5. GradScaler for fp16 (not needed for bf16; CUDA only) ──
+        if self.dtype == torch.float16 and self.device.type == "cuda":
             self.grad_scaler = torch.amp.GradScaler("cuda")
 
         if progress_fn:
@@ -594,7 +608,8 @@ class Trainer:
         # ── Delegate to backend training step (handles model-specific logic) ──
         bsz = latents.shape[0]
 
-        with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=self.device.type == "cuda"):
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             return self.backend.training_step(latents, te_out, bsz)
 
     def _save_checkpoint(self, name: str):
@@ -940,5 +955,4 @@ class Trainer:
         self.dataset = None
         self.grad_scaler = None
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()

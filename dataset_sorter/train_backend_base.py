@@ -31,6 +31,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dataset_sorter.models import TrainingConfig
+from dataset_sorter.utils import empty_cache, autocast_device_type
 
 log = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ class TrainBackendBase(ABC):
                 log.warning(f"torch.compile() failed: {e}")
 
         # 3. SDPA / xFormers / Flash Attention
-        if config.sdpa:
+        if config.sdpa and self.device.type == "cuda":
             torch.backends.cuda.enable_flash_sdp(True)
             torch.backends.cuda.enable_mem_efficient_sdp(True)
 
@@ -215,8 +216,8 @@ class TrainBackendBase(ABC):
             except Exception:
                 pass
 
-        # 4. cuDNN benchmark
-        if config.cudnn_benchmark:
+        # 4. cuDNN benchmark (CUDA only)
+        if config.cudnn_benchmark and self.device.type == "cuda":
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -297,14 +298,14 @@ class TrainBackendBase(ABC):
         """Move VAE to CPU after latent caching to free VRAM."""
         if self.vae is not None:
             self.vae.cpu()
-            torch.cuda.empty_cache()
+            empty_cache()
 
     def offload_text_encoders(self):
         """Move text encoders to CPU after caching to free VRAM."""
         for te in (self.text_encoder, self.text_encoder_2, self.text_encoder_3):
             if te is not None:
                 te.cpu()
-        torch.cuda.empty_cache()
+        empty_cache()
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
@@ -337,7 +338,8 @@ class TrainBackendBase(ABC):
         added_cond = self.get_added_cond(batch_size, pooled=pooled)
 
         # Forward pass with autocast for speed
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             fwd_kwargs = {}
             if added_cond is not None:
                 fwd_kwargs["added_cond_kwargs"] = added_cond
@@ -435,5 +437,4 @@ class TrainBackendBase(ABC):
                 setattr(self, attr, None)
         self._cached_time_ids = None
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()

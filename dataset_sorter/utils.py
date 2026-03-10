@@ -51,9 +51,38 @@ def validate_paths(source: str, output: str) -> tuple[bool, str]:
 
 
 def has_gpu() -> bool:
-    """Check if a CUDA GPU is available (for accelerated image loading)."""
+    """Check if a GPU is available (CUDA on PC/Linux, MPS on Apple Silicon)."""
     try:
         import torch
-        return torch.cuda.is_available()
-    except ImportError:
+        return torch.cuda.is_available() or torch.backends.mps.is_available()
+    except (ImportError, AttributeError):
         return False
+
+
+def get_device() -> "torch.device":
+    """Return the best available torch device (cuda > mps > cpu)."""
+    import torch
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def empty_cache() -> None:
+    """Clear GPU memory cache for the active accelerator."""
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+def autocast_device_type() -> str:
+    """Return the correct device_type string for torch.autocast."""
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "cpu"  # MPS does not support autocast; fall back to CPU autocast
+    return "cpu"

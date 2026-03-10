@@ -31,23 +31,28 @@ from dataset_sorter.ui.theme import (
 )
 
 
-def _cuda_status_text() -> str:
-    """Build a CUDA status string for the UI."""
+def _gpu_status_text() -> str:
+    """Build a GPU status string for the UI (CUDA or Apple Metal)."""
     try:
         import torch
-        if not torch.cuda.is_available():
-            return "CUDA: Not available (CPU only — training will be very slow)"
-        name = torch.cuda.get_device_name(0)
-        vram = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
-        cuda_ver = torch.version.cuda or "?"
-        bf16 = torch.cuda.is_bf16_supported()
-        return (
-            f"GPU: {name} ({vram} GB)  |  CUDA {cuda_ver}  |  "
-            f"PyTorch {torch.__version__}  |  "
-            f"bf16: {'Yes' if bf16 else 'No (fp16 only)'}"
-        )
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            vram = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
+            cuda_ver = torch.version.cuda or "?"
+            bf16 = torch.cuda.is_bf16_supported()
+            return (
+                f"GPU: {name} ({vram} GB)  |  CUDA {cuda_ver}  |  "
+                f"PyTorch {torch.__version__}  |  "
+                f"bf16: {'Yes' if bf16 else 'No (fp16 only)'}"
+            )
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return (
+                f"GPU: Apple Metal (MPS)  |  PyTorch {torch.__version__}  |  "
+                f"bf16: Yes  |  Note: some ops may fall back to CPU"
+            )
+        return "GPU: Not available (CPU only — training will be very slow)"
     except Exception:
-        return "CUDA: Detection failed (torch not installed?)"
+        return "GPU: Detection failed (torch not installed?)"
 
 
 class TrainingTab(QWidget):
@@ -115,7 +120,7 @@ class TrainingTab(QWidget):
         right_layout.addWidget(self.train_progress)
 
         # CUDA info
-        self.cuda_label = QLabel(_cuda_status_text())
+        self.cuda_label = QLabel(_gpu_status_text())
         self.cuda_label.setWordWrap(True)
         self.cuda_label.setStyleSheet(
             f"color: {COLORS['success']}; padding: 8px 12px; "

@@ -665,13 +665,14 @@ def recommend(
     config.save_last_n_checkpoints = 3
     config.save_precision = "bf16"
 
-    # --- CUDA & memory optimizations ---
+    # --- GPU & memory optimizations ---
     config.mixed_precision = "bf16"
     config.sdpa = True              # PyTorch 2.0+ native SDPA (best default)
     config.xformers = False         # Only if SDPA unavailable
     config.flash_attention = False  # Requires manual install
     config.torch_compile = False    # Experimental, can be faster on Ampere+
-    config.cudnn_benchmark = True   # Auto-tune convolution algorithms
+    # cuDNN benchmark: CUDA only, harmless on MPS (guarded at runtime)
+    config.cudnn_benchmark = True
 
     # fp8 base model: saves ~50% VRAM, needed for large models on limited VRAM
     if is_flux and vram_gb <= 16:
@@ -912,8 +913,15 @@ def _build_notes(
             "LoRA+ tip: set lora_B LR to 16x lora_A LR for faster convergence."
         )
 
-    # CUDA recommendation
-    notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
+    # GPU recommendation
+    try:
+        import torch
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            notes.append("Apple Metal (MPS) detected. PyTorch 2.1+ recommended for best performance.")
+        else:
+            notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
+    except ImportError:
+        notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
 
     return notes
 
@@ -1065,8 +1073,8 @@ def format_config(config: TrainingConfig) -> str:
         lines.append(f"    CPU offload      {'Yes (saves ~2-4 GB VRAM)' if config.ema_cpu_offload else 'No (GPU)'}")
     lines.append("")
 
-    # ── Memory & CUDA ──
-    lines.append(f"  -- Memory & CUDA {thin[18:]}")
+    # ── Memory & GPU ──
+    lines.append(f"  -- Memory & GPU  {thin[18:]}")
     lines.append(f"    Mixed precision       {config.mixed_precision}")
     lines.append(f"    Gradient checkpoint   {'Yes' if config.gradient_checkpointing else 'No'}")
     lines.append(f"    Cache latents         {'Yes' if config.cache_latents else 'No'}")
@@ -1233,7 +1241,7 @@ def export_onetrainer_toml(config: TrainingConfig) -> str:
         lines.append(f"clip_skip = {config.clip_skip}")
     lines.append("")
 
-    lines.append("[cuda]")
+    lines.append("[gpu]")
     lines.append(f"sdpa = {str(config.sdpa).lower()}")
     lines.append(f"xformers = {str(config.xformers).lower()}")
     lines.append(f"flash_attention = {str(config.flash_attention).lower()}")
@@ -1313,7 +1321,7 @@ def export_kohya_json(config: TrainingConfig) -> str:
         "random_crop": config.random_crop,
         "flip_aug": config.flip_augmentation,
         "color_aug": config.color_augmentation,
-        # CUDA
+        # GPU optimizations
         "sdpa": config.sdpa,
         "xformers": config.xformers,
         "cudnn_benchmark": config.cudnn_benchmark,

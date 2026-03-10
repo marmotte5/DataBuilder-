@@ -116,12 +116,12 @@ class MainWindow(QMainWindow):
         self.gpu_checkbox = QCheckBox("GPU validation")
         self.gpu_checkbox.setToolTip(
             "Use GPU to validate images during scan (requires torch + torchvision). "
-            "Catches corrupt files early."
+            "Catches corrupt files early. Works with CUDA and Apple Metal."
         )
         self.gpu_checkbox.setEnabled(self._gpu_available)
         if not self._gpu_available:
             self.gpu_checkbox.setToolTip(
-                "GPU not available. Install torch with CUDA support to enable."
+                "GPU not available. Install torch with CUDA (PC/Linux) or MPS (Mac) support to enable."
             )
         scan_bar.addWidget(self.gpu_checkbox)
 
