@@ -806,7 +806,10 @@ class Trainer:
                 "optimizer": self.config.optimizer,
                 "lora_rank": self.config.lora_rank,
             }
-            info_path.write_text(json.dumps(info, indent=2))
+            try:
+                info_path.write_text(json.dumps(info, indent=2))
+            except OSError as e:
+                log.warning(f"Could not write project.json: {e}")
 
         log.info(f"Project folders ready at {output_dir}")
 
@@ -864,7 +867,10 @@ class Trainer:
         for k, v in config_dict.items():
             if isinstance(v, Path):
                 config_dict[k] = str(v)
-        config_path.write_text(json.dumps(config_dict, indent=2, default=str))
+        try:
+            config_path.write_text(json.dumps(config_dict, indent=2, default=str))
+        except OSError as e:
+            log.warning(f"Could not write backup config.json: {e}")
 
         log.info(f"Backup saved to {backup_dir}")
         self.state.phase = "training"
