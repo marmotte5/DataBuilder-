@@ -19,9 +19,7 @@ Supports: SDXL LoRA, SDXL Full, SD 1.5 LoRA/Full, Pony, Z-Image
 """
 
 import gc
-import math
-import os
-import time
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -33,6 +31,23 @@ from torch.utils.data import DataLoader
 from dataset_sorter.ema import EMAModel
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_dataset import CachedTrainDataset
+
+log = logging.getLogger(__name__)
+
+
+def get_cuda_info() -> dict:
+    """Return CUDA/GPU diagnostic info."""
+    info = {"available": False, "version": "N/A", "device": "CPU", "vram_gb": 0}
+    if torch.cuda.is_available():
+        info["available"] = True
+        info["version"] = torch.version.cuda or "Unknown"
+        info["device"] = torch.cuda.get_device_name(0)
+        info["vram_gb"] = round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)
+        info["bf16_support"] = torch.cuda.is_bf16_supported()
+        info["flash_sdp"] = hasattr(torch.backends.cuda, "enable_flash_sdp")
+        info["cudnn"] = torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None
+        info["torch_version"] = torch.__version__
+    return info
 
 
 @dataclass
@@ -263,6 +278,8 @@ class Trainer:
         is_lora = model_type.endswith("_lora")
         if is_lora:
             self._setup_lora()
+            # Update pipeline reference so sampling uses LoRA weights
+            self.pipeline.unet = self.unet
         else:
             self.unet.to(self.device, dtype=self.dtype)
             self.unet.train()
@@ -340,8 +357,9 @@ class Trainer:
 
         self.optimizer = _get_optimizer(config, train_params)
 
-        # Steps calculation
-        steps_per_epoch = max(len(self.dataset) // config.batch_size, 1)
+        # Steps calculation (accounts for gradient accumulation)
+        batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
+        steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)
         total_steps = steps_per_epoch * config.epochs
         if config.max_train_steps > 0:
             total_steps = min(total_steps, config.max_train_steps)
@@ -727,13 +745,18 @@ class Trainer:
         self.state.running = False
 
     def cleanup(self):
-        """Free all resources."""
+        """Free all resources (safe even if setup() failed partway)."""
         self.state.phase = "idle"
-        if self.dataset:
-            self.dataset.clear_caches()
-        del self.pipeline, self.unet, self.vae
-        del self.text_encoder, self.text_encoder_2
-        del self.optimizer, self.scheduler
+        dataset = getattr(self, "dataset", None)
+        if dataset is not None:
+            dataset.clear_caches()
+        for attr in ("pipeline", "unet", "vae", "text_encoder", "text_encoder_2",
+                      "optimizer", "scheduler", "ema_model", "dataset"):
+            if hasattr(self, attr):
+                try:
+                    delattr(self, attr)
+                except Exception:
+                    pass
         self.pipeline = None
         self.unet = None
         self.vae = None

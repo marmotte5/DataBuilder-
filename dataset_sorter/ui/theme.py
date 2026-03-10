@@ -37,13 +37,13 @@ def get_stylesheet() -> str:
         font-size: 13px;
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
-    QLineEdit, QSpinBox, QComboBox {{
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {c['input_bg']}; color: {c['text']};
         border: 1px solid {c['border']}; border-radius: 6px;
         padding: 6px 10px; min-height: 20px;
         selection-background-color: {c['accent']};
     }}
-    QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border-color: {c['accent']}; }}
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {c['accent']}; }}
     QLineEdit::placeholder {{ color: {c['text_muted']}; }}
     QComboBox::drop-down {{ border: none; padding-right: 8px; }}
     QComboBox QAbstractItemView {{
@@ -51,10 +51,12 @@ def get_stylesheet() -> str:
         border: 1px solid {c['border']}; selection-background-color: {c['accent']};
         padding: 4px;
     }}
-    QSpinBox::up-button, QSpinBox::down-button {{
+    QSpinBox::up-button, QSpinBox::down-button,
+    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
         background-color: {c['surface']}; border: none; width: 18px;
     }}
-    QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+    QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
         background-color: {c['surface_hover']};
     }}
     QPushButton {{

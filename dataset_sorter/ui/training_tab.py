@@ -30,11 +30,32 @@ from dataset_sorter.ui.theme import (
 )
 
 
+def _cuda_status_text() -> str:
+    """Build a CUDA status string for the UI."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return "CUDA: Not available (CPU only — training will be very slow)"
+        name = torch.cuda.get_device_name(0)
+        vram = round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)
+        cuda_ver = torch.version.cuda or "?"
+        bf16 = torch.cuda.is_bf16_supported()
+        return (
+            f"GPU: {name} ({vram} GB)  |  CUDA {cuda_ver}  |  "
+            f"PyTorch {torch.__version__}  |  "
+            f"bf16: {'Yes' if bf16 else 'No (fp16 only)'}"
+        )
+    except Exception:
+        return "CUDA: Detection failed (torch not installed?)"
+
+
 class TrainingTab(QWidget):
     """Full training configuration and execution tab."""
 
     # Emitted when user clicks Train to request dataset from main window
     request_training_data = pyqtSignal()
+    # Emitted when user clicks Apply Recommendations (config only, no training)
+    request_recommendations = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,6 +112,16 @@ class TrainingTab(QWidget):
         self.train_progress = QProgressBar()
         self.train_progress.setVisible(False)
         right_layout.addWidget(self.train_progress)
+
+        # CUDA info
+        self.cuda_label = QLabel(_cuda_status_text())
+        self.cuda_label.setWordWrap(True)
+        self.cuda_label.setStyleSheet(
+            f"color: {COLORS['success']}; padding: 6px 8px; "
+            f"background-color: {COLORS['success_bg']}; "
+            f"border: 1px solid {COLORS['success']}; border-radius: 6px; font-size: 11px;"
+        )
+        right_layout.addWidget(self.cuda_label)
 
         # Status
         self.status_label = QLabel("Ready. Configure settings and click Train.")
@@ -892,8 +923,8 @@ class TrainingTab(QWidget):
     # ── Training Control ──────────────────────────────────────────────
 
     def _apply_recommendations(self):
-        """Apply config from the Recommendations tab."""
-        self.request_training_data.emit()
+        """Apply config from the Recommendations tab (does NOT start training)."""
+        self.request_recommendations.emit()
 
     def _start_training(self):
         """Validate and start training."""

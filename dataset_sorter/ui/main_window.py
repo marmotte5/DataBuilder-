@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
+        self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable/disable data-dependent controls during scan/export."""
@@ -666,15 +667,19 @@ class MainWindow(QMainWindow):
     # -- Training tab --
 
     def _on_training_data_request(self):
-        """Provide dataset + recommendations to training tab."""
-        # Apply recommendations config if available
-        if hasattr(self.reco_tab, '_last_config') and self.reco_tab._last_config is not None:
-            self.training_tab.apply_config(self.reco_tab._last_config)
-
+        """Provide dataset to training tab and start training."""
         if self.entries:
             self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
         else:
             self.statusBar().showMessage("No dataset loaded. Scan first.")
+
+    def _on_apply_reco_to_training(self):
+        """Apply recommendations config to training tab (without starting training)."""
+        if hasattr(self.reco_tab, '_last_config') and self.reco_tab._last_config is not None:
+            self.training_tab.apply_config(self.reco_tab._last_config)
+            self.statusBar().showMessage("Recommendations applied to Training tab.")
+        else:
+            self.statusBar().showMessage("No recommendations yet. Click Recalculate first.")
 
     # -- Image tab --
 

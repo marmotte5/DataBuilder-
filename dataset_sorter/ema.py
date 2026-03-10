@@ -5,7 +5,6 @@ When cpu_offload=True, EMA weights live in system RAM to save ~2-4 GB VRAM.
 Transfer to GPU only when needed (saving checkpoints / generating samples).
 """
 
-import copy
 from typing import Iterable
 
 import torch
