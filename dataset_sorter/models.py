@@ -153,6 +153,16 @@ class TrainingConfig:
     # ── Async Optimizer Step ─────────────────────────────────────────
     async_optimizer_step: bool = False  # Overlap optimizer.step() with next forward
 
+    # ── Curriculum Learning ──────────────────────────────────────────
+    curriculum_learning: bool = False       # Loss-based adaptive image sampling
+    curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)
+    curriculum_warmup_epochs: int = 1      # Uniform sampling before enabling curriculum
+
+    # ── Per-Timestep EMA Sampling ────────────────────────────────────
+    timestep_ema_sampling: bool = False    # Skip well-learned timestep buckets
+    timestep_ema_skip_threshold: float = 0.3  # Buckets below threshold*mean_loss get downweighted
+    timestep_ema_num_buckets: int = 20     # Number of timestep buckets for EMA tracking
+
     # ── Regularization ─────────────────────────────────────────────────
     prior_loss_weight: float = 1.0  # DreamBooth prior preservation
     max_grad_norm: float = 1.0      # Gradient clipping

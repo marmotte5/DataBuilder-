@@ -68,6 +68,7 @@ class TrainBackendBase(ABC):
         self._compiled = False
         self._speed_sampler = None   # SpeeD timestep sampler (lazy init)
         self._token_weight_mask: Optional[torch.Tensor] = None  # Per-step token weights
+        self._timestep_ema_sampler = None  # Per-timestep EMA sampler (set by trainer)
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -361,8 +362,10 @@ class TrainBackendBase(ABC):
                 device=latents.device, dtype=latents.dtype,
             )
 
-        # Sample timesteps (SpeeD asymmetric or uniform)
-        if config.timestep_sampling == "speed" or config.speed_asymmetric:
+        # Sample timesteps (per-timestep EMA, SpeeD asymmetric, or uniform)
+        if self._timestep_ema_sampler is not None:
+            timesteps = self._timestep_ema_sampler.sample_timesteps(batch_size)
+        elif config.timestep_sampling == "speed" or config.speed_asymmetric:
             if self._speed_sampler is None:
                 from dataset_sorter.speed_optimizations import SpeedTimestepSampler
                 num_ts = self.noise_scheduler.config.num_train_timesteps
@@ -410,6 +413,15 @@ class TrainBackendBase(ABC):
         if config.speed_change_aware and self._speed_sampler is not None:
             speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
             loss = loss * speed_weights
+
+        # Per-timestep EMA: update tracker and apply adaptive weighting
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
 
         # Token-level caption weighting
         if config.token_weighting_enabled and hasattr(self, '_token_weight_mask') and self._token_weight_mask is not None:

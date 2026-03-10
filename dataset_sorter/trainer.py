@@ -187,6 +187,10 @@ class Trainer:
         self._async_optimizer = None
         # CUDA graph wrapper
         self._cuda_graph = None
+        # Curriculum learning
+        self._curriculum_sampler = None
+        # Timestep EMA
+        self._timestep_ema = None
 
     def setup(
         self,
@@ -376,6 +380,28 @@ class Trainer:
             self._attention_debugger.attach(self.backend.unet)
             log.info("Attention map debugger enabled")
 
+        # ── 14. Curriculum learning setup ──
+        if config.curriculum_learning:
+            from dataset_sorter.curriculum_learning import CurriculumSampler
+            self._curriculum_sampler = CurriculumSampler(
+                num_images=len(image_paths),
+                temperature=config.curriculum_temperature,
+                warmup_epochs=config.curriculum_warmup_epochs,
+            )
+            log.info("Curriculum learning enabled (loss-based adaptive sampling)")
+
+        # ── 15. Per-timestep EMA sampling setup ──
+        if config.timestep_ema_sampling and self.backend.noise_scheduler is not None:
+            from dataset_sorter.curriculum_learning import TimestepEMASampler
+            num_ts = self.backend.noise_scheduler.config.num_train_timesteps
+            self._timestep_ema = TimestepEMASampler(
+                num_train_timesteps=num_ts,
+                num_buckets=config.timestep_ema_num_buckets,
+                skip_threshold=config.timestep_ema_skip_threshold,
+                device=self.device,
+            )
+            log.info(f"Per-timestep EMA sampling enabled ({config.timestep_ema_num_buckets} buckets)")
+
         if progress_fn:
             progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
@@ -489,6 +515,11 @@ class Trainer:
                 break
 
             self.state.epoch = epoch
+
+            # Curriculum learning: epoch callback
+            if self._curriculum_sampler is not None:
+                self._curriculum_sampler.on_epoch_start()
+
             if progress_fn:
                 progress_fn(
                     self.state.global_step, self.total_steps,
@@ -663,12 +694,31 @@ class Trainer:
                 )
                 self.backend._token_weight_mask = weight_mask.unsqueeze(0)
 
+        # ── Timestep EMA: pass sampler to backend for adaptive timestep selection ──
+        if self._timestep_ema is not None:
+            self.backend._timestep_ema_sampler = self._timestep_ema
+
         # ── Delegate to backend training step (handles model-specific logic) ──
         bsz = latents.shape[0]
 
         _act = autocast_device_type()
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
-            return self.backend.training_step(latents, te_out, bsz)
+            loss = self.backend.training_step(latents, te_out, bsz)
+
+        # ── Curriculum learning: update per-image loss tracking ──
+        if self._curriculum_sampler is not None and "index" in batch:
+            indices = batch["index"]
+            if isinstance(indices, torch.Tensor):
+                indices = indices.tolist()
+            elif isinstance(indices, (list, tuple)):
+                indices = [int(i) for i in indices]
+            # Use the scalar loss for all images in this batch
+            loss_val = loss.detach().item()
+            self._curriculum_sampler.update_loss(
+                indices, [loss_val] * len(indices),
+            )
+
+        return loss
 
     def _save_checkpoint(self, name: str):
         """Save checkpoint to the checkpoints subfolder."""

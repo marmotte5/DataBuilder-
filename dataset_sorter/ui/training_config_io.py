@@ -90,6 +90,12 @@ class TrainingConfigIOMixin:
         config.async_dataload = self.async_data_check.isChecked()
         config.cuda_graph_training = self.cuda_graph_check.isChecked()
         config.async_optimizer_step = self.async_opt_check.isChecked()
+        config.curriculum_learning = self.curriculum_check.isChecked()
+        config.curriculum_temperature = self.curriculum_temp_spin.value()
+        config.curriculum_warmup_epochs = self.curriculum_warmup_spin.value()
+        config.timestep_ema_sampling = self.timestep_ema_check.isChecked()
+        config.timestep_ema_skip_threshold = self.timestep_ema_threshold_spin.value()
+        config.timestep_ema_num_buckets = self.timestep_ema_buckets_spin.value()
         config.timestep_sampling = self.timestep_combo.currentData() or "uniform"
         config.model_prediction_type = self.prediction_combo.currentData() or "epsilon"
         config.gradient_checkpointing = self.grad_ckpt_check.isChecked()
@@ -232,6 +238,12 @@ class TrainingConfigIOMixin:
         self.async_data_check.setChecked(config.async_dataload)
         self.cuda_graph_check.setChecked(config.cuda_graph_training)
         self.async_opt_check.setChecked(config.async_optimizer_step)
+        self.curriculum_check.setChecked(config.curriculum_learning)
+        self.curriculum_temp_spin.setValue(config.curriculum_temperature)
+        self.curriculum_warmup_spin.setValue(config.curriculum_warmup_epochs)
+        self.timestep_ema_check.setChecked(config.timestep_ema_sampling)
+        self.timestep_ema_threshold_spin.setValue(config.timestep_ema_skip_threshold)
+        self.timestep_ema_buckets_spin.setValue(config.timestep_ema_num_buckets)
         for i in range(self.timestep_combo.count()):
             if self.timestep_combo.itemData(i) == config.timestep_sampling:
                 self.timestep_combo.setCurrentIndex(i)
