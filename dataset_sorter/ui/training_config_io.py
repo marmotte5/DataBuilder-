@@ -88,6 +88,8 @@ class TrainingConfigIOMixin:
         config.mebp_enabled = self.mebp_check.isChecked()
         config.approx_vjp = self.vjp_check.isChecked()
         config.async_dataload = self.async_data_check.isChecked()
+        config.cuda_graph_training = self.cuda_graph_check.isChecked()
+        config.async_optimizer_step = self.async_opt_check.isChecked()
         config.timestep_sampling = self.timestep_combo.currentData() or "uniform"
         config.model_prediction_type = self.prediction_combo.currentData() or "epsilon"
         config.gradient_checkpointing = self.grad_ckpt_check.isChecked()
@@ -228,6 +230,8 @@ class TrainingConfigIOMixin:
         self.mebp_check.setChecked(config.mebp_enabled)
         self.vjp_check.setChecked(config.approx_vjp)
         self.async_data_check.setChecked(config.async_dataload)
+        self.cuda_graph_check.setChecked(config.cuda_graph_training)
+        self.async_opt_check.setChecked(config.async_optimizer_step)
         for i in range(self.timestep_combo.count()):
             if self.timestep_combo.itemData(i) == config.timestep_sampling:
                 self.timestep_combo.setCurrentIndex(i)

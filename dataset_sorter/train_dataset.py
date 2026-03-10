@@ -62,8 +62,10 @@ class CachedTrainDataset(Dataset):
         # Caches (populated by cache_latents / cache_text_encoder)
         self._latent_cache: dict[int, torch.Tensor] = {}
         self._te_cache: dict[int, tuple] = {}
+        self._token_id_cache: dict[int, tuple] = {}  # Pre-tokenized caption IDs
         self._latents_cached = False
         self._te_cached = False
+        self._tokens_cached = False
 
         # Image transforms — BILINEAR is 2-3x faster than LANCZOS with negligible
         # quality difference for training (latents are compressed by 8x anyway)
@@ -134,6 +136,10 @@ class CachedTrainDataset(Dataset):
         # --- Text encoder cache ---
         if self._te_cached and idx in self._te_cache:
             result["te_cache"] = self._te_cache[idx]
+
+        # --- Pre-tokenized caption IDs (skip tokenizer calls during training) ---
+        if self._tokens_cached and idx in self._token_id_cache:
+            result["token_ids"] = self._token_id_cache[idx]
 
         result["index"] = idx
         return result
@@ -281,6 +287,9 @@ class CachedTrainDataset(Dataset):
                 hidden_states_2 = None
                 pooled_2 = None
 
+                # Cache tokenized IDs (avoids re-tokenization every step)
+                token_id_result = (tokens.cpu(),)
+
                 # Second text encoder (SDXL)
                 if tokenizer_2 is not None and text_encoder_2 is not None:
                     tokens_2 = tokenizer_2(
@@ -298,6 +307,7 @@ class CachedTrainDataset(Dataset):
                     )
 
                     te_result = (hidden_states, pooled, hidden_states_2, pooled_2)
+                    token_id_result = (tokens.cpu(), tokens_2.cpu())
 
                 # Third text encoder (SD3 / SD 3.5 — T5-XXL)
                 if tokenizer_3 is not None and text_encoder_3 is not None:
@@ -311,9 +321,11 @@ class CachedTrainDataset(Dataset):
                     hidden_states_3 = encoder_output_3.last_hidden_state.cpu()
 
                     te_result = (hidden_states, pooled, hidden_states_2, pooled_2, hidden_states_3)
+                    token_id_result = (tokens.cpu(), tokens_2.cpu() if tokenizer_2 else None, tokens_3.cpu())
 
             for idx in indices:
                 self._te_cache[idx] = te_result
+                self._token_id_cache[idx] = token_id_result
 
             if to_disk and self.cache_dir:
                 cache_path = self.cache_dir / f"te_{cache_key}.pt"
@@ -324,6 +336,8 @@ class CachedTrainDataset(Dataset):
                 progress_fn(processed, len(self))
 
         self._te_cached = True
+        self._tokens_cached = True
+        log.info(f"Cached tokenized IDs for {len(unique_captions)} unique captions")
 
     def _latent_disk_path(self, idx: int) -> Path:
         """Generate disk cache path for a latent."""
@@ -334,5 +348,7 @@ class CachedTrainDataset(Dataset):
         """Free cached tensors from RAM."""
         self._latent_cache.clear()
         self._te_cache.clear()
+        self._token_id_cache.clear()
         self._latents_cached = False
         self._te_cached = False
+        self._tokens_cached = False

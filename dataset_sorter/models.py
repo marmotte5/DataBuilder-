@@ -146,6 +146,13 @@ class TrainingConfig:
     async_dataload: bool = True         # Asynchronous GPU prefetching
     prefetch_factor: int = 3            # Batches to prefetch ahead
 
+    # ── CUDA Graph Training ──────────────────────────────────────────
+    cuda_graph_training: bool = False   # Wrap training step in CUDA graph
+    cuda_graph_warmup: int = 11         # Warmup steps before graph capture
+
+    # ── Async Optimizer Step ─────────────────────────────────────────
+    async_optimizer_step: bool = False  # Overlap optimizer.step() with next forward
+
     # ── Regularization ─────────────────────────────────────────────────
     prior_loss_weight: float = 1.0  # DreamBooth prior preservation
     max_grad_norm: float = 1.0      # Gradient clipping

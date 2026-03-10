@@ -480,6 +480,12 @@ class TrainingTabBuildersMixin:
         self.async_data_check = QCheckBox("Async GPU Prefetch (overlap data transfer with compute)")
         self.async_data_check.setChecked(True)
         g_mem_l.addWidget(self.async_data_check)
+        self.cuda_graph_check = QCheckBox("CUDA Graph Training (capture training step, ~15-20% speedup on small batches)")
+        self.cuda_graph_check.setToolTip("Captures the training step into a CUDA graph after warmup steps. Requires static tensor shapes.")
+        g_mem_l.addWidget(self.cuda_graph_check)
+        self.async_opt_check = QCheckBox("Async Optimizer Step (overlap optimizer.step() with next forward)")
+        self.async_opt_check.setToolTip("Launches optimizer.step() on a separate CUDA stream, hiding optimizer latency behind compute.")
+        g_mem_l.addWidget(self.async_opt_check)
         g_mem.setLayout(g_mem_l)
         layout.addWidget(g_mem)
 

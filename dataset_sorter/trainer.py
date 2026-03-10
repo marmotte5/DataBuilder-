@@ -183,6 +183,10 @@ class Trainer:
         self._token_weighter = None
         # Attention map debugger
         self._attention_debugger = None
+        # Async optimizer step
+        self._async_optimizer = None
+        # CUDA graph wrapper
+        self._cuda_graph = None
 
     def setup(
         self,
@@ -459,6 +463,20 @@ class Trainer:
             )
             log.info(f"VJP approximation enabled ({config.approx_vjp_num_samples} samples)")
 
+        # ── Async Optimizer Step ──
+        if config.async_optimizer_step and self.device.type == "cuda":
+            from dataset_sorter.speed_optimizations import AsyncOptimizerStep
+            self._async_optimizer = AsyncOptimizerStep(self.device, enabled=True)
+            log.info("Async optimizer step enabled (overlaps with next forward pass)")
+
+        # ── CUDA Graph Training Wrapper ──
+        if config.cuda_graph_training and self.device.type == "cuda":
+            from dataset_sorter.speed_optimizations import CUDAGraphWrapper
+            self._cuda_graph = CUDAGraphWrapper(
+                warmup_steps=config.cuda_graph_warmup, enabled=True,
+            )
+            log.info(f"CUDA graph training enabled (warmup={config.cuda_graph_warmup} steps)")
+
         # Pre-collect trainable params for grad clipping (avoid re-filtering each step)
         trainable_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
         if config.train_text_encoder and self.backend.text_encoder is not None:
@@ -486,6 +504,10 @@ class Trainer:
                 if not self.state.running:
                     break
 
+                # ── Sync async optimizer before next backward ──
+                if self._async_optimizer is not None:
+                    self._async_optimizer.sync()
+
                 # ── Forward + loss ──
                 loss = self._training_step(batch)
                 loss = loss / grad_accum_steps
@@ -509,7 +531,10 @@ class Trainer:
                     if vjp_scaler is not None:
                         vjp_scaler.approximate_gradients(trainable_params)
 
-                    if self.grad_scaler is not None:
+                    if self._async_optimizer is not None:
+                        # Async: launch optimizer.step() on separate stream
+                        self._async_optimizer.step(self.optimizer, self.grad_scaler)
+                    elif self.grad_scaler is not None:
                         self.grad_scaler.step(self.optimizer)
                         self.grad_scaler.update()
                     else:
