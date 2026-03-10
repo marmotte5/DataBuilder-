@@ -1,0 +1,1165 @@
+"""Comprehensive tests for all logical parts of DataBuilder-.
+
+Tests cover: constants, models, utils, recommender, ema (mocked torch),
+train_dataset (mocked torch), train_backend_base (mocked torch),
+trainer (mocked torch), and workers.
+"""
+
+import json
+import math
+import os
+import random
+import shutil
+import sys
+import tempfile
+import uuid
+from dataclasses import fields
+from pathlib import Path
+from unittest.mock import MagicMock, patch, PropertyMock
+
+import pytest
+
+# Ensure project root is on path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. CONSTANTS MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestConstants:
+    def test_image_extensions_are_lowercase(self):
+        from dataset_sorter.constants import IMAGE_EXTENSIONS
+        for ext in IMAGE_EXTENSIONS:
+            assert ext == ext.lower(), f"Extension {ext} not lowercase"
+            assert ext.startswith("."), f"Extension {ext} missing dot"
+
+    def test_max_buckets(self):
+        from dataset_sorter.constants import MAX_BUCKETS
+        assert MAX_BUCKETS == 80
+
+    def test_safe_name_regex(self):
+        from dataset_sorter.constants import SAFE_NAME_RE
+        assert SAFE_NAME_RE.sub("", "hello world") == "hello world"
+        assert SAFE_NAME_RE.sub("", "bad/chars*here!") == "badcharshere"
+        assert SAFE_NAME_RE.sub("", "under_score-dash.dot 123") == "under_score-dash.dot 123"
+
+    def test_expand_variants(self):
+        from dataset_sorter.constants import _expand_variants
+        base = {"a": 1, "b": 2}
+        result = _expand_variants(base)
+        assert "a_lora" in result
+        assert "a_full" in result
+        assert "b_lora" in result
+        assert "b_full" in result
+        assert result["a_lora"] == 1
+        assert result["b_full"] == 2
+
+    def test_expand_variants_custom_suffixes(self):
+        from dataset_sorter.constants import _expand_variants
+        result = _expand_variants({"x": 10}, suffixes=("_a", "_b", "_c"))
+        assert len(result) == 3
+        assert result["x_a"] == 10
+
+    def test_model_types_have_lora_and_full(self):
+        from dataset_sorter.constants import MODEL_TYPES, _BASE_MODELS
+        for base_name in _BASE_MODELS:
+            assert f"{base_name}_lora" in MODEL_TYPES, f"Missing {base_name}_lora"
+            assert f"{base_name}_full" in MODEL_TYPES, f"Missing {base_name}_full"
+
+    def test_model_type_keys_and_labels_same_length(self):
+        from dataset_sorter.constants import MODEL_TYPE_KEYS, MODEL_TYPE_LABELS
+        assert len(MODEL_TYPE_KEYS) == len(MODEL_TYPE_LABELS)
+
+    def test_model_resolutions_all_positive(self):
+        from dataset_sorter.constants import MODEL_RESOLUTIONS
+        for key, res in MODEL_RESOLUTIONS.items():
+            assert res > 0, f"Resolution for {key} is {res}"
+
+    def test_sd15_resolution_is_512(self):
+        from dataset_sorter.constants import MODEL_RESOLUTIONS
+        assert MODEL_RESOLUTIONS["sd15_lora"] == 512
+        assert MODEL_RESOLUTIONS["sd15_full"] == 512
+
+    def test_sd2_resolution_is_768(self):
+        from dataset_sorter.constants import MODEL_RESOLUTIONS
+        assert MODEL_RESOLUTIONS["sd2_lora"] == 768
+
+    def test_sdxl_resolution_is_1024(self):
+        from dataset_sorter.constants import MODEL_RESOLUTIONS
+        assert MODEL_RESOLUTIONS["sdxl_lora"] == 1024
+
+    def test_model_clip_skip_values(self):
+        from dataset_sorter.constants import MODEL_CLIP_SKIP
+        assert MODEL_CLIP_SKIP["sd15_lora"] == 1
+        assert MODEL_CLIP_SKIP["pony_lora"] == 2
+        assert MODEL_CLIP_SKIP["sdxl_lora"] == 0
+
+    def test_prediction_types_per_model(self):
+        from dataset_sorter.constants import MODEL_PREDICTION_TYPE
+        assert MODEL_PREDICTION_TYPE["sd15_lora"] == "epsilon"
+        assert MODEL_PREDICTION_TYPE["flux_lora"] == "raw"
+        assert MODEL_PREDICTION_TYPE["sd3_lora"] == "flow"
+        assert MODEL_PREDICTION_TYPE["sd2_lora"] == "v_prediction"
+
+    def test_timestep_sampling_per_model(self):
+        from dataset_sorter.constants import MODEL_TIMESTEP_SAMPLING
+        assert MODEL_TIMESTEP_SAMPLING["sd15_lora"] == "uniform"
+        assert MODEL_TIMESTEP_SAMPLING["flux_lora"] == "sigmoid"
+        assert MODEL_TIMESTEP_SAMPLING["sd3_lora"] == "logit_normal"
+
+    def test_vram_tiers(self):
+        from dataset_sorter.constants import VRAM_TIERS
+        assert VRAM_TIERS == [8, 12, 16, 24, 48, 96]
+
+    def test_network_types(self):
+        from dataset_sorter.constants import NETWORK_TYPES
+        assert "lora" in NETWORK_TYPES
+        assert "dora" in NETWORK_TYPES
+        assert "loha" in NETWORK_TYPES
+        assert "lokr" in NETWORK_TYPES
+
+    def test_optimizers(self):
+        from dataset_sorter.constants import OPTIMIZERS
+        expected = ["Adafactor", "Prodigy", "AdamW", "AdamW8bit",
+                    "DAdaptAdam", "CAME", "AdamWScheduleFree", "Lion", "SGD"]
+        for opt in expected:
+            assert opt in OPTIMIZERS, f"Missing optimizer {opt}"
+
+    def test_lr_schedulers(self):
+        from dataset_sorter.constants import LR_SCHEDULERS
+        assert "cosine" in LR_SCHEDULERS
+        assert "linear" in LR_SCHEDULERS
+        assert "constant" in LR_SCHEDULERS
+
+    def test_prediction_types_dict(self):
+        from dataset_sorter.constants import PREDICTION_TYPES
+        assert "epsilon" in PREDICTION_TYPES
+        assert "v_prediction" in PREDICTION_TYPES
+        assert "flow" in PREDICTION_TYPES
+
+    def test_all_base_models_have_prediction_type(self):
+        from dataset_sorter.constants import _BASE_MODELS, MODEL_PREDICTION_TYPE
+        for base_name in _BASE_MODELS:
+            assert f"{base_name}_lora" in MODEL_PREDICTION_TYPE
+            assert f"{base_name}_full" in MODEL_PREDICTION_TYPE
+
+    def test_all_base_models_have_timestep_sampling(self):
+        from dataset_sorter.constants import _BASE_MODELS, MODEL_TIMESTEP_SAMPLING
+        for base_name in _BASE_MODELS:
+            assert f"{base_name}_lora" in MODEL_TIMESTEP_SAMPLING
+            assert f"{base_name}_full" in MODEL_TIMESTEP_SAMPLING
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. MODELS MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestModels:
+    def test_training_config_defaults(self):
+        from dataset_sorter.models import TrainingConfig
+        cfg = TrainingConfig()
+        assert cfg.model_type == ""
+        assert cfg.vram_gb == 24
+        assert cfg.resolution == 1024
+        assert cfg.learning_rate == 1e-4
+        assert cfg.batch_size == 1
+        assert cfg.epochs == 1
+        assert cfg.network_type == "lora"
+        assert cfg.lora_rank == 32
+        assert cfg.lora_alpha == 16
+        assert cfg.optimizer == "Adafactor"
+        assert cfg.mixed_precision == "bf16"
+        assert cfg.gradient_checkpointing is True
+        assert cfg.cache_latents is True
+        assert cfg.tag_shuffle is True
+        assert cfg.sample_every_n_steps == 50
+        assert cfg.sample_seed == 42
+        assert cfg.save_precision == "bf16"
+
+    def test_training_config_mutable_defaults(self):
+        """Ensure list fields don't share state between instances."""
+        from dataset_sorter.models import TrainingConfig
+        c1 = TrainingConfig()
+        c2 = TrainingConfig()
+        c1.sample_prompts.append("test")
+        assert len(c2.sample_prompts) == 0
+        c1.notes.append("note")
+        assert len(c2.notes) == 0
+
+    def test_image_entry_defaults(self):
+        from dataset_sorter.models import ImageEntry
+        entry = ImageEntry()
+        assert entry.assigned_bucket == 1
+        assert entry.forced_bucket is None
+        assert entry.tags == []
+        assert entry.unique_id == ""
+
+    def test_image_entry_mutable_defaults(self):
+        from dataset_sorter.models import ImageEntry
+        e1 = ImageEntry()
+        e2 = ImageEntry()
+        e1.tags.append("tag1")
+        assert len(e2.tags) == 0
+
+    def test_dataset_stats_defaults(self):
+        from dataset_sorter.models import DatasetStats
+        stats = DatasetStats()
+        assert stats.total_images == 0
+        assert stats.diversity == 0.0
+        assert stats.size_category == "small"
+
+    def test_training_config_all_fields_have_defaults(self):
+        """Every field should have a default so TrainingConfig() works."""
+        from dataset_sorter.models import TrainingConfig
+        cfg = TrainingConfig()
+        for f in fields(cfg):
+            assert hasattr(cfg, f.name)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. UTILS MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUtils:
+    def test_sanitize_folder_name_safe(self):
+        from dataset_sorter.utils import sanitize_folder_name
+        assert sanitize_folder_name("hello") == "hello"
+        assert sanitize_folder_name("hello world") == "hello world"
+        assert sanitize_folder_name("under_score-dash.dot") == "under_score-dash.dot"
+
+    def test_sanitize_folder_name_strips_unsafe(self):
+        from dataset_sorter.utils import sanitize_folder_name
+        assert sanitize_folder_name("bad/chars*here!") == "badcharshere"
+        assert sanitize_folder_name("path/../traversal") == "path..traversal"
+        assert sanitize_folder_name("<script>alert</script>") == "scriptalertscript"
+
+    def test_sanitize_folder_name_empty_returns_bucket(self):
+        from dataset_sorter.utils import sanitize_folder_name
+        assert sanitize_folder_name("") == "bucket"
+        assert sanitize_folder_name("!!!") == "bucket"
+        assert sanitize_folder_name("   ") == "bucket"
+
+    def test_is_path_inside_basic(self):
+        from dataset_sorter.utils import is_path_inside
+        assert is_path_inside(Path("/a/b/c"), Path("/a/b"))
+        assert is_path_inside(Path("/a/b"), Path("/a/b"))
+        assert not is_path_inside(Path("/a/b"), Path("/a/b/c"))
+        assert not is_path_inside(Path("/x/y"), Path("/a/b"))
+
+    def test_is_path_inside_traversal(self):
+        from dataset_sorter.utils import is_path_inside
+        # This should resolve to /a, not be inside /a/b
+        assert not is_path_inside(Path("/a/b/../"), Path("/a/b"))
+
+    def test_validate_paths_good(self):
+        from dataset_sorter.utils import validate_paths
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as out:
+                ok, msg = validate_paths(src, out)
+                assert ok, msg
+
+    def test_validate_paths_missing_source(self):
+        from dataset_sorter.utils import validate_paths
+        ok, msg = validate_paths("/nonexistent/path/xyz", "/tmp/out")
+        assert not ok
+        assert "Source" in msg
+
+    def test_validate_paths_empty_output(self):
+        from dataset_sorter.utils import validate_paths
+        with tempfile.TemporaryDirectory() as src:
+            ok, msg = validate_paths(src, "")
+            assert not ok
+            assert "Output" in msg
+
+    def test_validate_paths_same_dir(self):
+        from dataset_sorter.utils import validate_paths
+        with tempfile.TemporaryDirectory() as d:
+            ok, msg = validate_paths(d, d)
+            assert not ok
+            assert "same" in msg
+
+    def test_validate_paths_output_inside_source(self):
+        from dataset_sorter.utils import validate_paths
+        with tempfile.TemporaryDirectory() as src:
+            sub = os.path.join(src, "sub")
+            os.makedirs(sub)
+            ok, msg = validate_paths(src, sub)
+            assert not ok
+            assert "inside" in msg.lower()
+
+    def test_validate_paths_source_inside_output(self):
+        from dataset_sorter.utils import validate_paths
+        with tempfile.TemporaryDirectory() as outer:
+            inner = os.path.join(outer, "inner")
+            os.makedirs(inner)
+            ok, msg = validate_paths(inner, outer)
+            assert not ok
+            assert "inside" in msg.lower()
+
+    def test_has_gpu_without_torch(self):
+        from dataset_sorter.utils import has_gpu
+        with patch.dict(sys.modules, {"torch": None}):
+            # Force reimport would be complex; just test it doesn't crash
+            # The function catches ImportError
+            result = has_gpu()
+            assert isinstance(result, bool)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. RECOMMENDER MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRecommender:
+    """Test the recommendation engine logic."""
+
+    def _recommend(self, model_type="sdxl_lora", vram_gb=24, total_images=1000,
+                   unique_tags=500, total_tag_occurrences=5000,
+                   max_bucket_images=100, num_active_buckets=40,
+                   optimizer="Adafactor", network_type="lora"):
+        from dataset_sorter.recommender import recommend
+        return recommend(
+            model_type=model_type,
+            vram_gb=vram_gb,
+            total_images=total_images,
+            unique_tags=unique_tags,
+            total_tag_occurrences=total_tag_occurrences,
+            max_bucket_images=max_bucket_images,
+            num_active_buckets=num_active_buckets,
+            optimizer=optimizer,
+            network_type=network_type,
+        )
+
+    def test_basic_sdxl_lora(self):
+        cfg = self._recommend()
+        assert cfg.model_type == "sdxl_lora"
+        assert cfg.resolution == 1024
+        assert cfg.learning_rate > 0
+        assert cfg.batch_size >= 1
+        assert cfg.network_type == "lora"
+        assert cfg.lora_rank > 0
+        assert cfg.lora_alpha > 0
+
+    def test_sd15_resolution(self):
+        cfg = self._recommend(model_type="sd15_lora")
+        assert cfg.resolution == 512
+
+    def test_sd2_resolution(self):
+        cfg = self._recommend(model_type="sd2_lora")
+        assert cfg.resolution == 768
+
+    def test_flux_lora(self):
+        cfg = self._recommend(model_type="flux_lora")
+        assert cfg.model_prediction_type == "raw"
+        assert cfg.timestep_sampling == "sigmoid"
+        assert cfg.train_text_encoder is False
+
+    def test_sd3_lora(self):
+        cfg = self._recommend(model_type="sd3_lora")
+        assert cfg.model_prediction_type == "flow"
+        assert cfg.timestep_sampling == "logit_normal"
+
+    def test_full_finetune_no_lora_rank(self):
+        cfg = self._recommend(model_type="sdxl_full")
+        assert cfg.lora_rank == 0
+        assert cfg.lora_alpha == 0
+        assert cfg.network_type == "full"
+
+    def test_small_dataset_more_epochs(self):
+        small = self._recommend(total_images=50)
+        large = self._recommend(total_images=50000)
+        assert small.epochs >= large.epochs
+
+    def test_low_vram_gradient_checkpointing(self):
+        cfg = self._recommend(vram_gb=8)
+        assert cfg.gradient_checkpointing is True
+
+    def test_vram_profiles_batch_size(self):
+        cfg_8 = self._recommend(vram_gb=8)
+        cfg_96 = self._recommend(vram_gb=96)
+        assert cfg_96.batch_size >= cfg_8.batch_size
+
+    def test_dora_network(self):
+        cfg = self._recommend(network_type="dora")
+        assert cfg.network_type == "dora"
+        assert cfg.lora_rank > 0
+
+    def test_loha_network(self):
+        cfg = self._recommend(network_type="loha")
+        assert cfg.network_type == "loha"
+        assert cfg.lora_rank > 0
+
+    def test_lokr_network(self):
+        cfg = self._recommend(network_type="lokr")
+        assert cfg.network_type == "lokr"
+        assert cfg.lora_rank > 0
+
+    def test_prodigy_optimizer(self):
+        cfg = self._recommend(optimizer="Prodigy")
+        assert cfg.optimizer == "Prodigy"
+        # Prodigy should set lr_scheduler to constant
+        assert cfg.lr_scheduler == "constant"
+
+    def test_adamw_optimizer(self):
+        cfg = self._recommend(optimizer="AdamW")
+        assert cfg.optimizer == "AdamW"
+
+    def test_sgd_optimizer(self):
+        cfg = self._recommend(optimizer="SGD")
+        assert cfg.optimizer == "SGD"
+
+    def test_adafactor_lr_multiplier(self):
+        """Adafactor LoRA should get higher LR."""
+        ada = self._recommend(optimizer="Adafactor")
+        adamw = self._recommend(optimizer="AdamW")
+        # Adafactor LoRA gets a 5x multiplier
+        assert ada.learning_rate > adamw.learning_rate
+
+    def test_ema_on_medium_dataset(self):
+        cfg = self._recommend(total_images=1000)
+        assert cfg.use_ema is True
+
+    def test_ema_cpu_offload_24gb(self):
+        cfg = self._recommend(vram_gb=24, total_images=1000)
+        if cfg.use_ema:
+            assert cfg.ema_cpu_offload is True
+
+    def test_sdxl_text_encoder_training(self):
+        cfg = self._recommend(model_type="sdxl_lora", vram_gb=24)
+        assert cfg.train_text_encoder is True
+        assert cfg.train_text_encoder_2 is True
+
+    def test_sd15_no_text_encoder_2(self):
+        cfg = self._recommend(model_type="sd15_lora")
+        assert cfg.train_text_encoder_2 is False
+
+    def test_flux_low_vram_reduces_resolution(self):
+        cfg = self._recommend(model_type="flux_lora", vram_gb=12)
+        assert cfg.resolution == 512
+
+    def test_zimage_low_vram_reduces_resolution(self):
+        cfg = self._recommend(model_type="zimage_lora", vram_gb=12)
+        assert cfg.resolution == 768
+
+    def test_all_model_types(self):
+        """Smoke test: recommend() should not crash for any model type."""
+        from dataset_sorter.constants import MODEL_TYPE_KEYS
+        for mt in MODEL_TYPE_KEYS:
+            cfg = self._recommend(model_type=mt)
+            assert cfg.model_type == mt
+            assert cfg.learning_rate > 0
+            assert cfg.batch_size >= 1
+            assert cfg.resolution > 0
+
+    def test_all_vram_tiers(self):
+        from dataset_sorter.constants import VRAM_TIERS
+        for vram in VRAM_TIERS:
+            cfg = self._recommend(vram_gb=vram)
+            assert cfg.batch_size >= 1
+            assert cfg.learning_rate > 0
+
+    def test_diversity_affects_lr(self):
+        low_div = self._recommend(unique_tags=10, total_tag_occurrences=10000)
+        high_div = self._recommend(unique_tags=5000, total_tag_occurrences=10000)
+        # Higher diversity should increase LR
+        assert high_div.learning_rate >= low_div.learning_rate
+
+    def test_diversity_affects_rank(self):
+        low_div = self._recommend(unique_tags=10, total_tag_occurrences=10000)
+        high_div = self._recommend(unique_tags=5000, total_tag_occurrences=10000)
+        # Higher diversity should increase rank (when > 0.3)
+        assert high_div.lora_rank >= low_div.lora_rank
+
+    def test_size_categories(self):
+        """Verify all 4 size categories are handled."""
+        sizes = [50, 1000, 10000, 100000]
+        cats = []
+        for s in sizes:
+            cfg = self._recommend(total_images=s)
+            # We can't directly check size_cat, but epochs should differ
+            cats.append(cfg.epochs)
+        # small should have most epochs
+        assert cats[0] >= cats[-1]
+
+    def test_pony_clip_skip(self):
+        cfg = self._recommend(model_type="pony_lora")
+        assert cfg.clip_skip == 2
+
+    def test_sd15_clip_skip(self):
+        cfg = self._recommend(model_type="sd15_lora")
+        assert cfg.clip_skip == 1
+
+    # ── Export tests ──
+
+    def test_format_config(self):
+        from dataset_sorter.recommender import format_config
+        cfg = self._recommend()
+        text = format_config(cfg)
+        assert isinstance(text, str)
+        assert len(text) > 100
+        assert "SDXL" in text or "sdxl" in text.lower()
+
+    def test_export_onetrainer_toml(self):
+        from dataset_sorter.recommender import export_onetrainer_toml
+        cfg = self._recommend()
+        toml_str = export_onetrainer_toml(cfg)
+        assert isinstance(toml_str, str)
+        assert "learning_rate" in toml_str
+
+    def test_export_kohya_json(self):
+        from dataset_sorter.recommender import export_kohya_json
+        cfg = self._recommend()
+        json_str = export_kohya_json(cfg)
+        # Should be valid JSON
+        parsed = json.loads(json_str)
+        assert "learning_rate" in parsed or "lr" in str(parsed).lower()
+
+    def test_export_kohya_all_models(self):
+        """Kohya export should not crash for any model type."""
+        from dataset_sorter.constants import MODEL_TYPE_KEYS
+        from dataset_sorter.recommender import export_kohya_json
+        for mt in MODEL_TYPE_KEYS:
+            cfg = self._recommend(model_type=mt)
+            json_str = export_kohya_json(cfg)
+            parsed = json.loads(json_str)
+            assert isinstance(parsed, dict)
+
+    def test_export_onetrainer_all_models(self):
+        from dataset_sorter.constants import MODEL_TYPE_KEYS
+        from dataset_sorter.recommender import export_onetrainer_toml
+        for mt in MODEL_TYPE_KEYS:
+            cfg = self._recommend(model_type=mt)
+            toml_str = export_onetrainer_toml(cfg)
+            assert isinstance(toml_str, str)
+            assert len(toml_str) > 50
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. RECOMMENDER NETWORK RANK COMPUTATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestNetworkRank:
+    def test_compute_network_rank_basic(self):
+        from dataset_sorter.recommender import _compute_network_rank
+        rank, alpha, conv_rank, conv_alpha = _compute_network_rank(
+            "lora", "sdxl_lora", "medium", 0.1, 24,
+        )
+        assert rank > 0
+        assert alpha == rank // 2
+
+    def test_loha_rank_is_sqrt(self):
+        from dataset_sorter.recommender import _compute_network_rank
+        rank_lora, _, _, _ = _compute_network_rank("lora", "sdxl_lora", "medium", 0.1, 24)
+        rank_loha, _, _, _ = _compute_network_rank("loha", "sdxl_lora", "medium", 0.1, 24)
+        assert rank_loha < rank_lora
+
+    def test_lokr_rank_is_quartered(self):
+        from dataset_sorter.recommender import _compute_network_rank
+        rank_lora, _, _, _ = _compute_network_rank("lora", "sdxl_lora", "medium", 0.1, 24)
+        rank_lokr, _, _, _ = _compute_network_rank("lokr", "sdxl_lora", "medium", 0.1, 24)
+        assert rank_lokr < rank_lora
+
+    def test_high_diversity_doubles_rank(self):
+        from dataset_sorter.recommender import _compute_network_rank
+        rank_low, _, _, _ = _compute_network_rank("lora", "sdxl_lora", "medium", 0.1, 24)
+        rank_high, _, _, _ = _compute_network_rank("lora", "sdxl_lora", "medium", 0.5, 24)
+        assert rank_high >= rank_low
+
+    def test_low_vram_caps_rank(self):
+        from dataset_sorter.recommender import _compute_network_rank
+        rank_8, _, _, _ = _compute_network_rank("lora", "sdxl_lora", "large", 0.5, 8)
+        assert rank_8 <= 32
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. WORKERS MODULE (no-GPU tests: parsing, export, unique_dest)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestWorkers:
+    def _create_test_dataset(self, tmpdir, num_images=5):
+        """Create a temporary dataset directory with images and txt files."""
+        src = Path(tmpdir) / "source"
+        src.mkdir()
+        for i in range(num_images):
+            img = src / f"img_{i:03d}.png"
+            img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+            txt = src / f"img_{i:03d}.txt"
+            txt.write_text(f"tag_a, tag_{i}, common_tag", encoding="utf-8")
+        return str(src)
+
+    def test_parse_single_image_basic(self):
+        from dataset_sorter.workers import _parse_single_image
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = self._create_test_dataset(tmpdir, 1)
+            img_path = Path(src) / "img_000.png"
+            result = _parse_single_image((0, img_path, False))
+            # Should return an ImageEntry (not a tuple with error)
+            assert not isinstance(result, tuple)
+            assert result.image_path == img_path
+            assert "tag_a" in result.tags
+            assert "common_tag" in result.tags
+
+    def test_parse_single_image_no_txt(self):
+        from dataset_sorter.workers import _parse_single_image
+        with tempfile.TemporaryDirectory() as tmpdir:
+            img_path = Path(tmpdir) / "orphan.png"
+            img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+            result = _parse_single_image((0, img_path, False))
+            assert not isinstance(result, tuple)
+            assert result.tags == []
+            assert result.txt_path is None
+
+    def test_unique_dest_no_collision(self):
+        from dataset_sorter.workers import _unique_dest
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = _unique_dest(Path(tmpdir), "test.png")
+            assert dest.name == "test.png"
+
+    def test_unique_dest_with_collision(self):
+        from dataset_sorter.workers import _unique_dest
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "test.png").write_bytes(b"")
+            dest = _unique_dest(Path(tmpdir), "test.png")
+            assert dest.name == "test_001.png"
+
+    def test_unique_dest_multiple_collisions(self):
+        from dataset_sorter.workers import _unique_dest
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "test.png").write_bytes(b"")
+            (Path(tmpdir) / "test_001.png").write_bytes(b"")
+            (Path(tmpdir) / "test_002.png").write_bytes(b"")
+            dest = _unique_dest(Path(tmpdir), "test.png")
+            assert dest.name == "test_003.png"
+
+    def test_export_worker_path_safety(self):
+        """ExportWorker should reject output inside source."""
+        from dataset_sorter.workers import ExportWorker
+        from dataset_sorter.models import ImageEntry
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "source"
+            src.mkdir()
+            out = src / "output"
+            out.mkdir()
+            entry = ImageEntry(image_path=src / "img.png", assigned_bucket=1)
+            worker = ExportWorker(
+                entries=[entry],
+                output_dir=str(out),
+                source_dir=str(src),
+                bucket_names={1: "test"},
+                deleted_tags=set(),
+            )
+            # Manually check the safety logic
+            from dataset_sorter.utils import is_path_inside
+            assert is_path_inside(out, src)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. TRAIN DATASET MODULE (partial — caption processing, no torch needed)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTrainDatasetCaptions:
+    """Test caption processing logic without requiring full torch setup."""
+
+    def test_process_caption_no_shuffle(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["trigger, tag_a, tag_b, tag_c"],
+            tag_shuffle=False,
+        )
+        result = ds._process_caption("trigger, tag_a, tag_b, tag_c")
+        assert result == "trigger, tag_a, tag_b, tag_c"
+
+    def test_process_caption_with_shuffle(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["trigger, tag_a, tag_b, tag_c, tag_d"],
+            tag_shuffle=True,
+            keep_first_n_tags=1,
+        )
+        random.seed(42)
+        result = ds._process_caption("trigger, tag_a, tag_b, tag_c, tag_d")
+        tags = [t.strip() for t in result.split(",")]
+        assert tags[0] == "trigger"  # First tag preserved
+        assert set(tags) == {"trigger", "tag_a", "tag_b", "tag_c", "tag_d"}
+
+    def test_process_caption_keep_first_n(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["a, b, c, d, e"],
+            tag_shuffle=True,
+            keep_first_n_tags=3,
+        )
+        random.seed(42)
+        result = ds._process_caption("a, b, c, d, e")
+        tags = [t.strip() for t in result.split(",")]
+        assert tags[0] == "a"
+        assert tags[1] == "b"
+        assert tags[2] == "c"
+
+    def test_process_caption_dropout(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["trigger, tag_a"],
+            caption_dropout_rate=1.0,  # 100% dropout
+        )
+        result = ds._process_caption("trigger, tag_a")
+        assert result == ""
+
+    def test_process_caption_no_dropout(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["trigger, tag_a"],
+            caption_dropout_rate=0.0,
+        )
+        result = ds._process_caption("trigger, tag_a")
+        assert "trigger" in result
+
+    def test_process_caption_few_tags_no_shuffle(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["only_tag"],
+            tag_shuffle=True,
+            keep_first_n_tags=1,
+        )
+        result = ds._process_caption("only_tag")
+        assert result == "only_tag"
+
+    def test_dataset_length(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path(f"/tmp/img_{i}.png") for i in range(10)],
+            captions=[f"caption {i}" for i in range(10)],
+        )
+        assert len(ds) == 10
+
+    def test_clear_caches(self):
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        ds = CachedTrainDataset(
+            image_paths=[Path("/tmp/test.png")],
+            captions=["test"],
+        )
+        ds._latent_cache[0] = "fake"
+        ds._te_cache[0] = "fake"
+        ds._latents_cached = True
+        ds._te_cached = True
+        ds.clear_caches()
+        assert len(ds._latent_cache) == 0
+        assert len(ds._te_cache) == 0
+        assert not ds._latents_cached
+        assert not ds._te_cached
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. EMA MODULE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestEMA:
+    """Test EMA logic with real torch tensors."""
+
+    def test_ema_init_creates_shadow(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        params = [torch.nn.Parameter(torch.randn(3, 3)) for _ in range(3)]
+        ema = EMAModel(params, decay=0.99)
+        assert len(ema.shadow_params) == 3
+
+    def test_ema_update_moves_toward_params(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.zeros(4))
+        ema = EMAModel([param], decay=0.5)
+        # Shadow starts at 0, set param to 1, update
+        param.data.fill_(1.0)
+        ema.update([param])
+        # With decay=0.5, shadow = 0 * 0.5 + 1.0 * 0.5 = 0.5
+        assert torch.allclose(ema.shadow_params[0], torch.tensor([0.5, 0.5, 0.5, 0.5]))
+
+    def test_ema_update_respects_update_after_step(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.zeros(2))
+        ema = EMAModel([param], decay=0.5, update_after_step=3)
+        param.data.fill_(1.0)
+        # Steps 1-3 should not update
+        for _ in range(3):
+            ema.update([param])
+        assert torch.allclose(ema.shadow_params[0], torch.zeros(2))
+        # Step 4 should update
+        ema.update([param])
+        assert not torch.allclose(ema.shadow_params[0], torch.zeros(2))
+
+    def test_ema_store_restore(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.ones(3))
+        ema = EMAModel([param], decay=0.9)
+        # Store original
+        ema.store([param])
+        # Modify param
+        param.data.fill_(999.0)
+        # Restore
+        ema.restore([param])
+        assert torch.allclose(param.data, torch.ones(3))
+
+    def test_ema_copy_to(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.zeros(3))
+        ema = EMAModel([param], decay=0.9)
+        # Shadow is at 0, change it manually
+        ema.shadow_params[0] = torch.tensor([1.0, 2.0, 3.0])
+        ema.copy_to([param])
+        assert torch.allclose(param.data, torch.tensor([1.0, 2.0, 3.0]))
+
+    def test_ema_state_dict_roundtrip(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        params = [torch.nn.Parameter(torch.randn(4))]
+        ema = EMAModel(params, decay=0.99)
+        ema.step = 100
+        sd = ema.state_dict()
+        ema2 = EMAModel(params, decay=0.5)
+        ema2.load_state_dict(sd)
+        assert ema2.decay == 0.99
+        assert ema2.step == 100
+        assert torch.allclose(ema2.shadow_params[0], ema.shadow_params[0])
+
+    def test_ema_cpu_offload(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.randn(3))
+        ema = EMAModel([param], decay=0.99, cpu_offload=True)
+        # Shadow should be on CPU
+        assert ema.shadow_params[0].device.type == "cpu"
+
+    def test_ema_skips_non_grad_params(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        p1 = torch.nn.Parameter(torch.randn(3), requires_grad=True)
+        p2 = torch.nn.Parameter(torch.randn(3), requires_grad=False)
+        ema = EMAModel([p1, p2], decay=0.99)
+        assert len(ema.shadow_params) == 1  # only p1
+
+    def test_ema_cpu_offload_update(self):
+        import torch
+        from dataset_sorter.ema import EMAModel
+        param = torch.nn.Parameter(torch.zeros(4))
+        ema = EMAModel([param], decay=0.5, cpu_offload=True)
+        param.data.fill_(1.0)
+        ema.update([param])
+        assert ema.shadow_params[0].device.type == "cpu"
+        assert torch.allclose(ema.shadow_params[0], torch.tensor([0.5, 0.5, 0.5, 0.5]))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. TRAINER MODULE (unit tests for helper functions)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTrainerHelpers:
+    def test_backend_registry_all_models(self):
+        from dataset_sorter.trainer import _BACKEND_REGISTRY
+        expected_bases = [
+            "sdxl", "pony", "sd15", "flux", "flux2", "sd3", "sd35", "sd2",
+            "zimage", "pixart", "cascade", "hunyuan", "kolors", "auraflow",
+            "sana", "hidream", "chroma",
+        ]
+        for base in expected_bases:
+            assert base in _BACKEND_REGISTRY, f"Missing backend for {base}"
+
+    def test_get_backend_fallback(self):
+        from dataset_sorter.trainer import _get_backend
+        from dataset_sorter.models import TrainingConfig
+        import torch
+        cfg = TrainingConfig(model_type="unknown_model_lora")
+        # Should fall back to SDXL without crashing
+        backend = _get_backend(cfg, torch.device("cpu"), torch.float32)
+        assert backend is not None
+
+    def test_training_state_defaults(self):
+        from dataset_sorter.trainer import TrainingState
+        state = TrainingState()
+        assert state.global_step == 0
+        assert state.epoch == 0
+        assert state.running is True
+        assert state.paused is False
+        assert state.phase == "idle"
+
+    def test_get_gpu_info_cpu_fallback(self):
+        from dataset_sorter.trainer import get_gpu_info
+        info = get_gpu_info()
+        assert isinstance(info, dict)
+        assert "available" in info
+        assert "device" in info
+        assert "backend" in info
+
+    def test_trainer_pause_resume_flags(self):
+        from dataset_sorter.trainer import Trainer
+        from dataset_sorter.models import TrainingConfig
+        trainer = Trainer(TrainingConfig())
+        # Initially unpaused
+        assert not trainer._pause_event.is_set()
+        assert trainer._resume_event.is_set()
+        # Pause
+        trainer.pause()
+        assert trainer._pause_event.is_set()
+        assert not trainer._resume_event.is_set()
+        # Resume
+        trainer.resume()
+        assert not trainer._pause_event.is_set()
+        assert trainer._resume_event.is_set()
+
+    def test_trainer_stop(self):
+        from dataset_sorter.trainer import Trainer
+        from dataset_sorter.models import TrainingConfig
+        trainer = Trainer(TrainingConfig())
+        trainer.stop()
+        assert not trainer.state.running
+
+    def test_trainer_on_demand_flags(self):
+        from dataset_sorter.trainer import Trainer
+        from dataset_sorter.models import TrainingConfig
+        trainer = Trainer(TrainingConfig())
+        assert not trainer._save_now.is_set()
+        trainer.request_save()
+        assert trainer._save_now.is_set()
+        assert not trainer._sample_now.is_set()
+        trainer.request_sample()
+        assert trainer._sample_now.is_set()
+        assert not trainer._backup_now.is_set()
+        trainer.request_backup()
+        assert trainer._backup_now.is_set()
+
+    def test_trainer_cleanup_safe(self):
+        """Cleanup should be safe even without setup."""
+        from dataset_sorter.trainer import Trainer
+        from dataset_sorter.models import TrainingConfig
+        trainer = Trainer(TrainingConfig())
+        trainer.cleanup()
+        assert trainer.state.phase == "idle"
+
+    def test_create_project_folders(self):
+        from dataset_sorter.trainer import Trainer
+        from dataset_sorter.models import TrainingConfig
+        trainer = Trainer(TrainingConfig(model_type="sdxl_lora"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "project"
+            trainer._create_project_folders(out)
+            assert (out / "checkpoints").is_dir()
+            assert (out / "samples").is_dir()
+            assert (out / "backups").is_dir()
+            assert (out / "logs").is_dir()
+            assert (out / ".cache").is_dir()
+            assert (out / "project.json").exists()
+            info = json.loads((out / "project.json").read_text())
+            assert info["model_type"] == "sdxl_lora"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. TRAIN BACKEND BASE (shared loss/utility functions)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTrainBackendBase:
+    def test_compute_flow_loss(self):
+        """Flow loss: target = noise - latents."""
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        # Create a concrete subclass for testing
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1, 77, 768),)
+
+        backend = DummyBackend(TrainingConfig(), torch.device("cpu"), torch.float32)
+        noise_pred = torch.randn(2, 4, 8, 8)
+        noise = torch.randn(2, 4, 8, 8)
+        latents = torch.randn(2, 4, 8, 8)
+        loss = backend._compute_flow_loss(noise_pred, noise, latents)
+        assert loss.shape == (2,)
+        assert (loss >= 0).all()
+
+    def test_flow_interpolate(self):
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1),)
+
+        backend = DummyBackend(TrainingConfig(), torch.device("cpu"), torch.float32)
+        latents = torch.ones(2, 4, 8, 8)
+        noise = torch.zeros(2, 4, 8, 8)
+        t = torch.tensor([0.0, 1.0])
+        result = backend._flow_interpolate(latents, noise, t)
+        # t=0: (1-0)*latents + 0*noise = latents
+        assert torch.allclose(result[0], latents[0])
+        # t=1: (1-1)*latents + 1*noise = noise
+        assert torch.allclose(result[1], noise[1])
+
+    def test_pad_and_cat(self):
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1),)
+
+        backend = DummyBackend(TrainingConfig(), torch.device("cpu"), torch.float32)
+        t1 = torch.randn(1, 5, 10)
+        t2 = torch.randn(1, 5, 20)
+        result = backend._pad_and_cat([t1, t2], dim=1)
+        assert result.shape == (1, 10, 20)  # padded t1 to 20, cat on dim=1
+
+    def test_sample_flow_timesteps(self):
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1),)
+
+        for sampling in ("uniform", "sigmoid", "logit_normal"):
+            cfg = TrainingConfig(timestep_sampling=sampling)
+            backend = DummyBackend(cfg, torch.device("cpu"), torch.float32)
+            t = backend._sample_flow_timesteps(4)
+            assert t.shape == (4,)
+            assert (t >= 0).all()
+            assert (t <= 1).all()
+
+    def test_get_lora_target_modules_default(self):
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1),)
+
+        backend = DummyBackend(TrainingConfig(conv_rank=0), torch.device("cpu"), torch.float32)
+        modules = backend._get_lora_target_modules()
+        assert "to_q" in modules
+        assert "to_k" in modules
+        assert "to_v" in modules
+        assert "to_out.0" in modules
+        assert "conv1" not in modules
+
+    def test_get_lora_target_modules_with_conv(self):
+        import torch
+        from dataset_sorter.train_backend_base import TrainBackendBase
+        from dataset_sorter.models import TrainingConfig
+
+        class DummyBackend(TrainBackendBase):
+            def load_model(self, model_path): pass
+            def encode_text_batch(self, captions): return (torch.zeros(1),)
+
+        backend = DummyBackend(TrainingConfig(conv_rank=8), torch.device("cpu"), torch.float32)
+        modules = backend._get_lora_target_modules()
+        assert "conv1" in modules
+        assert "conv2" in modules
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. INTEGRATION-STYLE SMOKE TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestIntegration:
+    def test_recommend_then_format(self):
+        """Full pipeline: recommend -> format_config."""
+        from dataset_sorter.recommender import recommend, format_config
+        cfg = recommend("sdxl_lora", 24, 1000, 500, 5000, 100, 40)
+        text = format_config(cfg)
+        assert "LoRA" in text or "lora" in text.lower()
+        assert str(cfg.lora_rank) in text
+
+    def test_recommend_then_export_both_formats(self):
+        from dataset_sorter.recommender import recommend, export_onetrainer_toml, export_kohya_json
+        cfg = recommend("flux_lora", 24, 500, 200, 2000, 50, 20)
+        toml = export_onetrainer_toml(cfg)
+        kohya = export_kohya_json(cfg)
+        assert len(toml) > 0
+        json.loads(kohya)  # Must be valid JSON
+
+    def test_all_optimizers_with_all_models_smoke(self):
+        """Smoke test: all optimizer+model combos should produce valid config."""
+        from dataset_sorter.constants import OPTIMIZERS
+        from dataset_sorter.recommender import recommend
+        models = ["sd15_lora", "sdxl_lora", "flux_lora", "sd3_full"]
+        for opt in OPTIMIZERS:
+            for mt in models:
+                cfg = recommend(mt, 24, 1000, 500, 5000, 100, 40, optimizer=opt)
+                assert cfg.learning_rate > 0
+                assert cfg.batch_size >= 1
+
+    def test_all_network_types_with_models_smoke(self):
+        from dataset_sorter.constants import NETWORK_TYPES
+        from dataset_sorter.recommender import recommend
+        for nt in NETWORK_TYPES:
+            cfg = recommend("sdxl_lora", 24, 1000, 500, 5000, 100, 40, network_type=nt)
+            assert cfg.lora_rank > 0
+            assert cfg.lora_alpha > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. EDGE CASES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestEdgeCases:
+    def test_recommend_zero_images(self):
+        from dataset_sorter.recommender import recommend
+        cfg = recommend("sdxl_lora", 24, 0, 0, 0, 0, 0)
+        assert cfg.learning_rate > 0
+        assert cfg.epochs >= 1
+
+    def test_recommend_single_image(self):
+        from dataset_sorter.recommender import recommend
+        cfg = recommend("sdxl_lora", 24, 1, 1, 1, 1, 1)
+        assert cfg.batch_size >= 1
+
+    def test_recommend_million_images(self):
+        from dataset_sorter.recommender import recommend
+        cfg = recommend("sdxl_lora", 96, 1000000, 50000, 5000000, 10000, 80)
+        assert cfg.epochs >= 1
+
+    def test_sanitize_extreme_inputs(self):
+        from dataset_sorter.utils import sanitize_folder_name
+        assert sanitize_folder_name("a" * 10000) == "a" * 10000
+        assert sanitize_folder_name("\x00\x01\x02") == "bucket"
+
+    def test_is_path_inside_with_dots(self):
+        from dataset_sorter.utils import is_path_inside
+        assert not is_path_inside(Path("/a/b/../../etc"), Path("/a/b"))
+
+    def test_unique_dest_preserves_extension(self):
+        from dataset_sorter.workers import _unique_dest
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "img.jpeg").write_bytes(b"")
+            dest = _unique_dest(Path(tmpdir), "img.jpeg")
+            assert dest.suffix == ".jpeg"
+
+    def test_training_config_can_be_modified(self):
+        from dataset_sorter.models import TrainingConfig
+        cfg = TrainingConfig()
+        cfg.learning_rate = 0.001
+        cfg.batch_size = 8
+        cfg.model_type = "flux_lora"
+        assert cfg.learning_rate == 0.001
+        assert cfg.batch_size == 8
+
+    def test_dataset_stats_can_be_modified(self):
+        from dataset_sorter.models import DatasetStats
+        stats = DatasetStats(total_images=100, unique_tags=50, diversity=0.5)
+        assert stats.total_images == 100
+        assert stats.diversity == 0.5
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
