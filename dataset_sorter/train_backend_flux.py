@@ -14,11 +14,9 @@ Key differences from SDXL:
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -90,80 +88,15 @@ class FluxBackend(TrainBackendBase):
 
         return (t5_hidden, pooled)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss (rectified flow)."""
-        # Target is the velocity: noise - latents
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
         """Flux uses guidance embedding, not time_ids."""
         if pooled is None:
             return None
-        return {
-            "pooled_projections": pooled,
-        }
+        return {"pooled_projections": pooled}
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Flux-specific training step with flow matching noise schedule."""
-        config = self.config
-
-        # Flow matching: sample timesteps from shifted sigmoid
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "sigmoid":
-            # Shifted sigmoid (Flux default)
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u))
-
-        t = u
-        # Noise the latents with flow matching interpolation
-        noise = torch.randn_like(latents)
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
-
-        # Unpack text encoder outputs
-        encoder_hidden = te_out[0]
-        pooled = te_out[1] if len(te_out) > 1 else None
-
-        # Pack latents for Flux (requires specific input format)
-        # Convert timestep to scheduler format
-        timesteps = (t * 1000).long()
-
-        added_cond = self.get_added_cond(batch_size, pooled=pooled)
-
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            fwd_kwargs = {}
-            if added_cond is not None:
-                fwd_kwargs.update(added_cond)
-
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps / 1000,
-                encoder_hidden_states=encoder_hidden,
-                **fwd_kwargs,
-            ).sample
-
-        # Flow matching target: noise - latents
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-        return loss.mean()
-
-    def generate_sample(self, prompt: str, seed: int):
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).images[0]
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved Flux LoRA to {save_dir}")
+        return self.flow_training_step(
+            latents, te_out, batch_size, use_added_cond_as_kwargs=True,
+        )

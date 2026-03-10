@@ -28,6 +28,7 @@ from PIL import Image
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from dataset_sorter.models import TrainingConfig
 
@@ -77,28 +78,107 @@ class TrainBackendBase(ABC):
         """Encode a batch of captions. Returns (encoder_hidden, pooled, ...)."""
         ...
 
-    @abstractmethod
     def compute_loss(
         self, noise_pred: torch.Tensor, noise: torch.Tensor,
         latents: torch.Tensor, timesteps: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute model-specific loss (epsilon, v-pred, or flow matching)."""
-        ...
+        """Compute loss based on prediction_type. Override for custom logic."""
+        if self.prediction_type == "flow":
+            return self._compute_flow_loss(noise_pred, noise, latents)
+        elif self.prediction_type == "v_prediction":
+            return self._compute_vpred_loss(noise_pred, noise, latents, timesteps)
+        else:
+            return self._compute_epsilon_loss(noise_pred, noise, latents, timesteps)
 
-    @abstractmethod
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """Return added_cond_kwargs for UNet forward (time_ids for SDXL, etc.)."""
-        ...
+        """Return added_cond_kwargs for UNet forward. Override for model-specific."""
+        return None
 
-    @abstractmethod
-    def generate_sample(self, prompt: str, seed: int) -> Image.Image:
-        """Generate a single sample image for preview."""
-        ...
+    def generate_sample(self, prompt: str, seed: int) -> Optional[Image.Image]:
+        """Generate a single sample image. Override for non-standard pipelines."""
+        if self.pipeline is not None:
+            return self.pipeline(
+                prompt=prompt,
+                num_inference_steps=self.config.sample_steps,
+                guidance_scale=self.config.sample_cfg_scale,
+                generator=torch.Generator(self.device).manual_seed(seed),
+            ).images[0]
+        log.warning(f"{self.model_name}: no pipeline available for sample generation")
+        return None
 
-    @abstractmethod
     def save_lora(self, save_dir: Path):
-        """Save LoRA adapter weights in model-specific format."""
-        ...
+        """Save LoRA adapter weights."""
+        self.unet.save_pretrained(str(save_dir))
+        log.info(f"Saved {self.model_name} LoRA to {save_dir}")
+
+    # ── Shared loss functions ──────────────────────────────────────────
+
+    def _compute_epsilon_loss(
+        self, noise_pred: torch.Tensor, noise: torch.Tensor,
+        latents: torch.Tensor, timesteps: torch.Tensor,
+    ) -> torch.Tensor:
+        """Epsilon (noise) prediction loss, with optional v-prediction override."""
+        if self.config.model_prediction_type == "v_prediction":
+            target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
+        else:
+            target = noise
+        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        return loss.mean(dim=list(range(1, len(loss.shape))))
+
+    def _compute_vpred_loss(
+        self, noise_pred: torch.Tensor, noise: torch.Tensor,
+        latents: torch.Tensor, timesteps: torch.Tensor,
+    ) -> torch.Tensor:
+        """V-prediction loss: v = alpha_t * noise - sigma_t * latents."""
+        alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
+            device=timesteps.device, dtype=latents.dtype,
+        )
+        alpha_t = alphas_cumprod[timesteps] ** 0.5
+        sigma_t = (1 - alphas_cumprod[timesteps]) ** 0.5
+        while alpha_t.dim() < latents.dim():
+            alpha_t = alpha_t.unsqueeze(-1)
+            sigma_t = sigma_t.unsqueeze(-1)
+        target = alpha_t * noise - sigma_t * latents
+        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        return loss.mean(dim=list(range(1, len(loss.shape))))
+
+    def _compute_flow_loss(
+        self, noise_pred: torch.Tensor, noise: torch.Tensor,
+        latents: torch.Tensor,
+    ) -> torch.Tensor:
+        """Flow matching loss: target = noise - latents."""
+        target = noise - latents
+        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        return loss.mean(dim=list(range(1, len(loss.shape))))
+
+    # ── Shared flow matching helpers ───────────────────────────────────
+
+    def _sample_flow_timesteps(self, batch_size: int) -> torch.Tensor:
+        """Sample timesteps for flow matching models."""
+        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
+        sampling = self.config.timestep_sampling
+        if sampling == "logit_normal":
+            u = torch.sigmoid(torch.randn_like(u) * 1.0)
+        elif sampling == "sigmoid":
+            u = torch.sigmoid(torch.randn_like(u))
+        return u
+
+    def _flow_interpolate(
+        self, latents: torch.Tensor, noise: torch.Tensor, t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Flow matching interpolation: (1-t)*x + t*noise."""
+        t_view = t.view(-1, 1, 1, 1)
+        return (1 - t_view) * latents + t_view * noise
+
+    def _pad_and_cat(self, tensors: list[torch.Tensor], dim: int = 1) -> torch.Tensor:
+        """Pad tensors to matching feature dim, then concatenate along `dim`."""
+        max_feat = max(t.shape[-1] for t in tensors)
+        padded = []
+        for t in tensors:
+            if t.shape[-1] < max_feat:
+                t = F.pad(t, (0, max_feat - t.shape[-1]))
+            padded.append(t)
+        return torch.cat(padded, dim=dim)
 
     # ── Shared speed optimizations ─────────────────────────────────────
 
@@ -284,6 +364,54 @@ class TrainBackendBase(ABC):
         sqrt_one_minus = (1.0 - alphas_cumprod[timesteps]) ** 0.5
         snr = (sqrt_alpha / sqrt_one_minus) ** 2
         return torch.clamp(snr, max=gamma) / snr
+
+    def flow_training_step(
+        self, latents: torch.Tensor, te_out: tuple, batch_size: int,
+        *, timestep_scale: float = 1000.0, normalize_timestep: bool = True,
+        use_added_cond_as_kwargs: bool = False,
+    ) -> torch.Tensor:
+        """Shared flow matching training step for transformer-based models.
+
+        Args:
+            timestep_scale: Multiply t by this for integer timesteps (default 1000).
+            normalize_timestep: Pass timestep/scale to model (default True for most).
+            use_added_cond_as_kwargs: If True, unpack added_cond as **kwargs
+                instead of added_cond_kwargs dict.
+        """
+        config = self.config
+        t = self._sample_flow_timesteps(batch_size)
+
+        noise = torch.randn_like(latents)
+        noisy_latents = self._flow_interpolate(latents, noise, t)
+
+        encoder_hidden = te_out[0]
+        pooled = te_out[1] if len(te_out) > 1 else None
+        timesteps = (t * timestep_scale).long()
+
+        added_cond = self.get_added_cond(batch_size, pooled=pooled)
+
+        fwd_kwargs = {}
+        if added_cond is not None:
+            if use_added_cond_as_kwargs:
+                fwd_kwargs.update(added_cond)
+            else:
+                fwd_kwargs["added_cond_kwargs"] = added_cond
+
+        ts_input = timesteps / timestep_scale if normalize_timestep else timesteps
+        noise_pred = self.unet(
+            hidden_states=noisy_latents,
+            timestep=ts_input,
+            encoder_hidden_states=encoder_hidden,
+            **fwd_kwargs,
+        ).sample
+
+        loss = self._compute_flow_loss(noise_pred, noise, latents)
+
+        if config.debiased_estimation:
+            weight = 1.0 / (1.0 - t + 1e-6)
+            loss = loss * weight
+
+        return loss.mean()
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values to latents (used when latent caching is off)."""

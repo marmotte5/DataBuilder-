@@ -19,11 +19,8 @@ Key differences from Flux 1:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -100,61 +97,7 @@ class Flux2Backend(TrainBackendBase):
 
         return (encoder_hidden,)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """Flux 2 uses no additional conditioning beyond hidden states."""
-        return None
-
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Flux 2 training step with flow matching."""
-        config = self.config
-
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "sigmoid":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u))
-
-        t = u
-        noise = torch.randn_like(latents)
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
-
-        encoder_hidden = te_out[0]
-        timesteps = (t * 1000).long()
-
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps / 1000,
-                encoder_hidden_states=encoder_hidden,
-            ).sample
-
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-        return loss.mean()
-
-    def generate_sample(self, prompt: str, seed: int):
-        if self.pipeline is not None:
-            return self.pipeline(
-                prompt=prompt,
-                num_inference_steps=self.config.sample_steps,
-                guidance_scale=self.config.sample_cfg_scale,
-                generator=torch.Generator(self.device).manual_seed(seed),
-            ).images[0]
-        return None
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved Flux 2 LoRA to {save_dir}")
+        return self.flow_training_step(latents, te_out, batch_size)

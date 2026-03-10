@@ -19,11 +19,8 @@ Key differences from SD3:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -164,19 +161,6 @@ class ZImageBackend(TrainBackendBase):
         encoder_hidden = torch.cat(all_hidden_states, dim=0)
         return (encoder_hidden,)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """Z-Image uses no additional conditioning beyond hidden states."""
-        return None
-
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values with Z-Image's custom VAE scaling."""
         with torch.no_grad():
@@ -210,55 +194,28 @@ class ZImageBackend(TrainBackendBase):
         """Z-Image training step with flow matching + dynamic timestep shift."""
         config = self.config
 
-        # Flow matching timestep sampling
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "sigmoid":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u))
+        u = self._sample_flow_timesteps(batch_size)
 
         # Apply dynamic timestep shift
         shift = self._get_timestep_shift(latents)
         t = shift * u / (1 + (shift - 1) * u)
 
         noise = torch.randn_like(latents)
-        # Flow matching interpolation
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
+        noisy_latents = self._flow_interpolate(latents, noise, t)
 
         encoder_hidden = te_out[0]
-        timesteps = (t * 1000).long()
 
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps / 1000,
-                encoder_hidden_states=encoder_hidden,
-            ).sample
+        noise_pred = self.unet(
+            hidden_states=noisy_latents,
+            timestep=t,
+            encoder_hidden_states=encoder_hidden,
+        ).sample
 
-        # Flow matching target
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
+        loss = self._compute_flow_loss(noise_pred, noise, latents)
 
-        # Debiased estimation for flow matching
         if config.debiased_estimation:
             weight = 1.0 / (1.0 - t + 1e-6)
             loss = loss * weight
 
         return loss.mean()
 
-    def generate_sample(self, prompt: str, seed: int):
-        if self.pipeline is not None:
-            return self.pipeline(
-                prompt=prompt,
-                num_inference_steps=self.config.sample_steps,
-                guidance_scale=self.config.sample_cfg_scale,
-                generator=torch.Generator(self.device).manual_seed(seed),
-            ).images[0]
-        else:
-            log.warning("Z-Image sample generation requires full pipeline")
-            return None
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved Z-Image LoRA to {save_dir}")

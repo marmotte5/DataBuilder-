@@ -16,11 +16,8 @@ Key differences from Flux:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -44,8 +41,8 @@ class ChromaBackend(TrainBackendBase):
         )
 
         self.pipeline = pipe
-        self.tokenizer = pipe.tokenizer           # T5 tokenizer
-        self.text_encoder = pipe.text_encoder     # T5-XXL
+        self.tokenizer = pipe.tokenizer
+        self.text_encoder = pipe.text_encoder
         self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
         self.vae = pipe.vae
         self.noise_scheduler = pipe.scheduler
@@ -57,7 +54,6 @@ class ChromaBackend(TrainBackendBase):
         log.info(f"Loaded Chroma model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
-        """Chroma transformer target modules for LoRA."""
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_mlp", "proj_out",
@@ -65,7 +61,6 @@ class ChromaBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with T5-XXL only."""
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=512,
@@ -78,65 +73,7 @@ class ChromaBackend(TrainBackendBase):
 
         return (encoder_hidden,)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """Chroma uses no additional conditioning."""
-        return None
-
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Chroma training step with flow matching."""
-        config = self.config
-
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "sigmoid":
-            u = torch.sigmoid(torch.randn_like(u))
-
-        t = u
-        noise = torch.randn_like(latents)
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
-
-        encoder_hidden = te_out[0]
-        timesteps = (t * 1000).long()
-
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps / 1000,
-                encoder_hidden_states=encoder_hidden,
-            ).sample
-
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-        if config.debiased_estimation:
-            weight = 1.0 / (1.0 - t + 1e-6)
-            loss = loss * weight
-
-        return loss.mean()
-
-    def generate_sample(self, prompt: str, seed: int):
-        if self.pipeline is not None:
-            return self.pipeline(
-                prompt=prompt,
-                num_inference_steps=self.config.sample_steps,
-                guidance_scale=self.config.sample_cfg_scale,
-                generator=torch.Generator(self.device).manual_seed(seed),
-            ).images[0]
-        return None
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved Chroma LoRA to {save_dir}")
+        return self.flow_training_step(latents, te_out, batch_size)

@@ -46,12 +46,14 @@ class EMAModel:
         if self.step <= self.update_after_step:
             return
 
-        for sp, p in zip(self.shadow_params, _grad_params(parameters)):
-            if self.cpu_offload:
-                # Move param to CPU, update, keep EMA on CPU
-                sp.lerp_(p.data.to(sp.device), 1.0 - self.decay)
-            else:
-                sp.lerp_(p.data, 1.0 - self.decay)
+        one_minus_decay = 1.0 - self.decay
+        if self.cpu_offload:
+            # Batch transfer: gather all param data to CPU in one pass
+            for sp, p in zip(self.shadow_params, _grad_params(parameters)):
+                sp.lerp_(p.data.to(sp.device, non_blocking=True), one_minus_decay)
+        else:
+            for sp, p in zip(self.shadow_params, _grad_params(parameters)):
+                sp.lerp_(p.data, one_minus_decay)
 
     def store(self, parameters: Iterable[nn.Parameter]):
         """Save current model params (before replacing with EMA for inference)."""

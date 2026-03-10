@@ -21,11 +21,9 @@ Key differences from other models:
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -136,16 +134,9 @@ class HiDreamBackend(TrainBackendBase):
                 out_4 = self.text_encoder_4(**tokens_4, output_hidden_states=True)
                 all_hidden.append(out_4.hidden_states[-1])
 
-        # Concatenate all hidden states along sequence dimension
+        # Concatenate all hidden states (pad to matching feature dim)
         if all_hidden:
-            # Pad to same feature dim before concatenation
-            max_dim = max(h.shape[-1] for h in all_hidden)
-            padded = []
-            for h in all_hidden:
-                if h.shape[-1] < max_dim:
-                    h = F.pad(h, (0, max_dim - h.shape[-1]))
-                padded.append(h)
-            encoder_hidden = torch.cat(padded, dim=1)
+            encoder_hidden = self._pad_and_cat(all_hidden)
         else:
             encoder_hidden = torch.zeros(
                 len(captions), 1, 4096,
@@ -157,66 +148,17 @@ class HiDreamBackend(TrainBackendBase):
 
         return (encoder_hidden, pooled)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """HiDream uses pooled projections."""
         if pooled is None:
             return None
-        return {
-            "pooled_projections": pooled,
-        }
+        return {"pooled_projections": pooled}
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """HiDream training step with flow matching."""
-        config = self.config
-
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "sigmoid":
-            u = torch.sigmoid(torch.randn_like(u))
-
-        t = u
-        noise = torch.randn_like(latents)
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
-
-        encoder_hidden = te_out[0]
-        pooled = te_out[1] if len(te_out) > 1 else None
-        timesteps = (t * 1000).long()
-
-        added_cond = self.get_added_cond(batch_size, pooled=pooled)
-
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            fwd_kwargs = {}
-            if added_cond is not None:
-                fwd_kwargs.update(added_cond)
-
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps / 1000,
-                encoder_hidden_states=encoder_hidden,
-                **fwd_kwargs,
-            ).sample
-
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-        if config.debiased_estimation:
-            weight = 1.0 / (1.0 - t + 1e-6)
-            loss = loss * weight
-
-        return loss.mean()
+        return self.flow_training_step(
+            latents, te_out, batch_size, use_added_cond_as_kwargs=True,
+        )
 
     def freeze_text_encoders(self):
         """Freeze all 4 text encoders."""
@@ -230,20 +172,6 @@ class HiDreamBackend(TrainBackendBase):
         if self.text_encoder_4 is not None:
             self.text_encoder_4.cpu()
         torch.cuda.empty_cache()
-
-    def generate_sample(self, prompt: str, seed: int):
-        if self.pipeline is not None:
-            return self.pipeline(
-                prompt=prompt,
-                num_inference_steps=self.config.sample_steps,
-                guidance_scale=self.config.sample_cfg_scale,
-                generator=torch.Generator(self.device).manual_seed(seed),
-            ).images[0]
-        return None
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved HiDream LoRA to {save_dir}")
 
     def cleanup(self):
         """Free all resources including 4th encoder."""

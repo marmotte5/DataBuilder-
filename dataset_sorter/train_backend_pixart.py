@@ -16,11 +16,9 @@ Key differences from SDXL:
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -33,7 +31,7 @@ class PixArtBackend(TrainBackendBase):
     model_name = "pixart"
     default_resolution = 1024
     supports_dual_te = False
-    prediction_type = "flow"  # Sigma default; Alpha uses epsilon
+    prediction_type = "flow"
 
     def load_model(self, model_path: str):
         from diffusers import PixArtSigmaPipeline
@@ -43,9 +41,9 @@ class PixArtBackend(TrainBackendBase):
         )
 
         self.pipeline = pipe
-        self.tokenizer = pipe.tokenizer           # T5 tokenizer
-        self.text_encoder = pipe.text_encoder     # T5-XXL
-        self.unet = pipe.transformer              # PixArtTransformer2DModel
+        self.tokenizer = pipe.tokenizer
+        self.text_encoder = pipe.text_encoder
+        self.unet = pipe.transformer
         self.vae = pipe.vae
         self.noise_scheduler = pipe.scheduler
 
@@ -55,7 +53,6 @@ class PixArtBackend(TrainBackendBase):
         log.info(f"Loaded PixArt model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
-        """PixArt DiT target modules for LoRA."""
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_in", "proj_out",
@@ -64,10 +61,9 @@ class PixArtBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with T5-XXL only."""
         tokens = self.tokenizer(
             captions, padding="max_length",
-            max_length=300,  # PixArt uses 300 max length
+            max_length=300,
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
@@ -77,68 +73,17 @@ class PixArtBackend(TrainBackendBase):
 
         return (encoder_hidden,)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Flow matching loss for PixArt Sigma."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """PixArt uses resolution/aspect ratio conditioning."""
         resolution = self.config.resolution
-        added_cond = {
+        return {
             "resolution": torch.tensor([resolution, resolution]).repeat(batch_size, 1).to(self.device),
             "aspect_ratio": torch.tensor([1.0]).repeat(batch_size, 1).to(self.device),
         }
-        return added_cond
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """PixArt Sigma training step with flow matching."""
-        config = self.config
-
-        # Flow matching timestep sampling
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
-        if config.timestep_sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
-        elif config.timestep_sampling == "sigmoid":
-            u = torch.sigmoid(torch.randn_like(u))
-
-        t = u
-        noise = torch.randn_like(latents)
-        noisy_latents = (1 - t.view(-1, 1, 1, 1)) * latents + t.view(-1, 1, 1, 1) * noise
-
-        encoder_hidden = te_out[0]
-        timesteps = (t * 1000).long()
-
-        added_cond = self.get_added_cond(batch_size)
-
-        with torch.autocast(device_type="cuda", dtype=self.dtype):
-            noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=timesteps,
-                encoder_hidden_states=encoder_hidden,
-                added_cond_kwargs=added_cond,
-            ).sample
-
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-        return loss.mean()
-
-    def generate_sample(self, prompt: str, seed: int):
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).images[0]
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved PixArt LoRA to {save_dir}")
+        # PixArt passes raw integer timesteps and uses added_cond_kwargs dict
+        return self.flow_training_step(
+            latents, te_out, batch_size, normalize_timestep=False,
+        )

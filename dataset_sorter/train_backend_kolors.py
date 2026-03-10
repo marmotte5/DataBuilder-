@@ -17,11 +17,9 @@ Key differences from SDXL:
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -90,14 +88,6 @@ class KolorsBackend(TrainBackendBase):
 
         return (encoder_hidden, pooled)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Epsilon prediction loss."""
-        loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
         """SDXL-style conditioning with time_ids."""
         if pooled is None:
@@ -108,14 +98,3 @@ class KolorsBackend(TrainBackendBase):
             "time_ids": time_ids,
         }
 
-    def generate_sample(self, prompt: str, seed: int):
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).images[0]
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved Kolors LoRA to {save_dir}")

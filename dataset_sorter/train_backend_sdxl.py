@@ -9,11 +9,9 @@ Pony Diffusion uses the same SDXL architecture with clip_skip=2.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.train_backend_base import TrainBackendBase
@@ -97,19 +95,6 @@ class SDXLBackend(TrainBackendBase):
         encoder_hidden = torch.cat([hidden_1, hidden_2], dim=-1)
         return (encoder_hidden, pooled)
 
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Epsilon prediction loss (standard SDXL)."""
-        if self.config.model_prediction_type == "v_prediction":
-            target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
-        else:
-            target = noise
-
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
     def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
         """SDXL requires time_ids and text_embeds as added conditioning."""
         if pooled is None:
@@ -119,16 +104,3 @@ class SDXLBackend(TrainBackendBase):
             "time_ids": self._cached_time_ids.repeat(batch_size, 1),
         }
 
-    def generate_sample(self, prompt: str, seed: int):
-        """Generate sample with SDXL pipeline."""
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).images[0]
-
-    def save_lora(self, save_dir: Path):
-        """Save SDXL LoRA weights."""
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved SDXL LoRA to {save_dir}")

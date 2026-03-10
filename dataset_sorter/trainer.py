@@ -53,64 +53,41 @@ def get_cuda_info() -> dict:
     return info
 
 
+_BACKEND_REGISTRY: dict[str, tuple[str, str]] = {
+    "sdxl": ("dataset_sorter.train_backend_sdxl", "SDXLBackend"),
+    "pony": ("dataset_sorter.train_backend_sdxl", "SDXLBackend"),
+    "sd15": ("dataset_sorter.train_backend_sd15", "SD15Backend"),
+    "flux": ("dataset_sorter.train_backend_flux", "FluxBackend"),
+    "flux2": ("dataset_sorter.train_backend_flux2", "Flux2Backend"),
+    "sd3": ("dataset_sorter.train_backend_sd3", "SD3Backend"),
+    "sd35": ("dataset_sorter.train_backend_sd35", "SD35Backend"),
+    "sd2": ("dataset_sorter.train_backend_sd2", "SD2Backend"),
+    "zimage": ("dataset_sorter.train_backend_zimage", "ZImageBackend"),
+    "pixart": ("dataset_sorter.train_backend_pixart", "PixArtBackend"),
+    "cascade": ("dataset_sorter.train_backend_cascade", "StableCascadeBackend"),
+    "hunyuan": ("dataset_sorter.train_backend_hunyuan", "HunyuanDiTBackend"),
+    "kolors": ("dataset_sorter.train_backend_kolors", "KolorsBackend"),
+    "auraflow": ("dataset_sorter.train_backend_auraflow", "AuraFlowBackend"),
+    "sana": ("dataset_sorter.train_backend_sana", "SanaBackend"),
+    "hidream": ("dataset_sorter.train_backend_hidream", "HiDreamBackend"),
+    "chroma": ("dataset_sorter.train_backend_chroma", "ChromaBackend"),
+}
+
+
 def _get_backend(config: TrainingConfig, device, dtype):
     """Instantiate the correct model-specific backend."""
-    model_type = config.model_type
-    base_type = model_type.replace("_lora", "").replace("_full", "")
+    import importlib
 
-    if base_type in ("sdxl", "pony"):
-        from dataset_sorter.train_backend_sdxl import SDXLBackend
-        return SDXLBackend(config, device, dtype)
-    elif base_type == "sd15":
-        from dataset_sorter.train_backend_sd15 import SD15Backend
-        return SD15Backend(config, device, dtype)
-    elif base_type == "flux":
-        from dataset_sorter.train_backend_flux import FluxBackend
-        return FluxBackend(config, device, dtype)
-    elif base_type == "sd3":
-        from dataset_sorter.train_backend_sd3 import SD3Backend
-        return SD3Backend(config, device, dtype)
-    elif base_type == "zimage":
-        from dataset_sorter.train_backend_zimage import ZImageBackend
-        return ZImageBackend(config, device, dtype)
-    elif base_type == "sd2":
-        from dataset_sorter.train_backend_sd2 import SD2Backend
-        return SD2Backend(config, device, dtype)
-    elif base_type == "sd35":
-        from dataset_sorter.train_backend_sd35 import SD35Backend
-        return SD35Backend(config, device, dtype)
-    elif base_type == "pixart":
-        from dataset_sorter.train_backend_pixart import PixArtBackend
-        return PixArtBackend(config, device, dtype)
-    elif base_type == "cascade":
-        from dataset_sorter.train_backend_cascade import StableCascadeBackend
-        return StableCascadeBackend(config, device, dtype)
-    elif base_type == "hunyuan":
-        from dataset_sorter.train_backend_hunyuan import HunyuanDiTBackend
-        return HunyuanDiTBackend(config, device, dtype)
-    elif base_type == "kolors":
-        from dataset_sorter.train_backend_kolors import KolorsBackend
-        return KolorsBackend(config, device, dtype)
-    elif base_type == "auraflow":
-        from dataset_sorter.train_backend_auraflow import AuraFlowBackend
-        return AuraFlowBackend(config, device, dtype)
-    elif base_type == "sana":
-        from dataset_sorter.train_backend_sana import SanaBackend
-        return SanaBackend(config, device, dtype)
-    elif base_type == "hidream":
-        from dataset_sorter.train_backend_hidream import HiDreamBackend
-        return HiDreamBackend(config, device, dtype)
-    elif base_type == "chroma":
-        from dataset_sorter.train_backend_chroma import ChromaBackend
-        return ChromaBackend(config, device, dtype)
-    elif base_type == "flux2":
-        from dataset_sorter.train_backend_flux2 import Flux2Backend
-        return Flux2Backend(config, device, dtype)
-    else:
-        # Fallback to SDXL backend (most common)
-        from dataset_sorter.train_backend_sdxl import SDXLBackend
-        log.warning(f"Unknown model type '{model_type}', falling back to SDXL backend")
-        return SDXLBackend(config, device, dtype)
+    base_type = config.model_type.replace("_lora", "").replace("_full", "")
+    entry = _BACKEND_REGISTRY.get(base_type)
+
+    if entry is None:
+        log.warning(f"Unknown model type '{config.model_type}', falling back to SDXL backend")
+        entry = _BACKEND_REGISTRY["sdxl"]
+
+    module = importlib.import_module(entry[0])
+    cls = getattr(module, entry[1])
+    return cls(config, device, dtype)
 
 
 @dataclass
@@ -389,22 +366,7 @@ class Trainer:
             progress_fn(4, 6, "Setting up optimizer...")
 
         # ── 9. Build parameter groups (separate LR for text encoders) ──
-        unet_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
-        param_groups = [{"params": unet_params, "lr": config.learning_rate}]
-
-        if config.train_text_encoder and self.backend.text_encoder is not None:
-            te_params = [p for p in self.backend.text_encoder.parameters() if p.requires_grad]
-            if te_params:
-                te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else config.learning_rate
-                param_groups.append({"params": te_params, "lr": te_lr})
-
-        if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
-            te2_params = [p for p in self.backend.text_encoder_2.parameters() if p.requires_grad]
-            if te2_params:
-                te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else config.learning_rate
-                param_groups.append({"params": te2_params, "lr": te_lr})
-
-        self.optimizer = _get_optimizer(config, param_groups)
+        self.optimizer = _get_optimizer(config, self._build_param_groups())
 
         # ── 10. Steps calculation ──
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
@@ -432,6 +394,24 @@ class Trainer:
             progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
         self.state.phase = "ready"
+
+    def _build_param_groups(self) -> list[dict]:
+        """Build optimizer parameter groups with separate LR for text encoders."""
+        config = self.config
+        groups = [{"params": [p for p in self.backend.unet.parameters() if p.requires_grad],
+                   "lr": config.learning_rate}]
+
+        te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else config.learning_rate
+        for flag, encoder in [
+            (config.train_text_encoder, self.backend.text_encoder),
+            (config.train_text_encoder_2, self.backend.text_encoder_2),
+        ]:
+            if flag and encoder is not None:
+                params = [p for p in encoder.parameters() if p.requires_grad]
+                if params:
+                    groups.append({"params": params, "lr": te_lr})
+
+        return groups
 
     def train(
         self,

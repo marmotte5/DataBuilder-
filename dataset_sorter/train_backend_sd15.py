@@ -9,11 +9,8 @@ Simplest and fastest backend — single text encoder, no time_ids.
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
 
 import torch
-import torch.nn.functional as F
 
 from dataset_sorter.train_backend_base import TrainBackendBase
 
@@ -65,32 +62,3 @@ class SD15Backend(TrainBackendBase):
             hidden = output.hidden_states[-2]
 
         return (hidden,)
-
-    def compute_loss(
-        self, noise_pred: torch.Tensor, noise: torch.Tensor,
-        latents: torch.Tensor, timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Epsilon prediction loss."""
-        if self.config.model_prediction_type == "v_prediction":
-            target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
-        else:
-            target = noise
-
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
-
-    def get_added_cond(self, batch_size: int, pooled=None) -> Optional[dict]:
-        """SD 1.5 has no added conditioning."""
-        return None
-
-    def generate_sample(self, prompt: str, seed: int):
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).images[0]
-
-    def save_lora(self, save_dir: Path):
-        self.unet.save_pretrained(str(save_dir))
-        log.info(f"Saved SD 1.5 LoRA to {save_dir}")
