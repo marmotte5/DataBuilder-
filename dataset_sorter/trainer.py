@@ -33,6 +33,10 @@ from torch.utils.data import DataLoader
 
 from dataset_sorter.ema import EMAModel
 from dataset_sorter.models import TrainingConfig
+from dataset_sorter.smart_resume import (
+    save_loss_history, load_loss_history, analyze_loss_curve,
+    compute_adjustments, format_analysis_report, apply_adjustments_to_config,
+)
 from dataset_sorter.train_dataset import CachedTrainDataset
 from dataset_sorter.utils import get_device, empty_cache, autocast_device_type
 
@@ -158,6 +162,14 @@ class Trainer:
         self.scheduler = None
         self.ema_model: Optional[EMAModel] = None
         self.grad_scaler = None
+
+        # Loss history for Smart Resume
+        self._loss_history: list[tuple[int, float]] = []
+        self._lr_history: list[tuple[int, float]] = []
+
+        # RLHF collection flag (set from UI thread when ready)
+        self._rlhf_collect = threading.Event()
+        self._rlhf_callback = None  # Set by training worker
 
         # On-demand action flags (set from UI thread, consumed in training loop)
         self._save_now = threading.Event()
@@ -497,6 +509,10 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
 
+                    # Record loss history for Smart Resume
+                    self._loss_history.append((self.state.global_step, self.state.loss))
+                    self._lr_history.append((self.state.global_step, self.state.lr))
+
                     # Callbacks
                     if loss_fn:
                         loss_fn(self.state.global_step, self.state.loss, self.state.lr)
@@ -522,6 +538,13 @@ class Trainer:
 
                     # ── On-demand actions (triggered from UI) ──
                     self._handle_on_demand_actions(sample_fn, progress_fn)
+
+                    # ── RLHF collection check ──
+                    if (config.rlhf_enabled and
+                            config.rlhf_collect_every_n_steps > 0 and
+                            self.state.global_step % config.rlhf_collect_every_n_steps == 0 and
+                            self.state.global_step > 0):
+                        self._rlhf_collect.set()
 
                     # Max steps check
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
@@ -615,6 +638,20 @@ class Trainer:
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
         torch.save(state_dict, str(save_dir / "training_state.pt"))
+
+        # Save loss history for Smart Resume
+        if self._loss_history:
+            save_loss_history(
+                self.output_dir, self._loss_history, self._lr_history,
+                config_snapshot={
+                    "learning_rate": config.learning_rate,
+                    "batch_size": config.batch_size,
+                    "gradient_accumulation": config.gradient_accumulation,
+                    "optimizer": config.optimizer,
+                    "lr_scheduler": config.lr_scheduler,
+                    "warmup_steps": config.warmup_steps,
+                },
+            )
 
         self._cleanup_old_checkpoints()
         self.state.phase = "training"
@@ -904,7 +941,54 @@ class Trainer:
                 log.warning(f"Could not restore EMA state: {e}")
 
         log.info(f"Resumed from checkpoint: step {self.state.global_step}, epoch {self.state.epoch}")
+
+        # ── Smart Resume: analyze loss curve and adjust hyperparams ──
+        if self.config.smart_resume and hasattr(self, 'output_dir') and self.output_dir is not None:
+            self._smart_resume_analyze()
+
         return True
+
+    def _smart_resume_analyze(self):
+        """Analyse previous loss history and adjust hyperparams for better resumption."""
+        loss_history = load_loss_history(self.output_dir)
+        if not loss_history:
+            log.info("Smart Resume: No loss history found, skipping analysis.")
+            return
+
+        analysis = analyze_loss_curve(loss_history)
+        config = self.config
+
+        # Compute remaining steps
+        remaining = max(1, self.total_steps - self.state.global_step)
+
+        analysis = compute_adjustments(
+            analysis,
+            current_lr=config.learning_rate,
+            current_batch_size=config.batch_size,
+            current_epochs=config.epochs,
+            current_warmup=config.warmup_steps,
+            current_optimizer=config.optimizer,
+            total_steps_remaining=remaining,
+        )
+
+        report = format_analysis_report(analysis)
+        log.info(report)
+
+        # Store analysis for UI access
+        self._smart_resume_analysis = analysis
+
+        # Auto-apply adjustments if configured
+        if config.smart_resume_auto_apply and analysis.adjustments:
+            apply_adjustments_to_config(config, analysis.adjustments)
+
+            # Rebuild scheduler with new LR if it changed
+            if "learning_rate" in analysis.adjustments:
+                new_lr = analysis.adjustments["learning_rate"]
+                for pg in self.optimizer.param_groups:
+                    pg["lr"] = new_lr
+                log.info(f"Smart Resume: Updated optimizer LR to {new_lr:.2e}")
+
+            log.info("Smart Resume: Adjustments applied automatically.")
 
     def cleanup(self):
         """Free all resources (safe even if setup() failed)."""

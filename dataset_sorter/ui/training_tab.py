@@ -240,6 +240,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         config_tabs.addTab(self._build_sampling_tab(), "Sampling")
         config_tabs.addTab(self._build_controlnet_tab(), "ControlNet")
         config_tabs.addTab(self._build_dpo_tab(), "DPO")
+        config_tabs.addTab(self._build_rlhf_tab(), "RLHF")
         splitter.addWidget(config_tabs)
 
         # Right: Training output
@@ -595,6 +596,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._training_worker.error.connect(self._on_error)
         self._training_worker.finished_training.connect(self._on_finished)
         self._training_worker.paused_changed.connect(self._on_paused_changed)
+        self._training_worker.smart_resume_report.connect(self._on_smart_resume_report)
+        self._training_worker.rlhf_candidates_ready.connect(self._on_rlhf_candidates)
 
         # Start VRAM monitor
         self._vram_monitor = VRAMMonitor(interval_ms=2000)
@@ -619,6 +622,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.btn_save_now.setEnabled(training)
         self.btn_sample_now.setEnabled(training)
         self.btn_backup.setEnabled(training)
+        self.btn_collect_now.setEnabled(training)
         self.train_progress.setVisible(training)
 
     def _stop_training(self):
@@ -724,6 +728,103 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _on_error(self, error_msg):
         self._log(f"ERROR: {error_msg}")
+
+    # ── Smart Resume ─────────────────────────────────────────────────
+
+    def _on_smart_resume_report(self, report: str):
+        """Show Smart Resume analysis in the log and optionally in a dialog."""
+        self._log("")
+        self._log(report)
+        self._log("")
+
+        # If auto-apply is off, show a dialog for user approval
+        config = self.build_config()
+        if not config.smart_resume_auto_apply:
+            from dataset_sorter.ui.rlhf_dialog import SmartResumeDialog
+            dlg = SmartResumeDialog(report, parent=self)
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                self._log("Smart Resume: User chose to keep original settings.")
+
+    def _analyze_loss_history(self):
+        """Preview Smart Resume analysis from the output directory."""
+        output_dir = self.output_dir_input.text().strip()
+        if not output_dir:
+            self._log("ERROR: No output directory set. Cannot analyse loss history.")
+            return
+
+        from dataset_sorter.smart_resume import (
+            load_loss_history, analyze_loss_curve, compute_adjustments,
+            format_analysis_report,
+        )
+
+        output_path = Path(output_dir)
+        loss_history = load_loss_history(output_path)
+        if not loss_history:
+            self._log("No loss history found in the output directory.")
+            return
+
+        config = self.build_config()
+        analysis = analyze_loss_curve(loss_history)
+        analysis = compute_adjustments(
+            analysis,
+            current_lr=config.learning_rate,
+            current_batch_size=config.batch_size,
+            current_epochs=config.epochs,
+            current_warmup=config.warmup_steps,
+            current_optimizer=config.optimizer,
+            total_steps_remaining=max(1, config.total_steps),
+        )
+        report = format_analysis_report(analysis)
+        self._log("")
+        self._log(report)
+        self._log("")
+
+    # ── RLHF ─────────────────────────────────────────────────────────
+
+    def _collect_rlhf_now(self):
+        """Manually trigger RLHF preference collection."""
+        if self._training_worker:
+            round_idx = self.build_config().rlhf_dpo_rounds
+            self._training_worker.generate_rlhf_candidates(round_idx)
+
+    def _on_rlhf_candidates(self, candidates: list, round_idx: int):
+        """Show the RLHF preference dialog when candidates are ready."""
+        if not candidates:
+            self._log("RLHF: No candidates generated.")
+            if self._training_worker:
+                self._training_worker.resume()
+            return
+
+        from dataset_sorter.ui.rlhf_dialog import RLHFPreferenceDialog
+
+        step = 0
+        if self._training_worker and self._training_worker.trainer:
+            step = self._training_worker.trainer.state.global_step
+
+        dlg = RLHFPreferenceDialog(
+            candidates=candidates,
+            round_idx=round_idx,
+            step=step,
+            parent=self,
+        )
+
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            selections = dlg.get_selections()
+            self._log(f"RLHF: {len(selections)} preferences collected for round {round_idx + 1}.")
+
+            if self._training_worker:
+                self._training_worker.apply_rlhf_preferences(selections)
+
+            # Update stats
+            total_prefs = (round_idx + 1) * len(selections)
+            self.rlhf_stats_label.setText(
+                f"Rounds completed: {round_idx + 1}  |  "
+                f"Total preferences: ~{total_prefs}"
+            )
+        else:
+            self._log("RLHF: Preferences skipped for this round.")
+            if self._training_worker:
+                self._training_worker.trainer.resume()
 
     # ── VRAM Pre-Estimation ─────────────────────────────────────────
 

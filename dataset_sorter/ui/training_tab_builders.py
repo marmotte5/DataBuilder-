@@ -816,3 +816,113 @@ class TrainingTabBuildersMixin:
         layout.addStretch()
         scroll.setWidget(w)
         return scroll
+
+    def _build_rlhf_tab(self):
+        """Build the RLHF + Smart Resume configuration tab."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setSpacing(10)
+
+        # ── Smart Resume ──
+        g1 = self._group("Smart Resume")
+        g1l = QGridLayout()
+
+        self.smart_resume_check = QCheckBox("Enable Smart Resume")
+        self.smart_resume_check.setToolTip(
+            "When resuming from a checkpoint, analyse the loss curve "
+            "and automatically adjust hyperparameters (LR, batch size, etc.)"
+        )
+        g1l.addWidget(self.smart_resume_check, 0, 0, 1, 2)
+
+        self.smart_resume_auto_apply_check = QCheckBox("Auto-Apply Adjustments")
+        self.smart_resume_auto_apply_check.setChecked(True)
+        self.smart_resume_auto_apply_check.setToolTip(
+            "Automatically apply recommended adjustments without a confirmation dialog. "
+            "Uncheck to review recommendations before applying."
+        )
+        g1l.addWidget(self.smart_resume_auto_apply_check, 1, 0, 1, 2)
+
+        self.btn_analyze_loss = QPushButton("Analyse Loss History Now")
+        self.btn_analyze_loss.setToolTip(
+            "Load and analyse the loss history from the output directory "
+            "to preview what Smart Resume would recommend."
+        )
+        self.btn_analyze_loss.clicked.connect(self._analyze_loss_history)
+        g1l.addWidget(self.btn_analyze_loss, 2, 0, 1, 2)
+
+        g1.setLayout(g1l)
+        layout.addWidget(g1)
+
+        # ── RLHF ──
+        g2 = self._group("RLHF — Reinforcement Learning from Human Feedback")
+        g2l = QGridLayout()
+
+        self.rlhf_enable_check = QCheckBox("Enable RLHF Preference Collection")
+        self.rlhf_enable_check.setToolTip(
+            "Periodically pause training to show you generated image pairs. "
+            "Pick your preferences to fine-tune with DPO."
+        )
+        g2l.addWidget(self.rlhf_enable_check, 0, 0, 1, 2)
+
+        g2l.addWidget(QLabel("Pairs Per Round"), 1, 0)
+        self.rlhf_pairs_spin = QSpinBox()
+        self.rlhf_pairs_spin.setRange(1, 16)
+        self.rlhf_pairs_spin.setValue(4)
+        self.rlhf_pairs_spin.setToolTip(
+            "Number of image pairs to show each collection round. "
+            "More pairs = better DPO signal but takes longer to annotate."
+        )
+        g2l.addWidget(self.rlhf_pairs_spin, 1, 1)
+
+        g2l.addWidget(QLabel("Collect Every N Steps"), 2, 0)
+        self.rlhf_interval_spin = QSpinBox()
+        self.rlhf_interval_spin.setRange(50, 5000)
+        self.rlhf_interval_spin.setValue(200)
+        self.rlhf_interval_spin.setSingleStep(50)
+        self.rlhf_interval_spin.setToolTip(
+            "Pause training for preference collection every N steps."
+        )
+        g2l.addWidget(self.rlhf_interval_spin, 2, 1)
+
+        g2l.addWidget(QLabel("DPO Beta"), 3, 0)
+        self.rlhf_dpo_beta_spin = QDoubleSpinBox()
+        self.rlhf_dpo_beta_spin.setRange(0.01, 1.0)
+        self.rlhf_dpo_beta_spin.setDecimals(3)
+        self.rlhf_dpo_beta_spin.setValue(0.1)
+        self.rlhf_dpo_beta_spin.setToolTip(
+            "KL penalty for DPO. Higher = more conservative. 0.1 = standard."
+        )
+        g2l.addWidget(self.rlhf_dpo_beta_spin, 3, 1)
+
+        g2l.addWidget(QLabel("DPO Loss Type"), 4, 0)
+        self.rlhf_loss_combo = QComboBox()
+        from dataset_sorter.training_presets import DPO_LOSS_TYPES
+        for key, label in DPO_LOSS_TYPES.items():
+            self.rlhf_loss_combo.addItem(label, key)
+        g2l.addWidget(self.rlhf_loss_combo, 4, 1)
+
+        self.btn_collect_now = QPushButton("Collect Preferences Now")
+        self.btn_collect_now.setToolTip(
+            "Immediately pause and generate image pairs for preference collection."
+        )
+        self.btn_collect_now.setEnabled(False)
+        self.btn_collect_now.clicked.connect(self._collect_rlhf_now)
+        g2l.addWidget(self.btn_collect_now, 5, 0, 1, 2)
+
+        # Stats
+        self.rlhf_stats_label = QLabel("No preferences collected yet.")
+        self.rlhf_stats_label.setWordWrap(True)
+        self.rlhf_stats_label.setStyleSheet(
+            "color: #8b949e; font-size: 11px; background: transparent; padding: 4px;"
+        )
+        g2l.addWidget(self.rlhf_stats_label, 6, 0, 1, 2)
+
+        g2.setLayout(g2l)
+        layout.addWidget(g2)
+
+        layout.addStretch()
+        scroll.setWidget(w)
+        return scroll

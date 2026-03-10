@@ -150,6 +150,19 @@ class TrainingConfig:
     prior_loss_weight: float = 1.0  # DreamBooth prior preservation
     max_grad_norm: float = 1.0      # Gradient clipping
 
+    # ── Smart Resume ─────────────────────────────────────────────────
+    smart_resume: bool = False          # Analyse loss curve on resume and auto-adjust
+    smart_resume_auto_apply: bool = True  # Automatically apply recommended adjustments
+
+    # ── RLHF / DPO ──────────────────────────────────────────────────
+    rlhf_enabled: bool = False          # Enable RLHF preference collection
+    rlhf_pairs_per_round: int = 4       # Number of image pairs to show per round
+    rlhf_collect_every_n_steps: int = 200  # Collect preferences every N steps
+    rlhf_dpo_rounds: int = 0           # Number of DPO fine-tune rounds completed
+    dpo_beta: float = 0.1              # KL penalty coefficient for DPO
+    dpo_loss_type: str = "sigmoid"     # sigmoid, hinge, ipo
+    dpo_label_smoothing: float = 0.0   # Label smoothing for robust DPO
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 

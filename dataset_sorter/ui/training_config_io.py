@@ -120,6 +120,17 @@ class TrainingConfigIOMixin:
         if prompts_text:
             config.sample_prompts = [p.strip() for p in prompts_text.split("\n") if p.strip()]
 
+        # Smart Resume
+        config.smart_resume = self.smart_resume_check.isChecked()
+        config.smart_resume_auto_apply = self.smart_resume_auto_apply_check.isChecked()
+
+        # RLHF
+        config.rlhf_enabled = self.rlhf_enable_check.isChecked()
+        config.rlhf_pairs_per_round = self.rlhf_pairs_spin.value()
+        config.rlhf_collect_every_n_steps = self.rlhf_interval_spin.value()
+        config.dpo_beta = self.rlhf_dpo_beta_spin.value()
+        config.dpo_loss_type = self.rlhf_loss_combo.currentData() or "sigmoid"
+
         return config
 
     def apply_config(self, config: TrainingConfig):
@@ -251,6 +262,20 @@ class TrainingConfigIOMixin:
 
         if config.sample_prompts:
             self.prompts_input.setPlainText("\n".join(config.sample_prompts))
+
+        # Smart Resume
+        self.smart_resume_check.setChecked(config.smart_resume)
+        self.smart_resume_auto_apply_check.setChecked(config.smart_resume_auto_apply)
+
+        # RLHF
+        self.rlhf_enable_check.setChecked(config.rlhf_enabled)
+        self.rlhf_pairs_spin.setValue(config.rlhf_pairs_per_round)
+        self.rlhf_interval_spin.setValue(config.rlhf_collect_every_n_steps)
+        self.rlhf_dpo_beta_spin.setValue(config.dpo_beta)
+        for i in range(self.rlhf_loss_combo.count()):
+            if self.rlhf_loss_combo.itemData(i) == config.dpo_loss_type:
+                self.rlhf_loss_combo.setCurrentIndex(i)
+                break
 
     def _save_training_config(self):
         """Save current training configuration to a JSON file."""
