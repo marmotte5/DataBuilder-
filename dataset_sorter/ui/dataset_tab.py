@@ -75,23 +75,35 @@ class DatasetTab(QWidget):
 
         layout.addWidget(tabs)
 
-    def set_data(self, entries: list[ImageEntry], tag_counts: Counter):
-        """Update all sections with current dataset data."""
+    def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
+                  deleted_tags: set | None = None):
+        """Update all sections with current dataset data.
+
+        When deleted_tags is provided, captions, histograms, and spell-check
+        operate only on active (non-deleted) tags -- matching what gets exported.
+        """
         self._entries = entries
         self._tag_counts = tag_counts
+        _del = deleted_tags or set()
 
-        # Captions for preview
-        captions = [", ".join(e.tags) for e in entries if e.tags]
+        # Filter tag_counts to exclude deleted tags
+        active_counts = Counter({t: c for t, c in tag_counts.items() if t not in _del})
+
+        # Captions for preview (filter deleted tags)
+        captions = [
+            ", ".join(t for t in e.tags if t not in _del)
+            for e in entries if e.tags
+        ]
         self.caption_section.set_captions(captions)
 
         # Token counts
         self.token_section.set_entries(entries)
 
-        # Tag histogram
-        self.histogram_section.set_tag_counts(tag_counts)
+        # Tag histogram (active tags only)
+        self.histogram_section.set_tag_counts(active_counts)
 
-        # Spell check
-        self.spellcheck_section.set_tag_counts(tag_counts)
+        # Spell check (active tags only)
+        self.spellcheck_section.set_tag_counts(active_counts)
 
         # Duplicates
         self.duplicate_section.set_entries(entries)

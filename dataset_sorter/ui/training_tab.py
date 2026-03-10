@@ -682,10 +682,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         # Display first sample
         if images:
-            img = images[0]
+            img = images[0].convert("RGB")  # Ensure RGB mode
             data = img.tobytes("raw", "RGB")
             qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimg).scaled(
+            # .copy() ensures Qt owns the pixel data (avoids dangling pointer
+            # if Python's `data` bytes object is garbage-collected first).
+            pixmap = QPixmap.fromImage(qimg.copy()).scaled(
                 400, 300, Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -798,8 +800,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         from dataset_sorter.ui.rlhf_dialog import RLHFPreferenceDialog
 
         step = 0
-        if self._training_worker and self._training_worker.trainer:
-            step = self._training_worker.trainer.state.global_step
+        if self._training_worker and getattr(self._training_worker, 'trainer', None):
+            try:
+                step = self._training_worker.trainer.state.global_step
+            except AttributeError:
+                pass  # Trainer not fully initialized yet
 
         dlg = RLHFPreferenceDialog(
             candidates=candidates,
@@ -824,7 +829,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         else:
             self._log("RLHF: Preferences skipped for this round.")
             if self._training_worker:
-                self._training_worker.trainer.resume()
+                # Resume via worker (thread-safe), not trainer directly
+                self._training_worker.resume()
 
     # ── VRAM Pre-Estimation ─────────────────────────────────────────
 

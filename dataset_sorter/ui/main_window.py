@@ -581,7 +581,7 @@ class MainWindow(QMainWindow):
         self.image_tab.set_data(
             self.entries, self.deleted_tags, self.manual_overrides,
         )
-        self.dataset_tab.set_data(self.entries, self.tag_counts)
+        self.dataset_tab.set_data(self.entries, self.tag_counts, self.deleted_tags)
 
     # -- Undo / Redo --
 
