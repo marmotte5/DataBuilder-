@@ -229,13 +229,17 @@ class TagPanel(QWidget):
         if not sel:
             return
         sel.blockSignals(True)
+        # Clear first, then accumulate with Select|Rows (not ClearAndSelect)
+        sel.clearSelection()
+        from PyQt6.QtCore import QItemSelectionModel
+        flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
         for source_row in range(self._model.rowCount()):
             tag = self._model.tag_at_row(source_row)
             if tag in tag_set:
                 source_idx = self._model.index(source_row, 0)
                 proxy_idx = self._proxy.mapFromSource(source_idx)
                 if proxy_idx.isValid():
-                    self.table.selectRow(proxy_idx.row())
+                    sel.select(proxy_idx, flags)
         sel.blockSignals(False)
 
     def _on_filter_text_changed(self, text: str):

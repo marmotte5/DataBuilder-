@@ -136,35 +136,42 @@ class TrainingWorker(QThread):
 
     def stop(self):
         """Signal trainer to stop gracefully."""
-        if self.trainer:
-            self.trainer.stop()
+        # Snapshot ref to avoid TOCTOU race (trainer set to None on worker thread)
+        t = self.trainer
+        if t:
+            t.stop()
 
     def pause(self):
         """Pause training at next step boundary."""
-        if self.trainer:
-            self.trainer.pause()
+        t = self.trainer
+        if t:
+            t.pause()
             self.paused_changed.emit(True)
 
     def resume(self):
         """Resume paused training."""
-        if self.trainer:
-            self.trainer.resume()
+        t = self.trainer
+        if t:
+            t.resume()
             self.paused_changed.emit(False)
 
     def request_save(self):
         """Request an immediate checkpoint save."""
-        if self.trainer:
-            self.trainer.request_save()
+        t = self.trainer
+        if t:
+            t.request_save()
 
     def request_sample(self):
         """Request immediate sample generation."""
-        if self.trainer:
-            self.trainer.request_sample()
+        t = self.trainer
+        if t:
+            t.request_sample()
 
     def request_backup(self):
         """Request a full project backup."""
-        if self.trainer:
-            self.trainer.request_backup()
+        t = self.trainer
+        if t:
+            t.request_backup()
 
     def generate_rlhf_candidates(self, round_idx: int = 0):
         """Generate candidate image pairs for RLHF preference collection.

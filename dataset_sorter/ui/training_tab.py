@@ -574,10 +574,14 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                    f"TE={'Yes' if config.cache_text_encoder else 'No'}")
         self._log("")
 
-        # Clean up any previous worker
+        # Clean up any previous worker.
+        # quit() only stops event loops — for run()-based QThreads we must
+        # call stop() (sets the trainer's running flag) then wait().
         if hasattr(self, '_training_worker') and self._training_worker is not None:
+            if hasattr(self._training_worker, 'stop'):
+                self._training_worker.stop()
             self._training_worker.quit()
-            self._training_worker.wait(3000)
+            self._training_worker.wait(5000)
             self._training_worker = None
 
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
