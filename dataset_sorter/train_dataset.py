@@ -44,6 +44,7 @@ class CachedTrainDataset(Dataset):
         keep_first_n_tags: int = 1,
         caption_dropout_rate: float = 0.0,
         cache_dir: Optional[Path] = None,
+        bucket_assignments: Optional[list[tuple[int, int]]] = None,
     ):
         self.image_paths = image_paths
         self.captions = captions
@@ -54,6 +55,9 @@ class CachedTrainDataset(Dataset):
         self.keep_first_n_tags = keep_first_n_tags
         self.caption_dropout_rate = caption_dropout_rate
         self.cache_dir = cache_dir
+
+        # Per-image bucket resolutions (None = all use self.resolution)
+        self._bucket_assignments = bucket_assignments
 
         # Caches (populated by cache_latents / cache_text_encoder)
         self._latent_cache: dict[int, torch.Tensor] = {}
@@ -73,8 +77,29 @@ class CachedTrainDataset(Dataset):
     def __len__(self):
         return len(self.image_paths)
 
+    def _get_transforms_for_resolution(self, width: int, height: int):
+        """Build transforms for a specific (w, h) bucket resolution."""
+        crop_cls = transforms.CenterCrop if self.center_crop else transforms.RandomCrop
+        return transforms.Compose([
+            transforms.Resize(
+                min(width, height),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
+            crop_cls((height, width)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ])
+
     def __getitem__(self, idx):
         result = {}
+
+        # Determine target resolution for this image
+        if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
+            target_w, target_h = self._bucket_assignments[idx]
+            result["bucket_width"] = target_w
+            result["bucket_height"] = target_h
+        else:
+            target_w, target_h = self.resolution, self.resolution
 
         # --- Image / Latent ---
         if self._latents_cached and idx in self._latent_cache:
@@ -88,10 +113,16 @@ class CachedTrainDataset(Dataset):
                 img = Image.open(self.image_paths[idx]).convert("RGB")
             except Exception as e:
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
-                img = Image.new("RGB", (self.resolution, self.resolution))
+                img = Image.new("RGB", (target_w, target_h))
             if self.random_flip and random.random() < 0.5:
                 img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-            pixel_values = self._transforms(img)
+
+            # Use bucket-specific transforms when bucketing is active
+            if self._bucket_assignments is not None:
+                t = self._get_transforms_for_resolution(target_w, target_h)
+                pixel_values = t(img)
+            else:
+                pixel_values = self._transforms(img)
             result["pixel_values"] = pixel_values
 
         # --- Caption with tag shuffle ---
@@ -125,7 +156,12 @@ class CachedTrainDataset(Dataset):
         return ", ".join(fixed + rest)
 
     def cache_latents_from_vae(self, vae, device, dtype, to_disk=False, progress_fn=None):
-        """Pre-compute and cache VAE latents for all images."""
+        """Pre-compute and cache VAE latents for all images.
+
+        When bucket_assignments are set, each image is resized to its
+        assigned bucket resolution before encoding. This means latents
+        have different spatial dimensions per bucket.
+        """
         vae.eval()
         vae.requires_grad_(False)
 
@@ -142,15 +178,28 @@ class CachedTrainDataset(Dataset):
                         progress_fn(idx + 1, len(self))
                     continue
 
+            # Determine target resolution
+            if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
+                target_w, target_h = self._bucket_assignments[idx]
+            else:
+                target_w, target_h = self.resolution, self.resolution
+
             try:
                 img = Image.open(self.image_paths[idx]).convert("RGB")
             except Exception as e:
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
-                img = Image.new("RGB", (self.resolution, self.resolution))
+                img = Image.new("RGB", (target_w, target_h))
 
-            pixel_values = self._transforms(img).unsqueeze(0).to(
-                device, dtype=dtype, memory_format=torch.channels_last,
-            )
+            # Use bucket-specific transforms when bucketing is active
+            if self._bucket_assignments is not None:
+                t = self._get_transforms_for_resolution(target_w, target_h)
+                pixel_values = t(img).unsqueeze(0).to(
+                    device, dtype=dtype, memory_format=torch.channels_last,
+                )
+            else:
+                pixel_values = self._transforms(img).unsqueeze(0).to(
+                    device, dtype=dtype, memory_format=torch.channels_last,
+                )
 
             with torch.no_grad():
                 latent = vae.encode(pixel_values).latent_dist.sample()

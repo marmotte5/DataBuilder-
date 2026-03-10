@@ -1602,5 +1602,246 @@ class TestLoadSchedulerFunction:
             _load_scheduler(mock_pipe, "nonexistent_scheduler")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# BUCKET SAMPLER TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGenerateBuckets:
+    """Test bucket generation logic."""
+
+    def test_basic_bucket_generation(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets = generate_buckets(resolution=1024, min_resolution=512, max_resolution=1024, step_size=64)
+        assert len(buckets) > 0
+        # All buckets should have dimensions that are multiples of step_size
+        for w, h in buckets:
+            assert w % 64 == 0
+            assert h % 64 == 0
+
+    def test_bucket_dimensions_in_range(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets = generate_buckets(resolution=1024, min_resolution=512, max_resolution=1024, step_size=64)
+        for w, h in buckets:
+            assert 512 <= w <= 1024
+            assert 512 <= h <= 1024
+
+    def test_bucket_pixel_area_constraint(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets = generate_buckets(resolution=1024, min_resolution=512, max_resolution=1024, step_size=64)
+        max_area = 1024 * 1024
+        for w, h in buckets:
+            assert w * h <= max_area
+
+    def test_square_bucket_included(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets = generate_buckets(resolution=1024, min_resolution=512, max_resolution=1024, step_size=64)
+        assert (1024, 1024) in buckets
+        assert (512, 512) in buckets
+
+    def test_sorted_by_aspect_ratio(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets = generate_buckets(resolution=1024, min_resolution=512, max_resolution=1024, step_size=64)
+        ratios = [w / h for w, h in buckets]
+        assert ratios == sorted(ratios)
+
+    def test_small_step_size(self):
+        from dataset_sorter.bucket_sampler import generate_buckets
+        buckets_64 = generate_buckets(resolution=512, min_resolution=256, max_resolution=512, step_size=64)
+        buckets_128 = generate_buckets(resolution=512, min_resolution=256, max_resolution=512, step_size=128)
+        # Smaller step = more buckets
+        assert len(buckets_64) >= len(buckets_128)
+
+
+class TestAssignBucket:
+    """Test bucket assignment for individual images."""
+
+    def test_square_image_to_square_bucket(self):
+        from dataset_sorter.bucket_sampler import assign_bucket
+        buckets = [(512, 768), (768, 512), (1024, 1024)]
+        # Square image → square bucket
+        assert assign_bucket(1024, 1024, buckets) == (1024, 1024)
+
+    def test_landscape_image(self):
+        from dataset_sorter.bucket_sampler import assign_bucket
+        buckets = [(512, 512), (768, 512), (1024, 768), (1024, 1024)]
+        # Wide image → landscape bucket
+        w, h = assign_bucket(1920, 1080, buckets)
+        assert w >= h
+
+    def test_portrait_image(self):
+        from dataset_sorter.bucket_sampler import assign_bucket
+        buckets = [(512, 512), (512, 768), (768, 1024), (1024, 1024)]
+        # Tall image → portrait bucket
+        w, h = assign_bucket(768, 1200, buckets)
+        assert h >= w
+
+    def test_empty_buckets_fallback(self):
+        from dataset_sorter.bucket_sampler import assign_bucket
+        assert assign_bucket(100, 100, []) == (1024, 1024)
+
+    def test_extreme_aspect_ratio(self):
+        from dataset_sorter.bucket_sampler import assign_bucket
+        buckets = [(512, 512), (1024, 512), (512, 1024)]
+        # Very wide panorama
+        w, h = assign_bucket(4000, 500, buckets)
+        assert w > h
+
+
+class TestBucketBatchSampler:
+    """Test the custom batch sampler."""
+
+    def test_basic_batching(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 10 + [(1024, 768)] * 10
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        batches = list(sampler)
+        assert len(batches) > 0
+        # Each batch should have exactly batch_size items
+        for batch in batches:
+            assert len(batch) == 4
+
+    def test_all_indices_from_same_bucket(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 8 + [(1024, 768)] * 8
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        for batch in sampler:
+            # All indices in a batch should have the same bucket
+            buckets_in_batch = set(assignments[i] for i in batch)
+            assert len(buckets_in_batch) == 1
+
+    def test_drop_last_removes_incomplete(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        # 7 images in one bucket, batch_size=4 → only 1 batch (drop last 3)
+        assignments = [(512, 512)] * 7
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        batches = list(sampler)
+        assert len(batches) == 1
+        assert len(batches[0]) == 4
+
+    def test_no_drop_last(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 7
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=False, shuffle=False)
+        batches = list(sampler)
+        assert len(batches) == 2  # 4 + 3
+
+    def test_len_matches_iteration(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 20 + [(768, 512)] * 12
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        assert len(sampler) == len(list(sampler))
+
+    def test_bucket_resolutions_property(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 5 + [(1024, 768)] * 10
+        sampler = BucketBatchSampler(assignments, batch_size=2)
+        resolutions = sampler.bucket_resolutions
+        assert resolutions[(512, 512)] == 5
+        assert resolutions[(1024, 768)] == 10
+
+    def test_shuffle_changes_order(self):
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        assignments = [(512, 512)] * 20
+        s1 = BucketBatchSampler(assignments, batch_size=4, shuffle=True, seed=42)
+        s2 = BucketBatchSampler(assignments, batch_size=4, shuffle=True, seed=99)
+        b1 = [tuple(b) for b in s1]
+        b2 = [tuple(b) for b in s2]
+        # Different seeds should produce different orderings (very likely with 20 items)
+        assert b1 != b2
+
+
+class TestCachedTrainDatasetBucketing:
+    """Test dataset with bucket assignments."""
+
+    def test_dataset_with_buckets(self):
+        import torch
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        # Create a minimal dataset with bucket assignments
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create dummy images
+            from PIL import Image as PILImage
+            paths = []
+            for i in range(4):
+                p = Path(tmpdir) / f"img_{i}.png"
+                PILImage.new("RGB", (800, 600)).save(str(p))
+                paths.append(p)
+
+            captions = ["test"] * 4
+            bucket_assignments = [(768, 512), (768, 512), (768, 512), (768, 512)]
+
+            ds = CachedTrainDataset(
+                image_paths=paths,
+                captions=captions,
+                resolution=1024,
+                bucket_assignments=bucket_assignments,
+            )
+            item = ds[0]
+            assert "pixel_values" in item
+            assert "bucket_width" in item
+            assert item["bucket_width"] == 768
+            assert item["bucket_height"] == 512
+            # pixel_values shape should match bucket (C, H, W)
+            pv = item["pixel_values"]
+            assert pv.shape[1] == 512  # height
+            assert pv.shape[2] == 768  # width
+
+    def test_dataset_without_buckets(self):
+        import torch
+        from dataset_sorter.train_dataset import CachedTrainDataset
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from PIL import Image as PILImage
+            p = Path(tmpdir) / "img.png"
+            PILImage.new("RGB", (800, 600)).save(str(p))
+
+            ds = CachedTrainDataset(
+                image_paths=[p],
+                captions=["test"],
+                resolution=512,
+            )
+            item = ds[0]
+            assert "pixel_values" in item
+            assert "bucket_width" not in item
+            # Should be square (default resolution)
+            pv = item["pixel_values"]
+            assert pv.shape[1] == 512
+            assert pv.shape[2] == 512
+
+
+class TestCrossPlatformScripts:
+    """Test that launch scripts exist and are valid."""
+
+    def test_run_sh_exists(self):
+        assert Path("/home/user/DataBuilder-/run.sh").exists()
+
+    def test_install_sh_exists(self):
+        assert Path("/home/user/DataBuilder-/install.sh").exists()
+
+    def test_run_command_exists(self):
+        assert Path("/home/user/DataBuilder-/run.command").exists()
+
+    def test_run_sh_executable(self):
+        assert os.access("/home/user/DataBuilder-/run.sh", os.X_OK)
+
+    def test_install_sh_executable(self):
+        assert os.access("/home/user/DataBuilder-/install.sh", os.X_OK)
+
+    def test_run_command_executable(self):
+        assert os.access("/home/user/DataBuilder-/run.command", os.X_OK)
+
+    def test_run_sh_has_shebang(self):
+        content = Path("/home/user/DataBuilder-/run.sh").read_text()
+        assert content.startswith("#!/")
+
+    def test_install_sh_has_shebang(self):
+        content = Path("/home/user/DataBuilder-/install.sh").read_text()
+        assert content.startswith("#!/")
+
+    def test_run_bat_exists(self):
+        assert Path("/home/user/DataBuilder-/run.bat").exists()
+
+    def test_install_bat_exists(self):
+        assert Path("/home/user/DataBuilder-/install.bat").exists()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

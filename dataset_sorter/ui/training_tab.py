@@ -525,6 +525,20 @@ class TrainingTab(QWidget):
         self.bucket_step_spin.setValue(64)
         g4l.addWidget(self.bucket_step_spin, 1, 1)
 
+        g4l.addWidget(QLabel("Min Resolution"), 2, 0)
+        self.bucket_min_spin = QSpinBox()
+        self.bucket_min_spin.setRange(256, 2048)
+        self.bucket_min_spin.setSingleStep(64)
+        self.bucket_min_spin.setValue(512)
+        g4l.addWidget(self.bucket_min_spin, 2, 1)
+
+        g4l.addWidget(QLabel("Max Resolution"), 3, 0)
+        self.bucket_max_spin = QSpinBox()
+        self.bucket_max_spin.setRange(256, 2048)
+        self.bucket_max_spin.setSingleStep(64)
+        self.bucket_max_spin.setValue(1024)
+        g4l.addWidget(self.bucket_max_spin, 3, 1)
+
         g4.setLayout(g4l)
         layout.addWidget(g4)
 
@@ -842,6 +856,8 @@ class TrainingTab(QWidget):
         config.flip_augmentation = self.flip_aug_check.isChecked()
         config.enable_bucket = self.bucket_check.isChecked()
         config.bucket_reso_steps = self.bucket_step_spin.value()
+        config.resolution_min = self.bucket_min_spin.value()
+        config.resolution_max = self.bucket_max_spin.value()
 
         # Advanced
         config.noise_offset = self.noise_offset_spin.value()
@@ -959,6 +975,8 @@ class TrainingTab(QWidget):
         self.flip_aug_check.setChecked(config.flip_augmentation)
         self.bucket_check.setChecked(config.enable_bucket)
         self.bucket_step_spin.setValue(config.bucket_reso_steps)
+        self.bucket_min_spin.setValue(config.resolution_min)
+        self.bucket_max_spin.setValue(config.resolution_max)
 
         # Advanced
         self.noise_offset_spin.setValue(config.noise_offset)

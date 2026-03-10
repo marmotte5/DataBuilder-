@@ -340,8 +340,38 @@ class Trainer:
         if progress_fn:
             progress_fn(2, 6, "Preparing dataset...")
 
-        # ── 6. Create dataset ──
+        # ── 6. Create dataset (with optional aspect ratio bucketing) ──
         cache_dir = output_dir / ".cache" if config.cache_latents_to_disk else None
+
+        bucket_assignments = None
+        self._bucket_sampler = None
+
+        if config.enable_bucket:
+            from dataset_sorter.bucket_sampler import (
+                generate_buckets, assign_all_buckets, BucketBatchSampler,
+            )
+            if progress_fn:
+                progress_fn(2, 6, "Computing aspect ratio buckets...")
+
+            buckets = generate_buckets(
+                resolution=config.resolution,
+                min_resolution=config.resolution_min,
+                max_resolution=config.resolution_max,
+                step_size=config.bucket_reso_steps,
+            )
+            bucket_assignments = assign_all_buckets(image_paths, buckets)
+            self._bucket_sampler = BucketBatchSampler(
+                bucket_assignments,
+                batch_size=config.batch_size,
+                drop_last=True,
+                shuffle=True,
+            )
+            log.info(
+                f"Aspect ratio bucketing: {len(set(bucket_assignments))} active buckets "
+                f"from {len(buckets)} possible ({config.resolution_min}-{config.resolution_max}, "
+                f"step {config.bucket_reso_steps})"
+            )
+
         self.dataset = CachedTrainDataset(
             image_paths=image_paths,
             captions=captions,
@@ -352,6 +382,7 @@ class Trainer:
             keep_first_n_tags=config.keep_first_n_tags,
             caption_dropout_rate=config.caption_dropout_rate,
             cache_dir=cache_dir,
+            bucket_assignments=bucket_assignments,
         )
 
         # ── 7. Cache VAE latents ──
@@ -469,16 +500,28 @@ class Trainer:
             # Everything is cached in RAM — minimal IO, fewer workers needed
             use_workers = min(2, use_workers)
 
-        dataloader = DataLoader(
-            self.dataset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=use_workers,
-            pin_memory=True,
-            drop_last=True,
-            persistent_workers=use_workers > 0,
-            prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
-        )
+        if self._bucket_sampler is not None:
+            # Aspect ratio bucketing: use custom batch sampler (handles shuffle + grouping)
+            dataloader = DataLoader(
+                self.dataset,
+                batch_sampler=self._bucket_sampler,
+                num_workers=use_workers,
+                pin_memory=True,
+                persistent_workers=use_workers > 0,
+                prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+            )
+            log.info("DataLoader using BucketBatchSampler for multi-aspect training")
+        else:
+            dataloader = DataLoader(
+                self.dataset,
+                batch_size=config.batch_size,
+                shuffle=True,
+                num_workers=use_workers,
+                pin_memory=True,
+                drop_last=True,
+                persistent_workers=use_workers > 0,
+                prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+            )
 
         # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
         if config.async_dataload and self.device.type == "cuda":
