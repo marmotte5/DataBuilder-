@@ -1370,9 +1370,12 @@ class TestRecommenderNewFeatures:
         defaults.update(kwargs)
         return recommend(**defaults)
 
-    def test_dora_recommended_for_lora(self):
-        cfg = self._recommend()
-        assert cfg.use_dora is True
+    def test_dora_only_for_dora_network_type(self):
+        """DoRA should only be enabled when network_type is 'dora', not 'lora'."""
+        cfg = self._recommend(network_type="lora")
+        assert cfg.use_dora is False
+        cfg_dora = self._recommend(network_type="dora")
+        assert cfg_dora.use_dora is True
 
     def test_rslora_at_high_rank(self):
         """rsLoRA should be enabled when rank >= 64."""

@@ -75,7 +75,8 @@ def estimate_vram(config) -> dict:
     suggestions = []
 
     # 1. Model weights
-    model_gb = _MODEL_VRAM_BF16.get(base, 5.0)
+    base_model_gb = _MODEL_VRAM_BF16.get(base, 5.0)  # Unmodified for LoRA calc
+    model_gb = base_model_gb
     if config.fp8_base_model:
         model_gb *= 0.5
     if config.mixed_precision == "fp32":
@@ -98,8 +99,9 @@ def estimate_vram(config) -> dict:
 
     # 4. LoRA adapter weights
     if is_lora:
-        # LoRA adds ~rank/dim * model_params, typically small
-        lora_gb = model_gb * (config.lora_rank / 1024) * 0.5
+        # LoRA adds ~rank/dim * model_params — use base (bf16) size, not
+        # precision-adjusted model_gb, since adapter size depends on param count
+        lora_gb = base_model_gb * (config.lora_rank / 1024) * 0.5
         if config.use_dora:
             lora_gb *= 1.3  # DoRA has extra magnitude vector
         breakdown["LoRA adapter"] = round(lora_gb, 2)
@@ -108,7 +110,7 @@ def estimate_vram(config) -> dict:
 
     # 5. Optimizer states
     opt = config.optimizer
-    trainable_gb = breakdown["LoRA adapter"] if is_lora else model_gb
+    trainable_gb = lora_gb if is_lora else model_gb
     if opt in ("AdamW", "AdamW8bit"):
         # AdamW: 2 states (mean + variance) per parameter
         opt_mult = 1.0 if "8bit" in opt else 2.0

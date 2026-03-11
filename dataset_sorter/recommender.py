@@ -298,8 +298,8 @@ def recommend(
         config.conv_alpha = conv_alpha
 
         # LoRA variants (2024-2026 SOTA)
-        # DoRA: recommended for all LoRA training (same quality at half rank)
-        if network_type in ("lora", "dora"):
+        # DoRA: only enable when explicitly requested (not for plain "lora")
+        if network_type == "dora":
             config.use_dora = True
 
         # rsLoRA: stabilizes training at high ranks (64+)

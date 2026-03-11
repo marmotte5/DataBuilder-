@@ -169,10 +169,13 @@ def estimate_training_disk(
 
     # Latent cache (if caching to disk)
     if cache_latents and cache_to_disk:
-        # Latent size: (4, res/8, res/8) * 4 bytes (fp32) per image
+        # Latent channels vary by model: Flux/SD3 VAE = 16ch, others = 4ch
+        _16ch_models = ('flux', 'flux2', 'sd3', 'sd35', 'auraflow', 'chroma', 'zimage')
+        _base_type = model_type.replace("_lora", "").replace("_full", "")
+        latent_channels = 16 if _base_type in _16ch_models else 4
         latent_h = resolution // 8
         latent_w = resolution // 8
-        latent_bytes = 4 * latent_h * latent_w * 4  # 4 channels, fp32
+        latent_bytes = latent_channels * latent_h * latent_w * 4  # fp32
         est.cache_mb = (latent_bytes * num_images) / (1024 ** 2)
 
     # TE cache (if caching to disk) — estimate ~20KB per unique caption
