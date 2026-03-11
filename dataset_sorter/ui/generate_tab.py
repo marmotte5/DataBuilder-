@@ -594,6 +594,9 @@ class GenerateTab(QWidget):
     def _on_unload_model(self):
         if self._worker:
             self._worker.unload_model()
+            # Clear the worker reference so a fresh one is created on next load.
+            # This prevents GPU memory leaks and stale state when switching models.
+            self._worker = None
         self.model_status.setText("No model loaded")
         self.status_label.setText("Model unloaded.")
         self.btn_unload.setEnabled(False)

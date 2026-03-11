@@ -366,6 +366,14 @@ class TrainingConfigIOMixin:
                     current = getattr(config, key)
                     if isinstance(current, list) and isinstance(value, list):
                         setattr(config, key, value)
+                    elif isinstance(current, bool):
+                        # bool must be checked before int (bool is subclass of int).
+                        # Prevent bool("false") = True corruption from JSON strings.
+                        if isinstance(value, bool):
+                            setattr(config, key, value)
+                        elif isinstance(value, (int, float)):
+                            setattr(config, key, bool(value))
+                        # else: skip string/other types for bool fields
                     else:
                         setattr(config, key, type(current)(value))
                 except (ValueError, TypeError):
