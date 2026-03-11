@@ -32,7 +32,6 @@ import logging
 import mmap
 import os
 import struct
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Callable

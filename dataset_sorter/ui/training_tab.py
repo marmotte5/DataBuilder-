@@ -609,15 +609,19 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._vram_monitor.vram_update.connect(self._on_vram_update)
         self._vram_monitor.start()
 
-        self._set_training_ui(True)
-        self._loss_history.clear()
-        self.loss_chart.clear_data()
-        self.loss_chart.setVisible(True)
+        try:
+            self._set_training_ui(True)
+            self._loss_history.clear()
+            self.loss_chart.clear_data()
+            self.loss_chart.setVisible(True)
 
-        # Safety net: stop VRAM monitor if QThread finishes without emitting
-        # finished_training (e.g., worker crashes bypassing normal signals).
-        self._training_worker.finished.connect(self._stop_vram_monitor)
-        self._training_worker.start()
+            # Safety net: stop VRAM monitor if QThread finishes without emitting
+            # finished_training (e.g., worker crashes bypassing normal signals).
+            self._training_worker.finished.connect(self._stop_vram_monitor)
+            self._training_worker.start()
+        except Exception:
+            self._stop_vram_monitor()
+            raise
 
     def _set_training_ui(self, training: bool):
         """Toggle button states for training vs idle."""
