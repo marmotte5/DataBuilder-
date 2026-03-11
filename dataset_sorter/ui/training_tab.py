@@ -581,7 +581,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             if hasattr(self._training_worker, 'stop'):
                 self._training_worker.stop()
             self._training_worker.quit()
-            self._training_worker.wait(5000)
+            if not self._training_worker.wait(5000):
+                self._log("WARNING: Previous training worker did not stop within timeout")
             self._training_worker = None
 
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor

@@ -26,12 +26,15 @@ log = logging.getLogger(__name__)
 
 def pil_to_pixmap(pil_image, max_size: int = 350) -> QPixmap:
     """Convert a PIL Image to QPixmap, scaled to fit."""
-    data = pil_image.tobytes("raw", "RGB")
+    img = pil_image.convert("RGB")
+    data = img.tobytes("raw", "RGB")
     qimg = QImage(
-        data, pil_image.width, pil_image.height,
-        pil_image.width * 3, QImage.Format.Format_RGB888,
+        data, img.width, img.height,
+        img.width * 3, QImage.Format.Format_RGB888,
     )
-    pixmap = QPixmap.fromImage(qimg)
+    # .copy() ensures Qt owns the pixel data (avoids dangling pointer
+    # if Python's `data` bytes object is garbage-collected first).
+    pixmap = QPixmap.fromImage(qimg.copy())
     return pixmap.scaled(
         max_size, max_size,
         Qt.AspectRatioMode.KeepAspectRatio,

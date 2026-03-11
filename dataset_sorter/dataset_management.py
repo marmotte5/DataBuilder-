@@ -116,7 +116,7 @@ def compute_caption_token_stats(captions: list[str]) -> dict:
         "min": counts_sorted[0],
         "max": counts_sorted[-1],
         "mean": sum(counts) / n,
-        "median": counts_sorted[n // 2],
+        "median": (counts_sorted[(n - 1) // 2] + counts_sorted[n // 2]) / 2 if n > 0 else 0,
         "counts": counts,
     }
 
@@ -177,8 +177,10 @@ def compute_tag_frequency_histogram(
     top_tags = sorted_tags[:20]
     bottom_tags = sorted_tags[-20:] if len(sorted_tags) > 20 else []
 
-    median_idx = total_unique // 2
-    median_freq = frequencies[median_idx] if frequencies else 0
+    if total_unique > 0:
+        median_freq = (frequencies[(total_unique - 1) // 2] + frequencies[total_unique // 2]) / 2
+    else:
+        median_freq = 0
 
     return {
         "bins": bins,

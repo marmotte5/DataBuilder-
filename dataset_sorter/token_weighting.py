@@ -34,8 +34,8 @@ import torch
 
 log = logging.getLogger(__name__)
 
-# Pattern: {text:weight} where weight is a float
-_WEIGHT_PATTERN = re.compile(r'\{([^}:]+):(\d+(?:\.\d+)?)\}')
+# Pattern: {text:weight} where weight is a float (supports -0.5, .5, 2, 1.5)
+_WEIGHT_PATTERN = re.compile(r'\{([^}:]+):(-?(?:\d+\.?\d*|\.\d+))\}')
 
 
 @dataclass

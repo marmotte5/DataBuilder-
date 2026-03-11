@@ -64,7 +64,9 @@ class PreviewTab(QWidget):
             img_label.setStyleSheet("border: none; background: transparent;")
             pixmap = QPixmap(str(entry.image_path))
             if not pixmap.isNull():
-                pixmap = pixmap.scaled(self.THUMB_W, self.THUMB_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                scaled = pixmap.scaled(self.THUMB_W, self.THUMB_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                if not scaled.isNull():
+                    pixmap = scaled
             img_label.setPixmap(pixmap)
             img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             wl.addWidget(img_label)

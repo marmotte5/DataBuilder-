@@ -33,7 +33,9 @@ class VRAMMonitor(QThread):
     def run(self):
         while self._running:
             snap = get_vram_snapshot()
-            if snap.total_bytes > 0:
+            # Double-check _running after the (potentially slow) snapshot call
+            # to avoid emitting signals after the parent has been destroyed.
+            if snap.total_bytes > 0 and self._running:
                 self.vram_update.emit(
                     snap.allocated_gb, snap.reserved_gb,
                     snap.total_gb, snap.peak_allocated_gb,
@@ -127,6 +129,10 @@ class TrainingWorker(QThread):
             self.finished_training.emit(False, str(e))
 
         finally:
+            # Stop RLHF polling timer if active
+            if hasattr(self, '_rlhf_timer') and self._rlhf_timer is not None:
+                self._rlhf_timer.stop()
+                self._rlhf_timer = None
             if self.trainer:
                 try:
                     self.trainer.cleanup()
@@ -260,20 +266,26 @@ class TrainingWorker(QThread):
         self.progress.emit(current, total, message)
 
     def _start_rlhf_monitor(self):
-        """Start a background thread that checks for RLHF collection triggers."""
-        import threading
+        """Start a QTimer-based poller that checks for RLHF collection triggers.
 
-        def _monitor():
-            while self.trainer and self.trainer.state.running:
-                # Check if RLHF collection was triggered
-                if self.trainer._rlhf_collect.is_set():
-                    self.trainer._rlhf_collect.clear()
-                    round_idx = self.config.rlhf_dpo_rounds
-                    self.generate_rlhf_candidates(round_idx)
-                time.sleep(0.5)
+        Uses QTimer so that all signal emissions happen on this QThread's
+        event loop, avoiding the thread-safety pitfalls of a raw
+        threading.Thread emitting Qt signals.
+        """
+        from PyQt6.QtCore import QTimer
 
-        monitor = threading.Thread(target=_monitor, daemon=True)
-        monitor.start()
+        self._rlhf_timer = QTimer()
+        self._rlhf_timer.setInterval(500)
+
+        def _check():
+            t = self.trainer
+            if t and t.state.running and t._rlhf_collect.is_set():
+                t._rlhf_collect.clear()
+                round_idx = self.config.rlhf_dpo_rounds
+                self.generate_rlhf_candidates(round_idx)
+
+        self._rlhf_timer.timeout.connect(_check)
+        self._rlhf_timer.start()
 
     def _on_loss(self, step, loss, lr):
         self.loss_update.emit(step, loss, lr)

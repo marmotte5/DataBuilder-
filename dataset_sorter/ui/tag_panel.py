@@ -213,11 +213,14 @@ class TagPanel(QWidget):
         if sel:
             sel.blockSignals(True)
         self._model.set_data(tag_counts, tag_auto_buckets, manual_overrides, deleted_tags)
-        # After model reset, Qt may replace the selection model — reconnect
+        # After model reset, Qt may replace the selection model — reconnect.
+        # Block the new model's signals BEFORE connecting so no stale
+        # selectionChanged fires during the transition.
         new_sel = self.table.selectionModel()
-        if new_sel is not sel and new_sel is not None:
+        if new_sel is not None and new_sel is not sel:
+            new_sel.blockSignals(True)
             new_sel.selectionChanged.connect(self._on_selection)
-        if new_sel:
+        if new_sel is not None:
             new_sel.blockSignals(False)
         self.tag_count_badge.setText(f"{self._model.rowCount()} tags")
 
