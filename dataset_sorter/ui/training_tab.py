@@ -690,7 +690,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _on_sample(self, images, step):
         self._log(f"Samples generated at step {step}")
         # Save samples to disk
-        output_dir = Path(self.output_dir_input.text().strip())
+        output_text = self.output_dir_input.text().strip()
+        if not output_text:
+            self._log("Warning: output directory not set, skipping sample save")
+            return
+        output_dir = Path(output_text)
         sample_dir = output_dir / "samples"
         sample_dir.mkdir(parents=True, exist_ok=True)
         for i, img in enumerate(images):

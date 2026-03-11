@@ -452,9 +452,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Error: invalid source directory.")
             return
 
-        # Clean up previous worker (with timeout to avoid blocking UI)
+        # Clean up previous worker (cancel first, then wait with timeout)
         if self._scan_worker is not None:
             if self._scan_worker.isRunning():
+                self._scan_worker.cancel()
                 self._scan_worker.wait(5000)
             self._scan_worker.deleteLater()
             self._scan_worker = None

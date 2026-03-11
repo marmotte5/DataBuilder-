@@ -30,7 +30,7 @@ class _PixmapCache:
         self._max_size = max_size
 
     def get(self, path: str, width: int, height: int) -> QPixmap:
-        key = path
+        key = f"{path}:{width}x{height}"
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]

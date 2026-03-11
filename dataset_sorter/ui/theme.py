@@ -99,11 +99,27 @@ def set_theme(mode: str):
     Updates the global COLORS dict in-place so all style constants
     referencing COLORS stay current.
     """
-    global _current_mode
+    global _current_mode, CARD_STYLE, SECTION_HEADER_STYLE, SECTION_SUBHEADER_STYLE
+    global ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE
+    global SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, STAT_VALUE_STYLE
+    global STAT_LABEL_STYLE, TAG_BADGE_STYLE, NAV_BUTTON_STYLE
     _current_mode = mode
     source = _LIGHT_COLORS if mode == "light" else _DARK_COLORS
     COLORS.clear()
     COLORS.update(source)
+    # Re-evaluate style constants so importers see updated colors
+    CARD_STYLE = card_style()
+    SECTION_HEADER_STYLE = section_header_style()
+    SECTION_SUBHEADER_STYLE = section_subheader_style()
+    ACCENT_BUTTON_STYLE = accent_button_style()
+    SUCCESS_BUTTON_STYLE = success_button_style()
+    DANGER_BUTTON_STYLE = danger_button_style()
+    SECURITY_BANNER_STYLE = security_banner_style()
+    MUTED_LABEL_STYLE = muted_label_style()
+    STAT_VALUE_STYLE = stat_value_style()
+    STAT_LABEL_STYLE = stat_label_style()
+    TAG_BADGE_STYLE = tag_badge_style()
+    NAV_BUTTON_STYLE = nav_button_style()
 
 
 def get_current_theme() -> str:
