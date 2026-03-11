@@ -514,7 +514,8 @@ class TrainBackendBase(ABC):
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
         if config.debiased_estimation:
-            weight = 1.0 / (1.0 - t + 1e-6)
+            # Clamp denominator to prevent extreme weights when t → 1.0
+            weight = 1.0 / torch.clamp(1.0 - t + 1e-6, min=0.01)
             loss = loss * weight
 
         # min_snr_gamma: not applicable to flow matching (requires alphas_cumprod).
