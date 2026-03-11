@@ -327,6 +327,14 @@ class Trainer:
                 te3 = self.backend.text_encoder_3
                 tok3 = getattr(self.backend, "tokenizer_3", None)
 
+            # Z-Image (Qwen3 LLM) needs chat template preprocessing and
+            # a capped max_length (Qwen3 default is 32768, only 512 needed).
+            _caption_pp = getattr(self.backend, '_format_caption', None)
+            _max_tok_len = 0
+            if hasattr(self.backend, '_format_caption'):
+                from dataset_sorter.train_backend_zimage import _QWEN3_MAX_LENGTH
+                _max_tok_len = _QWEN3_MAX_LENGTH
+
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
                 self.device, self.dtype,
@@ -335,6 +343,8 @@ class Trainer:
                 to_disk=config.cache_text_encoder_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching TE {c}/{t}") if progress_fn else None,
                 clip_skip=config.clip_skip,
+                caption_preprocessor=_caption_pp,
+                max_token_length=_max_tok_len,
             )
 
             # Offload text encoders to free VRAM for training

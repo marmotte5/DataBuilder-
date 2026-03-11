@@ -23,8 +23,29 @@ import logging
 import torch
 
 from dataset_sorter.train_backend_base import TrainBackendBase
+from dataset_sorter.utils import autocast_device_type
 
 log = logging.getLogger(__name__)
+
+# Max token length for Qwen3 text encoder.
+_QWEN3_MAX_LENGTH = 512
+
+
+def _apply_chat_template(tokenizer, caption: str) -> str:
+    """Format caption through Qwen3 chat template.
+
+    This must be applied identically in both encode_text_batch (live)
+    and the TE caching path to ensure embeddings match.
+    """
+    messages = [{"role": "user", "content": caption}]
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False,
+            enable_thinking=True,
+        )
+    except Exception:
+        # Fallback: use raw caption if chat template fails
+        return caption
 
 
 class ZImageBackend(TrainBackendBase):
@@ -95,7 +116,9 @@ class ZImageBackend(TrainBackendBase):
             self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
                 model_path, subfolder="scheduler",
             )
-            self.pipeline = None  # No full pipeline in manual mode
+            # Keep pipeline reference if the fallback loaded one (needed for sample gen)
+            if self.pipeline is None:
+                log.info("Z-Image loaded in manual mode (sample generation unavailable)")
 
         if self.vae is not None:
             self.vae.to(self.device, dtype=self.dtype)
@@ -120,54 +143,54 @@ class ZImageBackend(TrainBackendBase):
             "norm1.linear", "norm1_context.linear",
         ]
 
+    def _format_caption(self, caption: str) -> str:
+        """Apply Qwen3 chat template to a caption.
+
+        Exposed as a method so the TE caching path in train_dataset.py
+        can call backend._format_caption() to ensure identical
+        preprocessing between cached and live encoding.
+        """
+        return _apply_chat_template(self.tokenizer, caption)
+
     def encode_text_batch(self, captions: list[str]) -> tuple:
         """Encode with Qwen3 using chat template.
 
         Z-Image uses Qwen3ForCausalLM which requires chat-style
-        tokenization. Hidden states from intermediate layers are
+        tokenization. Hidden states from the last layer are
         used as the text conditioning.
+
+        Captions are batched together in a single forward pass
+        for efficiency (Qwen3 supports batch inference).
         """
-        # Format as chat messages for Qwen3
-        all_hidden_states = []
+        # Format all captions through chat template
+        texts = [_apply_chat_template(self.tokenizer, c) for c in captions]
 
-        for caption in captions:
-            # Qwen3 chat template
-            messages = [{"role": "user", "content": caption}]
+        # Batch tokenize all captions at once
+        tokens = self.tokenizer(
+            texts, padding="max_length",
+            max_length=_QWEN3_MAX_LENGTH,
+            truncation=True, return_tensors="pt",
+        ).to(self.device)
 
-            try:
-                text = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False,
-                    enable_thinking=True,
-                )
-            except Exception:
-                # Fallback: use raw caption if chat template fails
-                text = caption
+        with torch.no_grad():
+            out = self.text_encoder(
+                **tokens,
+                output_hidden_states=True,
+            )
+            # Use the last hidden state as conditioning
+            encoder_hidden = out.hidden_states[-1]
 
-            tokens = self.tokenizer(
-                text, padding="max_length",
-                max_length=512,
-                truncation=True, return_tensors="pt",
-            ).to(self.device)
-
-            with torch.no_grad():
-                out = self.text_encoder(
-                    **tokens,
-                    output_hidden_states=True,
-                )
-                # Use the last hidden state as conditioning
-                hidden = out.hidden_states[-1]
-                all_hidden_states.append(hidden)
-
-        encoder_hidden = torch.cat(all_hidden_states, dim=0)
         return (encoder_hidden,)
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values with Z-Image's custom VAE scaling."""
+        self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
                 pixel_values.to(memory_format=torch.channels_last)
             ).latent_dist.sample()
-            # Apply Z-Image specific scaling
+            # Apply Z-Image specific scaling: (latents - shift) * scale
+            # This matches the diffusers convention for VAEs with shift_factor.
             latents = (latents - self._vae_shift_factor) * self._vae_scaling_factor
         return latents
 
@@ -177,11 +200,9 @@ class ZImageBackend(TrainBackendBase):
         Z-Image uses resolution-dependent timestep shifting similar to
         Flux but with its own formula based on patch sizes.
         """
-        # Default shift for 1024x1024
         h, w = latents.shape[-2:]
         # Patch size is typically 2 for the latent space
         num_patches = (h // 2) * (w // 2)
-        # Base shift value
         base_shift = 0.5
         max_shift = 1.15
         # Linear interpolation based on number of patches
@@ -191,7 +212,13 @@ class ZImageBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Z-Image training step with flow matching + dynamic timestep shift."""
+        """Z-Image training step with flow matching + dynamic timestep shift.
+
+        This overrides the base flow_training_step because Z-Image needs
+        resolution-dependent timestep shifting. All shared features
+        (noise_offset, EMA sampling, SpeeD weighting, token weighting,
+        autocast, min_snr warning) are included for parity.
+        """
         config = self.config
 
         # Adaptive timestep sampling (shared with other flow models)
@@ -201,7 +228,7 @@ class ZImageBackend(TrainBackendBase):
         else:
             u = self._sample_flow_timesteps(batch_size)
 
-        # Apply dynamic timestep shift
+        # Apply dynamic timestep shift (Z-Image specific)
         shift = self._get_timestep_shift(latents)
         t = shift * u / (1 + (shift - 1) * u)
 
@@ -216,17 +243,32 @@ class ZImageBackend(TrainBackendBase):
 
         encoder_hidden = te_out[0]
 
-        noise_pred = self.unet(
-            hidden_states=noisy_latents,
-            timestep=t,
-            encoder_hidden_states=encoder_hidden,
-        ).sample
+        # Forward pass with autocast for mixed precision speed
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                hidden_states=noisy_latents,
+                timestep=t,
+                encoder_hidden_states=encoder_hidden,
+            ).sample
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
         if config.debiased_estimation:
             weight = 1.0 / (1.0 - t + 1e-6)
             loss = loss * weight
+
+        # min_snr_gamma: not applicable to flow matching (requires alphas_cumprod)
+        if config.min_snr_gamma > 0 and not getattr(self, '_warned_snr_flow', False):
+            log.warning("min_snr_gamma is not supported for flow matching models "
+                        "(Z-Image, Flux, SD3, etc.) and will be ignored.")
+            self._warned_snr_flow = True
+
+        # SpeeD change-aware loss weighting (CVPR 2025)
+        if config.speed_change_aware and self._speed_sampler is not None:
+            timesteps_int = (t * 1000).long()
+            speed_weights = self._speed_sampler.compute_weights(timesteps_int, loss.detach())
+            loss = loss * speed_weights
 
         # Per-timestep EMA: update tracker and apply adaptive weighting
         if self._timestep_ema_sampler is not None:
@@ -251,4 +293,3 @@ class ZImageBackend(TrainBackendBase):
             self._token_weight_mask = None
 
         return loss.mean()
-

@@ -320,8 +320,17 @@ class CachedTrainDataset(Dataset):
         tokenizer_3=None, text_encoder_3=None,
         to_disk=False, progress_fn=None,
         clip_skip: int = 0,
+        caption_preprocessor=None,
+        max_token_length: int = 0,
     ):
         """Pre-compute and cache text encoder outputs.
+
+        Args:
+            caption_preprocessor: Optional callable(str) -> str applied to each
+                caption before tokenization. Used by Z-Image to apply Qwen3
+                chat template so cached embeddings match live encoding.
+            max_token_length: Override tokenizer.model_max_length if > 0.
+                Z-Image uses 512 while Qwen3's default is 32768.
 
         Speed optimizations:
         - Safetensors disk format (2-5x faster I/O)
@@ -377,14 +386,30 @@ class CachedTrainDataset(Dataset):
                     continue
 
             with torch.no_grad():
-                # Tokenize
-                tokens = tokenizer(
-                    caption, padding="max_length",
-                    max_length=tokenizer.model_max_length,
-                    truncation=True, return_tensors="pt",
-                ).input_ids.to(device)
+                # Preprocess caption (e.g. Qwen3 chat template for Z-Image)
+                tok_input = caption_preprocessor(caption) if caption_preprocessor else caption
+                _max_len = max_token_length if max_token_length > 0 else tokenizer.model_max_length
 
-                encoder_output = text_encoder(tokens, output_hidden_states=True)
+                # Tokenize
+                _tok_out = tokenizer(
+                    tok_input, padding="max_length",
+                    max_length=_max_len,
+                    truncation=True, return_tensors="pt",
+                )
+
+                # LLM-based text encoders (e.g. Qwen3 for Z-Image) need
+                # attention_mask alongside input_ids. CLIP models accept
+                # positional input_ids only.
+                if caption_preprocessor is not None:
+                    # LLM path: pass full tokenizer output as kwargs
+                    _tok_device = {k: v.to(device) for k, v in _tok_out.items()}
+                    encoder_output = text_encoder(
+                        **_tok_device, output_hidden_states=True,
+                    )
+                else:
+                    tokens = _tok_out.input_ids.to(device)
+                    encoder_output = text_encoder(tokens, output_hidden_states=True)
+
                 _skip = max(clip_skip, 1)
                 _skip = min(_skip, len(encoder_output.hidden_states) - 2)
                 hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
@@ -400,7 +425,7 @@ class CachedTrainDataset(Dataset):
                 pooled_2 = None
 
                 # Cache tokenized IDs (avoids re-tokenization every step)
-                token_id_result = (tokens.cpu(),)
+                token_id_result = (_tok_out.input_ids.cpu(),)
 
                 # Second text encoder (SDXL)
                 if tokenizer_2 is not None and text_encoder_2 is not None:
