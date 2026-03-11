@@ -5,9 +5,12 @@ Supports pause/resume/save-now/sample-now/backup during training.
 Includes periodic VRAM usage monitoring (CUDA/MPS).
 """
 
+import logging
 import time
 import traceback
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -136,8 +139,8 @@ class TrainingWorker(QThread):
             if self.trainer:
                 try:
                     self.trainer.cleanup()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning(f"Trainer cleanup failed: {e}")
             self.phase_changed.emit("idle")
 
     def stop(self):

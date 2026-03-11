@@ -614,6 +614,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.loss_chart.clear_data()
         self.loss_chart.setVisible(True)
 
+        # Safety net: stop VRAM monitor if QThread finishes without emitting
+        # finished_training (e.g., worker crashes bypassing normal signals).
+        self._training_worker.finished.connect(self._stop_vram_monitor)
         self._training_worker.start()
 
     def _set_training_ui(self, training: bool):

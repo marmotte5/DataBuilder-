@@ -654,6 +654,13 @@ class Trainer:
             if config.save_every_n_epochs > 0 and (epoch + 1) % config.save_every_n_epochs == 0:
                 self._save_checkpoint(f"epoch_{epoch + 1:04d}")
 
+        # Clean up DataLoader workers (persistent_workers keep processes alive)
+        if hasattr(dataloader, '_iterator') and dataloader._iterator is not None:
+            dataloader._iterator._shutdown_workers()
+        del dataloader
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
         # Final save
         self._save_checkpoint("final")
         if sample_fn:
@@ -830,18 +837,18 @@ class Trainer:
             sample_fn(images, self.state.global_step)
         except Exception as e:
             log.warning(f"Sample generation failed: {e}")
+        finally:
+            # Always restore training state, even if sample generation failed
+            if self.ema_model is not None:
+                self.ema_model.restore(self.backend.unet.parameters())
 
-        # Restore training weights
-        if self.ema_model is not None:
-            self.ema_model.restore(self.backend.unet.parameters())
+            self.backend.unet.train()
 
-        self.backend.unet.train()
+            # Always offload VAE to prevent GPU memory leak on error
+            if config.cache_latents and self.backend.vae is not None:
+                self.backend.vae.cpu()
 
-        # Offload VAE if latents are cached
-        if config.cache_latents and self.backend.vae is not None:
-            self.backend.vae.cpu()
-
-        self.state.phase = "training"
+            self.state.phase = "training"
 
     # ── Attention Map Debug ──────────────────────────────────────────────
 

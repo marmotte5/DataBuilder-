@@ -190,6 +190,11 @@ class GenerateWorker(QThread):
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
             self.finished_generating.emit(False, str(e))
+            # Ensure GPU memory is freed on any error during load/generate
+            try:
+                self.unload_model()
+            except Exception:
+                pass
 
     # ── Model loading ───────────────────────────────────────────────────
 
