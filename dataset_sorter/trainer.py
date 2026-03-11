@@ -768,7 +768,7 @@ class Trainer:
         if self.ema_model is not None:
             torch.save(self.ema_model.state_dict(), str(save_dir / "ema_weights.pt"))
 
-        # Save training state for resume
+        # Save training state for resume (atomic write to prevent corruption)
         state_dict = {
             "global_step": self.state.global_step,
             "epoch": self.state.epoch,
@@ -777,7 +777,10 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
-        torch.save(state_dict, str(save_dir / "training_state.pt"))
+        state_path = save_dir / "training_state.pt"
+        tmp_path = save_dir / "training_state.pt.tmp"
+        torch.save(state_dict, str(tmp_path))
+        tmp_path.replace(state_path)  # Atomic on POSIX
 
         # Save loss history for Smart Resume
         if self._loss_history:
@@ -1047,7 +1050,10 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             backup_state["grad_scaler"] = self.grad_scaler.state_dict()
-        torch.save(backup_state, str(backup_dir / "training_state.pt"))
+        backup_state_path = backup_dir / "training_state.pt"
+        backup_tmp_path = backup_dir / "training_state.pt.tmp"
+        torch.save(backup_state, str(backup_tmp_path))
+        backup_tmp_path.replace(backup_state_path)
 
         # Save config
         config_path = backup_dir / "config.json"
@@ -1077,13 +1083,23 @@ class Trainer:
         self.state.epoch = state["epoch"]
 
         if self.optimizer is not None and "optimizer" in state:
-            self.optimizer.load_state_dict(state["optimizer"])
+            try:
+                self.optimizer.load_state_dict(state["optimizer"])
+            except (RuntimeError, ValueError) as e:
+                log.warning(f"Could not restore optimizer state (architecture changed?): {e}")
+                log.warning("Continuing with fresh optimizer state")
         if self.scheduler is not None and "scheduler" in state:
-            self.scheduler.load_state_dict(state["scheduler"])
+            try:
+                self.scheduler.load_state_dict(state["scheduler"])
+            except (RuntimeError, ValueError, KeyError) as e:
+                log.warning(f"Could not restore scheduler state: {e}")
 
         # Restore GradScaler state
         if self.grad_scaler is not None and "grad_scaler" in state:
-            self.grad_scaler.load_state_dict(state["grad_scaler"])
+            try:
+                self.grad_scaler.load_state_dict(state["grad_scaler"])
+            except (RuntimeError, ValueError, KeyError) as e:
+                log.warning(f"Could not restore GradScaler state: {e}")
 
         # Restore model weights (LoRA or full)
         is_lora = self.config.model_type.endswith("_lora")

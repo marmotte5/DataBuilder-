@@ -377,8 +377,27 @@ class MainWindow(QMainWindow):
         log.info("Restored session state from previous run.")
 
     def closeEvent(self, event):
-        """Save progress state on window close."""
+        """Save progress state and stop all background threads on close."""
         self._save_progress_state()
+
+        # Stop training worker + VRAM monitor
+        if hasattr(self, 'training_tab'):
+            tt = self.training_tab
+            if hasattr(tt, '_training_worker') and tt._training_worker is not None:
+                if hasattr(tt._training_worker, 'stop'):
+                    tt._training_worker.stop()
+                tt._training_worker.quit()
+                tt._training_worker.wait(3000)
+            if hasattr(tt, '_stop_vram_monitor'):
+                tt._stop_vram_monitor()
+
+        # Stop generate worker
+        if hasattr(self, 'generate_tab'):
+            gt = self.generate_tab
+            if hasattr(gt, '_worker') and gt._worker is not None:
+                gt._worker.quit()
+                gt._worker.wait(3000)
+
         super().closeEvent(event)
 
     # -- Drag and drop on main window --

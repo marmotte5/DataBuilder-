@@ -621,6 +621,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._training_worker.start()
         except Exception:
             self._stop_vram_monitor()
+            self._set_training_ui(False)
             raise
 
     def _set_training_ui(self, training: bool):
@@ -674,6 +675,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.status_label.setText(message)
 
     def _on_loss(self, step, loss, lr):
+        import math
+        if not math.isfinite(loss):
+            self._log(f"WARNING: Non-finite loss at step {step}: {loss}")
+            return
         self._loss_history.append((step, loss))
         self.loss_label.setText(f"Step {step}  |  Loss: {loss:.6f}  |  LR: {lr:.2e}")
         self.loss_chart.append_point(step, loss)
