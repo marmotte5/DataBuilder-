@@ -533,6 +533,10 @@ class Trainer:
 
             self.state.epoch = epoch
 
+            # Flush any leftover gradients from incomplete accumulation at
+            # the end of the previous epoch (when num_batches % grad_accum != 0).
+            self.optimizer.zero_grad(set_to_none=True)
+
             # Curriculum learning: epoch callback
             if self._curriculum_sampler is not None:
                 self._curriculum_sampler.on_epoch_start()

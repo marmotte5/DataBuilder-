@@ -114,10 +114,6 @@ class TrainingWorker(QThread):
             # Train (with RLHF collection monitoring)
             self.phase_changed.emit("training")
 
-            # Start RLHF monitor if enabled
-            if self.config.rlhf_enabled:
-                self._start_rlhf_monitor()
-
             self.trainer.train(
                 progress_fn=self._on_progress,
                 loss_fn=self._on_loss,
@@ -132,10 +128,6 @@ class TrainingWorker(QThread):
             self.finished_training.emit(False, str(e))
 
         finally:
-            # Stop RLHF polling timer if active
-            if hasattr(self, '_rlhf_timer') and self._rlhf_timer is not None:
-                self._rlhf_timer.stop()
-                self._rlhf_timer = None
             if self.trainer:
                 try:
                     self.trainer.cleanup()
@@ -268,30 +260,17 @@ class TrainingWorker(QThread):
     def _on_progress(self, current, total, message):
         self.progress.emit(current, total, message)
 
-    def _start_rlhf_monitor(self):
-        """Start a QTimer-based poller that checks for RLHF collection triggers.
+    def _on_loss(self, step, loss, lr):
+        self.loss_update.emit(step, loss, lr)
 
-        Uses QTimer so that all signal emissions happen on this QThread's
-        event loop, avoiding the thread-safety pitfalls of a raw
-        threading.Thread emitting Qt signals.
-        """
-        from PyQt6.QtCore import QTimer
-
-        self._rlhf_timer = QTimer()
-        self._rlhf_timer.setInterval(500)
-
-        def _check():
+        # Check RLHF collection trigger (called from training loop on
+        # worker thread — no QTimer/event loop needed).
+        if self.config.rlhf_enabled:
             t = self.trainer
             if t and t.state.running and t._rlhf_collect.is_set():
                 t._rlhf_collect.clear()
-                round_idx = self.config.rlhf_dpo_rounds
+                round_idx = getattr(self.config, 'rlhf_dpo_rounds', 0)
                 self.generate_rlhf_candidates(round_idx)
-
-        self._rlhf_timer.timeout.connect(_check)
-        self._rlhf_timer.start()
-
-    def _on_loss(self, step, loss, lr):
-        self.loss_update.emit(step, loss, lr)
 
     def _on_sample(self, images, step):
         self.sample_generated.emit(images, step)
