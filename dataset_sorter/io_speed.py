@@ -240,7 +240,12 @@ class MmapLatentCache:
     def open(self):
         """Open the mmap for reading."""
         self._file = open(self.cache_path, 'r+b')
-        self._mm = mmap.mmap(self._file.fileno(), self._total_size)
+        try:
+            self._mm = mmap.mmap(self._file.fileno(), self._total_size)
+        except Exception:
+            self._file.close()
+            self._file = None
+            raise
 
     def write(self, idx: int, tensor):
         """Write a latent tensor at index idx."""

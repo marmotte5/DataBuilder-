@@ -246,22 +246,25 @@ class GenerateWorker(QThread):
 
         self.progress.emit(50, 100, "Applying optimizations...")
 
-        # Move to device
-        try:
-            pipe = pipe.to(self._device, dtype=dtype)
-        except Exception:
-            # Some pipelines don't support dtype in .to()
-            pipe = pipe.to(self._device)
-
-        # Enable memory optimizations
+        # Enable memory optimizations — cpu_offload must be called INSTEAD of
+        # pipe.to(device), not after it, otherwise the model is already fully on
+        # GPU and offloading has no effect (OOM on low-VRAM GPUs).
+        _use_cpu_offload = False
         if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
             try:
-                # Only offload if VRAM < 16GB
                 vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
                 if vram < 16:
-                    pipe.enable_model_cpu_offload()
+                    _use_cpu_offload = True
             except Exception:
                 pass
+
+        if _use_cpu_offload:
+            pipe.enable_model_cpu_offload()
+        else:
+            try:
+                pipe = pipe.to(self._device, dtype=dtype)
+            except Exception:
+                pipe = pipe.to(self._device)
 
         if hasattr(pipe, "enable_vae_slicing"):
             pipe.enable_vae_slicing()
@@ -509,7 +512,10 @@ class GenerateWorker(QThread):
             else:
                 current_seed = seed + i
 
-            generator = torch.Generator(device=self._device).manual_seed(current_seed)
+            # MPS does not support torch.Generator(device="mps") in many
+            # PyTorch/diffusers versions — use CPU generator instead.
+            gen_device = "cpu" if self._device.type == "mps" else self._device
+            generator = torch.Generator(device=gen_device).manual_seed(current_seed)
 
             # Build pipeline kwargs
             kwargs = {
