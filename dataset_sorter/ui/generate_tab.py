@@ -341,7 +341,7 @@ class GenerateTab(QWidget):
         # Custom resolution
         params.addWidget(QLabel("Custom W:"), 3, 2)
         self.custom_w_spin = QSpinBox()
-        self.custom_w_spin.setRange(64, 4096)
+        self.custom_w_spin.setRange(0, 4096)
         self.custom_w_spin.setSingleStep(64)
         self.custom_w_spin.setValue(0)
         self.custom_w_spin.setSpecialValueText("—")
@@ -350,7 +350,7 @@ class GenerateTab(QWidget):
 
         params.addWidget(QLabel("Custom H:"), 4, 2)
         self.custom_h_spin = QSpinBox()
-        self.custom_h_spin.setRange(64, 4096)
+        self.custom_h_spin.setRange(0, 4096)
         self.custom_h_spin.setSingleStep(64)
         self.custom_h_spin.setValue(0)
         self.custom_h_spin.setSpecialValueText("—")
@@ -739,9 +739,19 @@ class GenerateTab(QWidget):
             f"border: 2px solid {COLORS['border']}; border-radius: 6px; padding: 2px;"
         )
         thumb_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        thumb_label.mousePressEvent = lambda e, idx=index: self._goto_image(idx)
+        # Use widget position in layout at click time (not captured index)
+        # to stay correct after eviction shifts indices
+        thumb_label.mousePressEvent = lambda e, w=thumb_label: self._goto_thumbnail(w)
         self.thumb_layout.addWidget(thumb_label)
         self.thumb_layout.addStretch()
+
+    def _goto_thumbnail(self, widget):
+        """Navigate to the image corresponding to a thumbnail widget's layout position."""
+        for i in range(self.thumb_layout.count()):
+            item = self.thumb_layout.itemAt(i)
+            if item and item.widget() is widget:
+                self._goto_image(i)
+                return
 
     def _goto_image(self, index: int):
         if 0 <= index < len(self._generated_images):

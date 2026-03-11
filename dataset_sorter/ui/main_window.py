@@ -395,6 +395,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'generate_tab'):
             gt = self.generate_tab
             if hasattr(gt, '_worker') and gt._worker is not None:
+                gt._worker.stop()  # Signal the run()-based thread to stop
                 gt._worker.quit()
                 gt._worker.wait(3000)
 
@@ -451,10 +452,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Error: invalid source directory.")
             return
 
-        # Clean up previous worker
+        # Clean up previous worker (with timeout to avoid blocking UI)
         if self._scan_worker is not None:
             if self._scan_worker.isRunning():
-                self._scan_worker.wait()
+                self._scan_worker.wait(5000)
             self._scan_worker.deleteLater()
             self._scan_worker = None
 
