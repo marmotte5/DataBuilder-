@@ -66,7 +66,13 @@ class TrainingConfig:
     prodigy_decouple: bool = True
     prodigy_safeguard_warmup: bool = True
     prodigy_use_bias_correction: bool = True
-    fused_backward_pass: bool = False   # Adafactor + SDXL VRAM saver
+    fused_backward_pass: bool = False   # Fuse backward + optimizer step (VRAM saver)
+    stochastic_rounding: bool = False   # Stochastic rounding for bf16 weight updates
+
+    # GaLore: Gradient Low-Rank Projection (memory-efficient full-rank training)
+    galore_rank: int = 0                # 0 = disabled; typical: 64-128
+    galore_update_proj_gap: int = 200   # Re-project every N steps
+    galore_scale: float = 0.25          # Gradient scaling factor
 
     # ── EMA ────────────────────────────────────────────────────────────
     use_ema: bool = False

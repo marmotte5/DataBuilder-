@@ -18,3 +18,7 @@ Pillow>=10.0
 # dadaptation>=3.1       # D-Adapt Adam
 # came-pytorch>=0.1      # CAME optimizer
 # schedulefree>=1.0      # AdamW Schedule-Free
+# galore-torch>=1.0      # GaLore (Gradient Low-Rank Projection)
+
+# Optional speed optimizations
+# liger-kernel>=0.4      # Fused Triton kernels (LayerNorm, RMSNorm, SwiGLU)

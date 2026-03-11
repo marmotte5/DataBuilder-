@@ -539,6 +539,24 @@ class Trainer:
                 "Use torch.compile (regional_compile=True) instead for speed."
             )
 
+        # ── Fused Backward Pass ──
+        fused_backward = None
+        if config.fused_backward_pass:
+            from dataset_sorter.speed_optimizations import FusedBackwardPass
+            fused_backward = FusedBackwardPass(
+                self.optimizer, self.scheduler, self.grad_scaler,
+                max_grad_norm=config.max_grad_norm,
+            )
+            fused_backward.install_hooks(self.backend.unet.parameters())
+            log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
+
+        # ── Stochastic Rounding for BF16 ──
+        sr_hook = None
+        if config.stochastic_rounding and config.mixed_precision == "bf16":
+            from dataset_sorter.speed_optimizations import StochasticRoundingHook
+            sr_hook = StochasticRoundingHook(enabled=True)
+            log.info("Stochastic rounding enabled for bf16 weight updates")
+
         # Pre-collect trainable params for grad clipping (avoid re-filtering each step)
         trainable_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
         if config.train_text_encoder and self.backend.text_encoder is not None:
@@ -604,26 +622,34 @@ class Trainer:
 
                 # ── Optimizer step (on accumulation boundary) ──
                 if (step + 1) % grad_accum_steps == 0:
-                    if config.max_grad_norm > 0:
-                        if self.grad_scaler is not None:
-                            self.grad_scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
-
-                    # VJP approximation: reduce gradient compute (Feb 2026)
-                    if vjp_scaler is not None:
-                        vjp_scaler.approximate_gradients(trainable_params)
-
-                    if self._async_optimizer is not None:
-                        # Async: launch optimizer.step() on separate stream
-                        self._async_optimizer.step(self.optimizer, self.grad_scaler)
-                    elif self.grad_scaler is not None:
-                        self.grad_scaler.step(self.optimizer)
-                        self.grad_scaler.update()
+                    if fused_backward is not None:
+                        # Fused backward: optimizer stepped during backward via hooks
+                        fused_backward.finish_step()
                     else:
-                        self.optimizer.step()
+                        if config.max_grad_norm > 0:
+                            if self.grad_scaler is not None:
+                                self.grad_scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
 
-                    self.scheduler.step()
-                    self.optimizer.zero_grad(set_to_none=True)
+                        # VJP approximation: reduce gradient compute (Feb 2026)
+                        if vjp_scaler is not None:
+                            vjp_scaler.approximate_gradients(trainable_params)
+
+                        if self._async_optimizer is not None:
+                            # Async: launch optimizer.step() on separate stream
+                            self._async_optimizer.step(self.optimizer, self.grad_scaler)
+                        elif self.grad_scaler is not None:
+                            self.grad_scaler.step(self.optimizer)
+                            self.grad_scaler.update()
+                        else:
+                            self.optimizer.step()
+
+                        self.scheduler.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+
+                    # Stochastic rounding: reduce bf16 truncation bias
+                    if sr_hook is not None:
+                        sr_hook.apply(trainable_params)
 
                     # EMA update
                     if self.ema_model is not None:

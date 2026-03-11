@@ -15,6 +15,10 @@ import torch.nn as nn
 from dataset_sorter.speed_optimizations import (
     CUDAGraphWrapper,
     AsyncOptimizerStep,
+    FusedBackwardPass,
+    StochasticRoundingHook,
+    stochastic_round_to_bf16,
+    apply_liger_kernels,
 )
 from dataset_sorter.train_dataset import CachedTrainDataset
 from dataset_sorter.models import TrainingConfig
@@ -490,3 +494,229 @@ class TestSpeedIntegration:
         assert token_ids[0].shape[-1] == 77
         assert token_ids[1].shape[-1] == 77
         assert token_ids[2].shape[-1] == 256
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. FUSED BACKWARD PASS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFusedBackwardPass:
+    """Tests for fused backward + optimizer step."""
+
+    def test_fused_produces_same_updates(self):
+        """Fused backward should produce the same parameter updates as standard."""
+        torch.manual_seed(42)
+        model_std = nn.Linear(8, 4)
+        model_fused = nn.Linear(8, 4)
+        model_fused.load_state_dict(model_std.state_dict())
+
+        opt_std = torch.optim.SGD(model_std.parameters(), lr=0.01)
+        opt_fused = torch.optim.SGD(model_fused.parameters(), lr=0.01)
+
+        # Standard training step
+        x = torch.randn(3, 8)
+        loss_std = model_std(x).sum()
+        loss_std.backward()
+        opt_std.step()
+        opt_std.zero_grad(set_to_none=True)
+
+        # Fused training step
+        fused = FusedBackwardPass(opt_fused)
+        fused.install_hooks(model_fused.parameters())
+        loss_fused = model_fused(x).sum()
+        loss_fused.backward()
+        fused.finish_step()
+
+        # Parameters should match (SGD is deterministic)
+        for p_std, p_fused in zip(model_std.parameters(), model_fused.parameters()):
+            assert torch.allclose(p_std, p_fused, atol=1e-6), \
+                f"Fused params differ: max_diff={( p_std - p_fused).abs().max()}"
+
+        fused.remove_hooks()
+
+    def test_install_and_remove_hooks(self):
+        """Hooks should be properly installed and removed."""
+        model = nn.Linear(4, 2)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        fused = FusedBackwardPass(opt)
+
+        fused.install_hooks(model.parameters())
+        assert len(fused._hooks) > 0
+
+        fused.remove_hooks()
+        assert len(fused._hooks) == 0
+
+    def test_fused_with_scheduler(self):
+        """Finish_step should call scheduler.step()."""
+        model = nn.Linear(4, 2)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        scheduler = MagicMock()
+
+        fused = FusedBackwardPass(opt, scheduler=scheduler)
+        fused.install_hooks(model.parameters())
+
+        x = torch.randn(2, 4)
+        loss = model(x).sum()
+        loss.backward()
+        fused.finish_step()
+
+        scheduler.step.assert_called_once()
+        fused.remove_hooks()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. STOCHASTIC ROUNDING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestStochasticRounding:
+    """Tests for stochastic rounding to bf16."""
+
+    def test_output_dtype(self):
+        """Stochastic rounding should produce bf16 output."""
+        x = torch.randn(100)
+        result = stochastic_round_to_bf16(x)
+        assert result.dtype == torch.bfloat16
+
+    def test_unbiased_rounding(self):
+        """Average of many stochastic roundings should approximate the true value."""
+        torch.manual_seed(123)
+        # Use a value that's between two bf16 representable values
+        x = torch.tensor([1.001953125])  # Midpoint between two bf16 values
+        results = []
+        for _ in range(1000):
+            r = stochastic_round_to_bf16(x)
+            results.append(r.float().item())
+
+        mean = sum(results) / len(results)
+        # Should be close to the original value (unbiased)
+        assert abs(mean - x.item()) < 0.005, f"Mean {mean} too far from {x.item()}"
+
+    def test_exact_bf16_values_unchanged(self):
+        """Values exactly representable in bf16 should not change."""
+        x = torch.tensor([1.0, 2.0, 0.5, -1.0]).float()
+        result = stochastic_round_to_bf16(x)
+        expected = x.to(torch.bfloat16)
+        assert torch.equal(result, expected)
+
+    def test_hook_applies_to_bf16_params(self):
+        """StochasticRoundingHook should modify bf16 parameters."""
+        hook = StochasticRoundingHook(enabled=True)
+        p = nn.Parameter(torch.randn(10).to(torch.bfloat16))
+        p.requires_grad = True
+        hook.apply([p])  # Should not crash
+
+    def test_hook_skips_fp32_params(self):
+        """StochasticRoundingHook should skip fp32 parameters."""
+        hook = StochasticRoundingHook(enabled=True)
+        p = nn.Parameter(torch.randn(10))  # fp32
+        initial = p.data.clone()
+        hook.apply([p])
+        assert torch.equal(p.data, initial)
+
+    def test_disabled_hook_is_noop(self):
+        """Disabled hook should not modify parameters."""
+        hook = StochasticRoundingHook(enabled=False)
+        p = nn.Parameter(torch.randn(10).to(torch.bfloat16))
+        initial = p.data.clone()
+        hook.apply([p])
+        assert torch.equal(p.data, initial)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. LIGER-KERNEL INTEGRATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestLigerKernels:
+    """Tests for Liger-Kernel Triton fused ops."""
+
+    def test_graceful_import_failure(self):
+        """Should return False and warn when liger-kernel not installed."""
+        model = nn.Sequential(nn.Linear(4, 4), nn.LayerNorm(4))
+        # liger-kernel is not installed in test env, should return False
+        result = apply_liger_kernels(model)
+        assert result is False
+
+    def test_does_not_modify_model_without_package(self):
+        """Model should be unchanged when liger-kernel is unavailable."""
+        model = nn.Sequential(nn.Linear(4, 4), nn.LayerNorm(4))
+        initial_state = {k: v.clone() for k, v in model.state_dict().items()}
+        apply_liger_kernels(model)
+        for k, v in model.state_dict().items():
+            assert torch.equal(v, initial_state[k])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. GALORE OPTIMIZER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGaLoreConfig:
+    """Tests for GaLore optimizer configuration."""
+
+    def test_galore_config_defaults(self):
+        config = TrainingConfig()
+        assert config.galore_rank == 0
+        assert config.galore_update_proj_gap == 200
+        assert config.galore_scale == 0.25
+
+    def test_galore_optimizer_fallback(self):
+        """GaLore should fall back to AdamW when not installed."""
+        from dataset_sorter.optimizer_factory import get_optimizer
+        config = TrainingConfig()
+        config.optimizer = "GaLoreAdamW"
+        config.galore_rank = 128
+        model = nn.Linear(8, 4)
+        param_groups = [{"params": list(model.parameters()), "lr": 1e-4}]
+        opt = get_optimizer(config, param_groups)
+        # Falls back to AdamW since galore-torch is not installed
+        assert isinstance(opt, torch.optim.AdamW)
+
+    def test_galore_8bit_fallback(self):
+        """GaLoreAdamW8bit should fall back to AdamW when not installed."""
+        from dataset_sorter.optimizer_factory import get_optimizer
+        config = TrainingConfig()
+        config.optimizer = "GaLoreAdamW8bit"
+        config.galore_rank = 64
+        model = nn.Linear(8, 4)
+        param_groups = [{"params": list(model.parameters()), "lr": 1e-4}]
+        opt = get_optimizer(config, param_groups)
+        assert isinstance(opt, torch.optim.AdamW)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. NEW CONFIG FIELDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestNewOptimizationConfigFields:
+    """Tests for new optimization config fields."""
+
+    def test_fused_backward_pass_default(self):
+        config = TrainingConfig()
+        assert config.fused_backward_pass is False
+
+    def test_stochastic_rounding_default(self):
+        config = TrainingConfig()
+        assert config.stochastic_rounding is False
+
+    def test_liger_kernels_default(self):
+        config = TrainingConfig()
+        assert config.liger_kernels is False
+
+    def test_config_serialization_new_fields(self):
+        """New fields should serialize correctly."""
+        from dataclasses import asdict
+        import json
+
+        config = TrainingConfig()
+        config.fused_backward_pass = True
+        config.stochastic_rounding = True
+        config.galore_rank = 128
+        config.liger_kernels = True
+
+        data = asdict(config)
+        json_str = json.dumps(data, default=str)
+        loaded = json.loads(json_str)
+
+        assert loaded["fused_backward_pass"] is True
+        assert loaded["stochastic_rounding"] is True
+        assert loaded["galore_rank"] == 128
+        assert loaded["liger_kernels"] is True

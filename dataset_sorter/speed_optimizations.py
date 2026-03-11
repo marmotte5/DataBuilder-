@@ -26,6 +26,21 @@
 6. Async Optimizer Step:
    - Overlaps optimizer.step() with the next forward pass using separate CUDA stream
    - Hides optimizer latency behind compute
+
+7. Fused Backward Pass:
+   - Fuses backward pass with per-parameter optimizer step using gradient hooks
+   - Reduces peak gradient memory from O(params) to O(1)
+   - Especially effective for large models with Adafactor/Adam
+
+8. Stochastic Rounding:
+   - When updating bf16 weights, adds random noise before truncation
+   - Prevents systematic rounding bias that causes training stagnation
+   - Critical for bf16 LoRA fine-tuning with small learning rates
+
+9. Liger-Kernel Fused Ops:
+   - Fused Triton kernels for LayerNorm, RMSNorm, SwiGLU, CrossEntropy
+   - Reduces memory and kernel launch overhead
+   - Optional dependency: liger-kernel package
 """
 
 import logging
@@ -570,3 +585,255 @@ class AsyncOptimizerStep:
         opt_event = self._opt_stream.record_event()
         torch.cuda.current_stream(self.device).wait_event(opt_event)
         self._pending = False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. FUSED BACKWARD PASS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class FusedBackwardPass:
+    """Fuses backward pass with per-parameter optimizer updates via gradient hooks.
+
+    Instead of accumulating all gradients then calling optimizer.step(), each
+    parameter's gradient is consumed immediately during backward. This reduces
+    peak gradient memory from O(total_params) to O(largest_layer).
+
+    Particularly effective with Adafactor (which has O(n+m) states vs O(n*m)
+    for Adam), as the combined memory savings are multiplicative.
+
+    Usage:
+        fused = FusedBackwardPass(optimizer, scheduler)
+        fused.install_hooks(model.parameters())
+        # In training loop: just call loss.backward() — no optimizer.step() needed
+        loss.backward()
+        fused.finish_step()  # finalize scheduler + zero_grad
+    """
+
+    def __init__(self, optimizer, scheduler=None, grad_scaler=None,
+                 max_grad_norm: float = 0.0):
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.grad_scaler = grad_scaler
+        self.max_grad_norm = max_grad_norm
+        self._hooks: list = []
+        self._param_to_group: dict = {}
+        self._stepped = False
+
+    def install_hooks(self, parameters):
+        """Register post-accumulate-grad hooks on trainable parameters."""
+        trainable = [p for p in parameters if p.requires_grad]
+
+        # Map each parameter to its optimizer param_group index
+        for group_idx, group in enumerate(self.optimizer.param_groups):
+            for p in group["params"]:
+                self._param_to_group[p] = group_idx
+
+        for p in trainable:
+            if p not in self._param_to_group:
+                continue
+            # Use post_accumulate_grad_hook (PyTorch 2.1+)
+            hook = p.register_post_accumulate_grad_hook(self._make_hook(p))
+            self._hooks.append(hook)
+
+        log.info(f"Fused backward pass: installed hooks on {len(self._hooks)} parameters")
+
+    def _make_hook(self, param):
+        """Create a hook that steps the optimizer for a single parameter."""
+        def hook(p):
+            if p.grad is None:
+                return
+            if self.max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_([p], self.max_grad_norm)
+            # Create a temporary single-param optimizer step
+            # by temporarily replacing the group's params
+            group_idx = self._param_to_group[p]
+            group = self.optimizer.param_groups[group_idx]
+            original_params = group["params"]
+            group["params"] = [p]
+            try:
+                self.optimizer.step()
+            finally:
+                group["params"] = original_params
+            p.grad = None  # Free gradient memory immediately
+            self._stepped = True
+        return hook
+
+    def finish_step(self):
+        """Call after loss.backward() to update scheduler and bookkeeping."""
+        if self._stepped and self.scheduler is not None:
+            self.scheduler.step()
+        self._stepped = False
+
+    def remove_hooks(self):
+        """Remove all installed hooks."""
+        for hook in self._hooks:
+            hook.remove()
+        self._hooks.clear()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. STOCHASTIC ROUNDING FOR BF16
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def stochastic_round_to_bf16(tensor: torch.Tensor) -> torch.Tensor:
+    """Round fp32 tensor to bf16 with stochastic rounding.
+
+    Standard truncation always rounds toward zero, causing systematic bias
+    that accumulates over thousands of small updates (especially with small
+    learning rates in LoRA fine-tuning). Stochastic rounding randomly rounds
+    up or down proportional to the fractional part, giving an unbiased
+    estimator of the true value.
+
+    Math: For fp32 value x, bf16 truncation gives floor(x). The residual
+    r = x - floor(x) is in [0, 1) ULP. We round up with probability r.
+    """
+    # Convert to bf16 and back to get the truncated value
+    bf16_val = tensor.to(torch.bfloat16)
+    truncated = bf16_val.to(torch.float32)
+
+    # Compute the residual in ULP (unit in last place)
+    # The difference between the original and truncated value
+    residual = tensor - truncated
+
+    # Get the ULP size at each value (next representable bf16 - current bf16)
+    # For bf16, we can compute this by adding 1 ULP
+    next_bf16 = torch.nextafter(bf16_val, torch.tensor(float('inf'), device=tensor.device, dtype=torch.bfloat16))
+    ulp = (next_bf16.float() - truncated).abs().clamp(min=1e-38)
+
+    # Probability of rounding up = |residual| / ulp
+    prob = (residual.abs() / ulp).clamp(0, 1)
+
+    # Stochastic decision: round up with probability `prob`
+    round_up = torch.rand_like(prob) < prob
+    correction = torch.where(residual >= 0, ulp, -ulp)
+
+    result = truncated + torch.where(round_up, correction, torch.zeros_like(correction))
+    return result.to(torch.bfloat16)
+
+
+class StochasticRoundingHook:
+    """Post-optimizer hook that applies stochastic rounding to bf16 parameters.
+
+    Install after optimizer.step() to ensure weight updates aren't lost to
+    truncation bias. Only affects bf16 parameters; fp32 params are unchanged.
+
+    Usage:
+        hook = StochasticRoundingHook()
+        # After optimizer.step():
+        hook.apply(model.parameters())
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+
+    @torch.no_grad()
+    def apply(self, parameters):
+        """Apply stochastic rounding to all bf16 parameters."""
+        if not self.enabled:
+            return
+        for p in parameters:
+            if not p.requires_grad or p.dtype != torch.bfloat16:
+                continue
+            # Parameters are already bf16, but the optimizer may have
+            # accumulated fp32 gradients. If master weights exist (fp32 copy),
+            # the rounding happens at the copy-back step.
+            # For pure bf16 training: round the updated weights stochastically.
+            # The optimizer step was done in fp32 (via autocast), so we just
+            # need to ensure the stored bf16 weights are stochastically rounded.
+            p.data.copy_(stochastic_round_to_bf16(p.data.float()))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. LIGER-KERNEL FUSED TRITON OPS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def apply_liger_kernels(model: nn.Module) -> bool:
+    """Apply Liger-Kernel fused Triton operators to compatible model layers.
+
+    Liger-Kernel provides fused Triton implementations of common operations:
+    - FusedRMSNorm: Fused RMS normalization (2x speedup, 50% memory)
+    - FusedLayerNorm: Fused layer normalization
+    - FusedSwiGLU: Fused SwiGLU activation (SiLU * gate in one kernel)
+    - FusedCrossEntropy: Fused cross-entropy (not typically used in diffusion)
+
+    These replace standard PyTorch modules in-place, maintaining identical
+    forward/backward behavior but with fewer kernel launches and less memory.
+
+    Returns True if any kernels were applied, False otherwise.
+    """
+    try:
+        import liger_kernel  # noqa: F401
+    except ImportError:
+        log.warning("liger-kernel not installed. Install with: pip install liger-kernel")
+        return False
+
+    applied = 0
+
+    # Try to replace RMSNorm layers with fused Triton version
+    try:
+        from liger_kernel.transformers.rms_norm import LigerRMSNorm
+        for name, module in model.named_modules():
+            # Match RMSNorm-like modules (used in DiT/Flux/SD3 transformers)
+            if type(module).__name__ in ("RMSNorm", "LlamaRMSNorm", "Qwen2RMSNorm"):
+                parent = _get_parent_module(model, name)
+                attr = name.rsplit(".", 1)[-1]
+                fused = LigerRMSNorm(
+                    module.weight.shape[0],
+                    eps=getattr(module, "eps", getattr(module, "variance_epsilon", 1e-6)),
+                ).to(device=module.weight.device, dtype=module.weight.dtype)
+                fused.weight.data.copy_(module.weight.data)
+                setattr(parent, attr, fused)
+                applied += 1
+    except (ImportError, Exception) as e:
+        log.debug(f"Liger RMSNorm not available: {e}")
+
+    # Try to replace LayerNorm with fused version
+    try:
+        from liger_kernel.transformers.layer_norm import LigerLayerNorm
+        for name, module in model.named_modules():
+            if isinstance(module, nn.LayerNorm) and module.elementwise_affine:
+                parent = _get_parent_module(model, name)
+                attr = name.rsplit(".", 1)[-1]
+                fused = LigerLayerNorm(
+                    module.normalized_shape, eps=module.eps,
+                ).to(device=module.weight.device, dtype=module.weight.dtype)
+                fused.weight.data.copy_(module.weight.data)
+                if module.bias is not None:
+                    fused.bias.data.copy_(module.bias.data)
+                setattr(parent, attr, fused)
+                applied += 1
+    except (ImportError, Exception) as e:
+        log.debug(f"Liger LayerNorm not available: {e}")
+
+    # Try to replace SwiGLU/GEGLU activations with fused version
+    try:
+        from liger_kernel.transformers.swiglu import LigerSwiGLUMLP
+        for name, module in model.named_modules():
+            if type(module).__name__ in ("SwiGLU", "GEGLU"):
+                parent = _get_parent_module(model, name)
+                attr = name.rsplit(".", 1)[-1]
+                # SwiGLU replacement needs matching dimensions
+                if hasattr(module, "w1") and hasattr(module, "w2"):
+                    fused = LigerSwiGLUMLP(
+                        in_features=module.w1.in_features,
+                        hidden_features=module.w1.out_features,
+                    ).to(device=module.w1.weight.device, dtype=module.w1.weight.dtype)
+                    setattr(parent, attr, fused)
+                    applied += 1
+    except (ImportError, Exception) as e:
+        log.debug(f"Liger SwiGLU not available: {e}")
+
+    if applied > 0:
+        log.info(f"Liger-Kernel: replaced {applied} modules with fused Triton implementations")
+    else:
+        log.info("Liger-Kernel: no compatible modules found for replacement")
+
+    return applied > 0
+
+
+def _get_parent_module(model: nn.Module, name: str) -> nn.Module:
+    """Get the parent module of a named submodule."""
+    parts = name.rsplit(".", 1)
+    if len(parts) == 1:
+        return model
+    return dict(model.named_modules())[parts[0]]

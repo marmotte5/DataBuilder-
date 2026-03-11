@@ -49,9 +49,13 @@ optimizers = [
     "dadaptation>=3.1",
     "came-pytorch>=0.1",
     "schedulefree>=1.0",
+    "galore-torch>=1.0",
+]
+speed = [
+    "liger-kernel>=0.4",
 ]
 all = [
-    "dataset-sorter[training,optimizers]",
+    "dataset-sorter[training,optimizers,speed]",
 ]
 
 [project.scripts]

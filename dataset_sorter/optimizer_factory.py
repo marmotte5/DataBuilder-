@@ -88,6 +88,29 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             weight_decay=config.weight_decay,
             momentum=0.95,
         )
+    elif config.optimizer == "GaLoreAdamW":
+        try:
+            from galore_torch import GaLoreAdamW
+            # GaLore wraps param groups with rank/projection settings
+            for pg in param_groups:
+                pg["rank"] = config.galore_rank or 128
+                pg["update_proj_gap"] = config.galore_update_proj_gap
+                pg["scale"] = config.galore_scale
+            return GaLoreAdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
+        except ImportError:
+            log.warning("galore-torch not installed, falling back to AdamW")
+            return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
+    elif config.optimizer == "GaLoreAdamW8bit":
+        try:
+            from galore_torch import GaLoreAdamW8bit
+            for pg in param_groups:
+                pg["rank"] = config.galore_rank or 128
+                pg["update_proj_gap"] = config.galore_update_proj_gap
+                pg["scale"] = config.galore_scale
+            return GaLoreAdamW8bit(param_groups, lr=lr, weight_decay=config.weight_decay)
+        except ImportError:
+            log.warning("galore-torch not installed, falling back to AdamW")
+            return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "SGD":
         return torch.optim.SGD(
             param_groups, lr=lr, weight_decay=config.weight_decay,

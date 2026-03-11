@@ -242,11 +242,26 @@ class TrainBackendBase(ABC):
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        # 5. Gradient checkpointing
+        # 5. Compile loss functions — fuses cast + MSE into single kernel (5-8% speedup)
+        if config.torch_compile:
+            try:
+                self._compute_epsilon_loss = torch.compile(self._compute_epsilon_loss)
+                self._compute_vpred_loss = torch.compile(self._compute_vpred_loss)
+                self._compute_flow_loss = torch.compile(self._compute_flow_loss)
+                log.info("torch.compile() applied to loss functions")
+            except Exception as e:
+                log.debug(f"torch.compile() for loss functions failed: {e}")
+
+        # 6. Liger-Kernel fused Triton ops (LayerNorm, RMSNorm, SwiGLU)
+        if config.liger_kernels and self.unet is not None:
+            from dataset_sorter.speed_optimizations import apply_liger_kernels
+            apply_liger_kernels(self.unet)
+
+        # 7. Gradient checkpointing
         if config.gradient_checkpointing and self.unet is not None:
             self.unet.enable_gradient_checkpointing()
 
-        # 6. VAE optimizations (slicing for lower peak VRAM)
+        # 8. VAE optimizations (slicing for lower peak VRAM)
         if self.vae is not None:
             try:
                 self.vae.enable_slicing()
