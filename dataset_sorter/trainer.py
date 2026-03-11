@@ -691,7 +691,23 @@ class Trainer:
         # ── Get text encoder outputs (cached or live-encode) ──
         if "te_cache" in batch:
             te_cache = batch["te_cache"]
-            if len(te_cache) == 4:
+            if len(te_cache) == 5:
+                # SD3-style: (hidden1, pooled1, hidden2, pooled2, hidden3_t5)
+                h1 = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
+                p1 = te_cache[1].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[1] is not None else None
+                h2 = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[2] is not None else None
+                p2 = te_cache[3].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[3] is not None else None
+                h3 = te_cache[4].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[4] is not None else None
+                # Concatenate CLIP hidden states and pooled outputs
+                clip_hidden = torch.cat([h1, h2], dim=-1) if h2 is not None else h1
+                pooled = torch.cat([p1, p2], dim=-1) if p1 is not None and p2 is not None else (p1 or p2)
+                # Pad and concatenate with T5 hidden states
+                if h3 is not None:
+                    encoder_hidden = self.backend._pad_and_cat([clip_hidden, h3])
+                else:
+                    encoder_hidden = clip_hidden
+                te_out = (encoder_hidden, pooled)
+            elif len(te_cache) == 4:
                 # SDXL-style: (hidden1, pooled1, hidden2, pooled2)
                 # Batch transfer: move to GPU together, then cat
                 h1 = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)

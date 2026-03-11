@@ -209,6 +209,8 @@ class CachedTrainDataset(Dataset):
 
         pending_saves: list[tuple] = []  # (path, tensor) for parallel save
 
+        # First pass: load disk cache and dedup, collect indices needing VAE encode
+        to_encode: list[int] = []
         for idx in range(len(self)):
             # Check disk cache first (try safetensors, then .pt)
             if to_disk and self.cache_dir:
@@ -234,7 +236,12 @@ class CachedTrainDataset(Dataset):
                     progress_fn(idx + 1, len(self))
                 continue
 
-            # Determine target resolution
+            to_encode.append(idx)
+
+        # Second pass: batch VAE encode, grouped by resolution
+        # Group by resolution since batching requires same-size tensors
+        resolution_groups: dict[tuple[int, int], list[tuple[int, torch.Tensor]]] = {}
+        for idx in to_encode:
             if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
                 target_w, target_h = self._bucket_assignments[idx]
             else:
@@ -246,31 +253,49 @@ class CachedTrainDataset(Dataset):
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
                 img = Image.new("RGB", (target_w, target_h))
 
-            # Use bucket-specific transforms when bucketing is active
             if self._bucket_assignments is not None:
                 t = self._get_transforms_for_resolution(target_w, target_h)
-                pixel_values = t(img).unsqueeze(0).to(
-                    device, dtype=dtype, memory_format=torch.channels_last,
-                )
+                pixel_values = t(img).unsqueeze(0)
             else:
-                pixel_values = self._transforms(img).unsqueeze(0).to(
-                    device, dtype=dtype, memory_format=torch.channels_last,
-                )
+                pixel_values = self._transforms(img).unsqueeze(0)
 
-            with torch.no_grad():
-                latent = vae.encode(pixel_values).latent_dist.sample()
-                latent = latent * vae.config.scaling_factor
+            resolution_groups.setdefault((target_w, target_h), []).append((idx, pixel_values))
 
-            latent = latent.squeeze(0).cpu()
-            self._latent_cache[idx] = latent
+        # Encode each resolution group in batches
+        vae_batch_size = 4
+        encoded_count = len(self) - len(to_encode)  # already cached
+        for (_w, _h), group in resolution_groups.items():
+            for batch_start in range(0, len(group), vae_batch_size):
+                batch_items = group[batch_start:batch_start + vae_batch_size]
+                batch_tensor = torch.cat(
+                    [pv for _, pv in batch_items], dim=0
+                ).to(device, dtype=dtype, memory_format=torch.channels_last)
 
-            if to_disk and self.cache_dir:
-                pending_saves.append(
-                    (self._latent_disk_path(idx), compress_latent_fp16(latent))
-                )
+                with torch.no_grad():
+                    encoded = vae.encode(batch_tensor).latent_dist.sample()
+                    encoded = encoded * vae.config.scaling_factor
 
-            if progress_fn:
-                progress_fn(idx + 1, len(self))
+                for bi, (idx, _) in enumerate(batch_items):
+                    latent = encoded[bi].cpu()
+                    self._latent_cache[idx] = latent
+
+                    # Fill dedup targets that reference this idx
+                    for dup_idx in to_encode:
+                        if dup_idx != idx and idx_to_rep.get(dup_idx) == idx and dup_idx not in self._latent_cache:
+                            self._latent_cache[dup_idx] = latent
+                            if to_disk and self.cache_dir:
+                                pending_saves.append(
+                                    (self._latent_disk_path(dup_idx), compress_latent_fp16(latent))
+                                )
+
+                    if to_disk and self.cache_dir:
+                        pending_saves.append(
+                            (self._latent_disk_path(idx), compress_latent_fp16(latent))
+                        )
+
+                    encoded_count += 1
+                    if progress_fn:
+                        progress_fn(encoded_count, len(self))
 
         # Flush pending disk saves in parallel
         if pending_saves:
@@ -324,8 +349,11 @@ class CachedTrainDataset(Dataset):
                     try:
                         from safetensors.torch import load_file
                         data = load_file(str(sf_path))
-                        # Reconstruct tuple from numbered keys
-                        loaded = tuple(data[k] for k in sorted(data.keys()))
+                        # Reconstruct tuple preserving None positions from key indices
+                        # Keys are t00, t01, ... — missing indices were None at save time
+                        keys = sorted(data.keys())
+                        max_idx = max(int(k[1:]) for k in keys) + 1
+                        loaded = tuple(data.get(f"t{i:02d}") for i in range(max_idx))
                     except (ImportError, Exception):
                         pass
                 if loaded is None and cache_path.exists():

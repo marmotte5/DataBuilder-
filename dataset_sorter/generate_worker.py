@@ -9,6 +9,7 @@ Supports all 16+ model architectures via diffusers pipelines.
 
 import gc
 import logging
+import threading
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -104,6 +105,7 @@ class GenerateWorker(QThread):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()  # Guards pipe and shared state
         self.pipe = None
         self._device = None
         self._dtype = None
@@ -142,6 +144,9 @@ class GenerateWorker(QThread):
         dtype: str = "bf16",
     ):
         """Configure and start model loading (runs in thread)."""
+        if self.isRunning():
+            self.error.emit("Worker is busy. Wait for the current operation to finish.")
+            return
         self._mode = "load"
         self._model_path = model_path
         self._model_type = model_type if model_type != "auto" else _detect_model_type(model_path)
@@ -151,6 +156,9 @@ class GenerateWorker(QThread):
 
     def generate(self):
         """Start image generation (runs in thread). Model must be loaded first."""
+        if self.isRunning():
+            self.error.emit("Worker is busy. Wait for the current operation to finish.")
+            return
         self._mode = "generate"
         self._stop_requested = False
         self.start()
@@ -161,9 +169,10 @@ class GenerateWorker(QThread):
 
     def unload_model(self):
         """Free GPU memory."""
-        if self.pipe is not None:
-            del self.pipe
-            self.pipe = None
+        with self._lock:
+            if self.pipe is not None:
+                del self.pipe
+                self.pipe = None
         gc.collect()
         try:
             import torch
@@ -267,7 +276,8 @@ class GenerateWorker(QThread):
 
         self.progress.emit(90, 100, "Finalizing...")
 
-        self.pipe = pipe
+        with self._lock:
+            self.pipe = pipe
         self.progress.emit(100, 100, "Model loaded!")
         self.model_loaded.emit(
             f"Loaded {model_type} on {self._device} ({dtype.__name__ if hasattr(dtype, '__name__') else dtype})"
@@ -455,17 +465,31 @@ class GenerateWorker(QThread):
     def _do_generate(self):
         import torch
 
-        if self.pipe is None:
-            self.error.emit("No model loaded. Load a model first.")
-            return
+        with self._lock:
+            if self.pipe is None:
+                self.error.emit("No model loaded. Load a model first.")
+                return
 
+        # Snapshot all generation params so UI changes mid-batch are safe
         model_type = self._model_type
         total = self.num_images
+        positive_prompt = self.positive_prompt
+        negative_prompt = self.negative_prompt
+        scheduler_name = self.scheduler_name
+        steps = self.steps
+        cfg_scale = self.cfg_scale
+        width = self.width
+        height = self.height
+        seed = self.seed
+        clip_skip = self.clip_skip
+        init_image = self.init_image
+        mask_image = self.mask_image
+        strength = self.strength
 
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
-        _load_scheduler(self.pipe, self.scheduler_name)
+        _load_scheduler(self.pipe, scheduler_name)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
         active_pipe = self._get_pipeline_for_mode()
@@ -479,52 +503,52 @@ class GenerateWorker(QThread):
             self.progress.emit(i, total, f"Generating image {i + 1}/{total}...")
 
             # Seed
-            if self.seed < 0:
+            if seed < 0:
                 import random
                 current_seed = random.randint(0, 2**32 - 1)
             else:
-                current_seed = self.seed + i
+                current_seed = seed + i
 
             generator = torch.Generator(device=self._device).manual_seed(current_seed)
 
             # Build pipeline kwargs
             kwargs = {
-                "prompt": self.positive_prompt,
-                "num_inference_steps": self.steps,
+                "prompt": positive_prompt,
+                "num_inference_steps": steps,
                 "generator": generator,
             }
 
             # img2img / inpainting inputs
-            if self.init_image is not None:
-                init_img = self.init_image.convert("RGB").resize(
-                    (self.width, self.height), Image.Resampling.LANCZOS,
+            if init_image is not None:
+                init_img = init_image.convert("RGB").resize(
+                    (width, height), Image.Resampling.LANCZOS,
                 )
                 kwargs["image"] = init_img
-                kwargs["strength"] = self.strength
+                kwargs["strength"] = strength
 
-                if self.mask_image is not None:
-                    mask = self.mask_image.convert("L").resize(
-                        (self.width, self.height), Image.Resampling.LANCZOS,
+                if mask_image is not None:
+                    mask = mask_image.convert("L").resize(
+                        (width, height), Image.Resampling.LANCZOS,
                     )
                     kwargs["mask_image"] = mask
             else:
                 # txt2img needs explicit resolution
-                kwargs["width"] = self.width
-                kwargs["height"] = self.height
+                kwargs["width"] = width
+                kwargs["height"] = height
 
             # Negative prompt and CFG
             if model_type in CFG_MODELS:
-                kwargs["guidance_scale"] = self.cfg_scale
-                if self.negative_prompt:
-                    kwargs["negative_prompt"] = self.negative_prompt
+                kwargs["guidance_scale"] = cfg_scale
+                if negative_prompt:
+                    kwargs["negative_prompt"] = negative_prompt
             elif model_type in FLOW_GUIDANCE_MODELS:
-                kwargs["guidance_scale"] = self.cfg_scale
+                kwargs["guidance_scale"] = cfg_scale
             else:
-                kwargs["guidance_scale"] = self.cfg_scale
+                kwargs["guidance_scale"] = cfg_scale
 
             # Clip skip (for SD 1.5 / SDXL)
-            if self.clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
-                kwargs["clip_skip"] = self.clip_skip
+            if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
+                kwargs["clip_skip"] = clip_skip
 
             try:
                 with torch.inference_mode():
@@ -542,17 +566,17 @@ class GenerateWorker(QThread):
 
                 # Build display info
                 mode_str = "txt2img"
-                if self.mask_image is not None and self.init_image is not None:
+                if mask_image is not None and init_image is not None:
                     mode_str = "inpaint"
-                elif self.init_image is not None:
-                    mode_str = f"img2img (str={self.strength})"
+                elif init_image is not None:
+                    mode_str = f"img2img (str={strength})"
 
                 info = (
                     f"Seed: {current_seed} | "
-                    f"Steps: {self.steps} | "
-                    f"CFG: {self.cfg_scale} | "
-                    f"Sampler: {self.scheduler_name} | "
-                    f"{self.width}x{self.height} | "
+                    f"Steps: {steps} | "
+                    f"CFG: {cfg_scale} | "
+                    f"Sampler: {scheduler_name} | "
+                    f"{width}x{height} | "
                     f"{mode_str}"
                 )
                 self.image_generated.emit(img, i, info)
