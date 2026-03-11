@@ -85,10 +85,12 @@ class HunyuanDiTBackend(TrainBackendBase):
             out_2 = self.text_encoder_2(tokens_2)
             t5_hidden = out_2.last_hidden_state
 
-        # Concatenate hidden states
-        encoder_hidden = torch.cat([clip_hidden, t5_hidden], dim=1)
-
-        return (encoder_hidden, pooled, t5_hidden)
+        # Return CLIP hidden, pooled, and T5 hidden separately.
+        # HunyuanDiT takes encoder_hidden_states (CLIP) and
+        # encoder_hidden_states_t5 (mT5) as separate inputs.
+        # Cannot concatenate along seq dim because hidden sizes differ
+        # (CLIP=1024, mT5=2048).
+        return (clip_hidden, pooled, t5_hidden)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:

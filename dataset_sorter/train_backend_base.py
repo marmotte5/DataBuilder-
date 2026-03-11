@@ -102,11 +102,13 @@ class TrainBackendBase(ABC):
     def generate_sample(self, prompt: str, seed: int) -> Optional[Image.Image]:
         """Generate a single sample image. Override for non-standard pipelines."""
         if self.pipeline is not None:
+            # MPS does not support torch.Generator(device="mps"); use CPU generator
+            gen_device = "cpu" if self.device.type == "mps" else self.device
             return self.pipeline(
                 prompt=prompt,
                 num_inference_steps=self.config.sample_steps,
                 guidance_scale=self.config.sample_cfg_scale,
-                generator=torch.Generator(self.device).manual_seed(seed),
+                generator=torch.Generator(device=gen_device).manual_seed(seed),
             ).images[0]
         log.warning(f"{self.model_name}: no pipeline available for sample generation")
         return None
