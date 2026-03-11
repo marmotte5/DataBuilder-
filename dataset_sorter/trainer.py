@@ -163,9 +163,10 @@ class Trainer:
         self.ema_model: Optional[EMAModel] = None
         self.grad_scaler = None
 
-        # Loss history for Smart Resume
+        # Loss history for Smart Resume (capped to prevent unbounded growth)
         self._loss_history: list[tuple[int, float]] = []
         self._lr_history: list[tuple[int, float]] = []
+        self._max_history_len = 100_000  # ~3.2 MB cap per list
 
         # RLHF collection flag (set from UI thread when ready)
         self._rlhf_collect = threading.Event()
@@ -599,9 +600,12 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
 
-                    # Record loss history for Smart Resume
+                    # Record loss history for Smart Resume (evict oldest if over cap)
                     self._loss_history.append((self.state.global_step, self.state.loss))
                     self._lr_history.append((self.state.global_step, self.state.lr))
+                    if len(self._loss_history) > self._max_history_len:
+                        self._loss_history = self._loss_history[-self._max_history_len:]
+                        self._lr_history = self._lr_history[-self._max_history_len:]
 
                     # Callbacks
                     if loss_fn:
@@ -864,7 +868,8 @@ class Trainer:
 
             if self.dataset is not None and idx < len(self.dataset.image_paths):
                 try:
-                    img = Image.open(self.dataset.image_paths[idx]).convert("RGB")
+                    with Image.open(self.dataset.image_paths[idx]) as _img:
+                        img = _img.convert("RGB")
                 except Exception:
                     return
 

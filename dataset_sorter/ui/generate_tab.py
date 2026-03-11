@@ -154,6 +154,7 @@ class GenerateTab(QWidget):
         super().__init__(parent)
         self._worker = None
         self._generated_images: list = []  # [(PIL.Image, info_str)]
+        self._max_gallery_images = 200  # Cap to prevent unbounded memory growth
         self._current_gallery_idx = 0
         self._build_ui()
         self._connect_signals()
@@ -637,11 +638,13 @@ class GenerateTab(QWidget):
         init_path = self.init_image_path.text().strip()
         mask_path = self.mask_image_path.text().strip()
         if init_path and Path(init_path).is_file():
-            self._worker.init_image = PILImage.open(init_path)
+            with PILImage.open(init_path) as _img:
+                self._worker.init_image = _img.convert("RGB")
         else:
             self._worker.init_image = None
         if mask_path and Path(mask_path).is_file():
-            self._worker.mask_image = PILImage.open(mask_path)
+            with PILImage.open(mask_path) as _img:
+                self._worker.mask_image = _img.convert("L")
         else:
             self._worker.mask_image = None
 
@@ -658,6 +661,9 @@ class GenerateTab(QWidget):
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         self._generated_images.append((pil_image, info))
+        # Evict oldest images when gallery exceeds cap to prevent memory leak
+        while len(self._generated_images) > self._max_gallery_images:
+            self._generated_images.pop(0)
         self._current_gallery_idx = len(self._generated_images) - 1
         self._display_current_image()
         self._add_thumbnail(pil_image, len(self._generated_images) - 1)
@@ -775,7 +781,8 @@ class GenerateTab(QWidget):
 
     def _show_init_preview(self, path: str):
         try:
-            img = PILImage.open(path).convert("RGB")
+            with PILImage.open(path) as _img:
+                img = _img.convert("RGB")
             pixmap = _pil_to_qpixmap(img, 80, 80)
             self.init_preview.setPixmap(pixmap)
         except Exception:

@@ -65,8 +65,9 @@ def _get_fast_decoder():
                     bgr = _tjpeg.decode(f.read())
                 # TurboJPEG returns BGR numpy array → convert to RGB PIL
                 return Image.fromarray(bgr[:, :, ::-1])
-            # Non-JPEG: fall back to PIL
-            return Image.open(path).convert("RGB")
+            # Non-JPEG: fall back to PIL (context manager ensures FD is closed)
+            with Image.open(path) as img:
+                return img.convert("RGB")
 
         log.info("Fast image decoder: turbojpeg (3-5x faster for JPEG)")
         return _decode_turbojpeg
@@ -81,7 +82,8 @@ def _get_fast_decoder():
         def _decode_cv2(path: Path) -> Image.Image:
             bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
             if bgr is None:
-                return Image.open(path).convert("RGB")
+                with Image.open(path) as img:
+                    return img.convert("RGB")
             return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
         log.info("Fast image decoder: OpenCV (2-3x faster than PIL)")
@@ -93,7 +95,8 @@ def _get_fast_decoder():
     from PIL import Image
 
     def _decode_pil(path: Path) -> Image.Image:
-        return Image.open(path).convert("RGB")
+        with Image.open(path) as img:
+            return img.convert("RGB")
 
     log.info("Fast image decoder: PIL (baseline)")
     return _decode_pil
