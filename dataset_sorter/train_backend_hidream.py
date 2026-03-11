@@ -164,6 +164,7 @@ class HiDreamBackend(TrainBackendBase):
         """Freeze all 4 text encoders."""
         super().freeze_text_encoders()
         if self.text_encoder_4 is not None:
+            self.text_encoder_4.eval()
             self.text_encoder_4.requires_grad_(False)
 
     def offload_text_encoders(self):

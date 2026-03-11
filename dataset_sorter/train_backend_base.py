@@ -483,7 +483,13 @@ class TrainBackendBase(ABC):
         pooled = te_out[1] if len(te_out) > 1 else None
         timesteps = (t * timestep_scale).long()
 
-        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out)
+        # Derive actual image HxW from latent shape for resolution conditioning
+        # (PixArt, Sana use this for aspect-ratio-aware training).
+        _vae_sf = getattr(self, 'vae_scale_factor', 8)
+        lat_h, lat_w = latents.shape[2], latents.shape[3]
+        image_hw = (lat_h * _vae_sf, lat_w * _vae_sf)
+        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out,
+                                         image_hw=image_hw)
 
         fwd_kwargs = {}
         if added_cond is not None:
