@@ -345,7 +345,8 @@ class TokenCountSection(QWidget):
 
     def _get_token_limit(self) -> int:
         idx = self.model_combo.currentIndex()
-        return [77, 512, 256][idx]
+        limits = [77, 512, 256]
+        return limits[idx] if 0 <= idx < len(limits) else 77
 
     def _on_model_changed(self):
         if self._entries:
