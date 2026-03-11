@@ -30,6 +30,7 @@ class LossAnalysis:
     plateau_start_step: int = 0     # step where plateau was detected (0 = none)
     divergence_start_step: int = 0  # step where divergence started (0 = none)
     oscillation_amplitude: float = 0.0
+    _first_step: int = 0            # absolute first step (for plateau duration calc)
 
     # Recommendations
     recommendations: list[str] = field(default_factory=list)
@@ -119,6 +120,7 @@ def analyze_loss_curve(
     losses = [l for _, l in loss_history]
 
     result.total_steps = steps[-1] - steps[0]
+    result._first_step = steps[0]
     result.final_loss = losses[-1]
     result.min_loss = min(losses)
     result.max_loss = max(losses)
@@ -251,7 +253,11 @@ def compute_adjustments(
 
     elif analysis.trend == "plateau":
         # Loss has flattened — several strategies
-        steps_in_plateau = analysis.total_steps - analysis.plateau_start_step
+        # plateau_start_step is absolute; total_steps is the step *range*
+        # (steps[-1] - steps[0]).  Compute duration correctly.
+        steps_in_plateau = max(0, analysis.total_steps - (
+            analysis.plateau_start_step - analysis._first_step
+        )) if analysis._first_step > 0 else 0
 
         if steps_in_plateau > analysis.total_steps * 0.3:
             # Long plateau — significant LR reduction to find lower minimum
