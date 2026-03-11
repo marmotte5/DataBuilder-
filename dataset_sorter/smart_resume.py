@@ -168,7 +168,9 @@ def analyze_loss_curve(
     # ── Trend detection ──
 
     late_improving = avg4 < avg3 * 0.98  # still decreasing in last segment
-    plateau = abs(avg4 - avg3) < avg3 * 0.02 and abs(avg3 - avg2) < avg2 * 0.02
+    # Use abs() for threshold to handle near-zero or negative losses correctly
+    plateau = (abs(avg4 - avg3) < abs(avg3) * 0.02 + 1e-8
+               and abs(avg3 - avg2) < abs(avg2) * 0.02 + 1e-8)
     diverging = avg4 > avg3 * 1.05  # loss increasing in last segment
 
     # Check for oscillation (high variance relative to mean in recent loss)
@@ -178,7 +180,8 @@ def analyze_loss_curve(
         recent_mean = sum(recent) / len(recent)
         variance = sum((l - recent_mean) ** 2 for l in recent) / len(recent)
         std = math.sqrt(variance)
-        oscillating = std > recent_mean * 0.15  # >15% of mean is oscillation
+        # Use abs(recent_mean) to handle near-zero/negative losses
+        oscillating = std > max(abs(recent_mean) * 0.15, 1e-8)
 
     # Classify
     if diverging:
