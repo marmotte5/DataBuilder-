@@ -313,7 +313,8 @@ class Trainer:
 
         # ── 8. Cache text encoder outputs ──
         if config.cache_text_encoder:
-            self.backend.text_encoder.to(self.device)
+            if self.backend.text_encoder is not None:
+                self.backend.text_encoder.to(self.device)
             te2 = None
             tok2 = None
             te3 = None
@@ -354,7 +355,8 @@ class Trainer:
             # When TE caching is disabled, ensure text encoders are on the
             # correct device so encode_text_batch() works every step.
             # (Fix: previously TEs could remain on CPU after from_pretrained.)
-            self.backend.text_encoder.to(self.device)
+            if self.backend.text_encoder is not None:
+                self.backend.text_encoder.to(self.device)
             if self.backend.text_encoder_2 is not None:
                 self.backend.text_encoder_2.to(self.device)
             if getattr(self.backend, "text_encoder_3", None) is not None:
