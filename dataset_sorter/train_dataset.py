@@ -416,6 +416,8 @@ class CachedTrainDataset(Dataset):
                 if caption_preprocessor is not None:
                     # LLM path: use last hidden state (matches encode_text_batch)
                     hidden_states = encoder_output.hidden_states[-1].cpu()
+                    _skip = 1  # default for LLM path (used by TE2 below)
+                    tokens = _tok_out.input_ids.to(device)  # needed for token_id_result
                 else:
                     _skip = max(clip_skip, 1)
                     _skip = min(_skip, len(encoder_output.hidden_states) - 2)

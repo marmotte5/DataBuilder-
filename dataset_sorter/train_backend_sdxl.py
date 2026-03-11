@@ -92,7 +92,7 @@ class SDXLBackend(TrainBackendBase):
         with torch.no_grad():
             out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
             hidden_2 = out_2.hidden_states[-2]  # TE2 always uses penultimate layer
-            pooled = out_2[0]
+            pooled = out_2.pooler_output
 
         # Concatenate hidden states from both encoders
         encoder_hidden = torch.cat([hidden_1, hidden_2], dim=-1)

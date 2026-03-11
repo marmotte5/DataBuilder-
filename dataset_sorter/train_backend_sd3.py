@@ -87,7 +87,7 @@ class SD3Backend(TrainBackendBase):
         with torch.no_grad():
             out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
             clip_g_hidden = out_2.hidden_states[-2]
-            clip_g_pooled = out_2[0]
+            clip_g_pooled = out_2.pooler_output
 
         # T5-XXL
         t5_hidden = None
