@@ -86,6 +86,8 @@ def dpo_loss_ipo(
 
     L = (log_ratio - 1/(2*beta))^2
     """
+    if beta <= 0:
+        beta = 0.1  # fallback to default; zero causes ZeroDivisionError
     log_ratio = (
         (chosen_logps - ref_chosen_logps) - (rejected_logps - ref_rejected_logps)
     )

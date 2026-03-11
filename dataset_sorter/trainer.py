@@ -575,12 +575,14 @@ class Trainer:
                 loss = loss / grad_accum_steps
 
                 # ── NaN guard: skip backward if loss is NaN/Inf ──
+                # Do NOT zero_grad here — backward() was never called so no
+                # bad gradients were added. Clearing would destroy valid
+                # gradients accumulated from earlier steps in this window.
                 if torch.isnan(loss) or torch.isinf(loss):
                     log.warning(
                         f"NaN/Inf loss at step {self.state.global_step}, "
                         f"skipping backward pass"
                     )
-                    self.optimizer.zero_grad(set_to_none=True)
                     continue
 
                 # ── Backward (with GradScaler for fp16) ──
