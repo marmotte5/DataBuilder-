@@ -356,8 +356,8 @@ class TestFP16Cache:
         assert compressed.dtype == torch.float16
         decompressed = decompress_latent_fp16(compressed)
         assert decompressed.dtype == torch.float32
-        # FP16 has ~3 decimal digits of precision
-        assert torch.allclose(tensor, decompressed, atol=1e-3)
+        # FP16 step size at magnitude ~4 is ~0.002, so use atol=5e-3
+        assert torch.allclose(tensor, decompressed, atol=5e-3)
 
     def test_size_reduction(self):
         """FP16 should use 50% less memory."""

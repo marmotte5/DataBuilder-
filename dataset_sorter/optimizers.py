@@ -239,7 +239,7 @@ class Muon(Optimizer):
         if M.dim() > 2:
             M = M.reshape(M.shape[0], -1)
 
-        # Normalize to unit spectral norm for convergence
+        # Normalize to unit Frobenius norm for convergence (all σ < 1)
         norm = M.norm()
         if norm < 1e-8:
             return torch.zeros_like(M).reshape(orig_shape)
@@ -248,18 +248,20 @@ class Muon(Optimizer):
         orig_dtype = M.dtype
         X = (M / norm).float()
 
-        # Newton-Schulz iterations
-        I = torch.eye(X.shape[1], device=X.device, dtype=X.dtype) if X.shape[0] <= X.shape[1] else None
+        # Transpose so we always work with rows <= cols (use X @ X^T form)
+        transposed = X.shape[0] > X.shape[1]
+        if transposed:
+            X = X.T
+
+        # Quintic Newton-Schulz iteration: p(σ) = (15σ - 10σ³ + 3σ⁵) / 8
+        # Has cubic convergence (p(1)=1, p'(1)=0, p''(1)=0) vs quadratic for standard cubic
+        a, b, c = (15.0/8, -10.0/8, 3.0/8)
         for _ in range(num_steps):
-            if X.shape[0] <= X.shape[1]:
-                # Tall or square: X = 0.5 * X * (3I - X^T X)
-                XtX = X.T @ X
-                X = 0.5 * X @ (3 * I - XtX)
-            else:
-                # Wide: X = 0.5 * (3I - X X^T) * X
-                I_left = torch.eye(X.shape[0], device=X.device, dtype=X.dtype)
-                XXt = X @ X.T
-                X = 0.5 * (3 * I_left - XXt) @ X
+            A = X @ X.T
+            X = a * X + (b * A + c * A @ A) @ X
+
+        if transposed:
+            X = X.T
 
         return X.to(orig_dtype).reshape(orig_shape)
 
