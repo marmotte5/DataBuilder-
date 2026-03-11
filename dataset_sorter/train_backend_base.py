@@ -441,6 +441,9 @@ class TrainBackendBase(ABC):
 
     def _compute_snr_weights(self, timesteps: torch.Tensor, gamma: int) -> torch.Tensor:
         """Compute Min-SNR weighting (ICCV 2023)."""
+        if not hasattr(self.noise_scheduler, 'alphas_cumprod'):
+            log.warning("Scheduler lacks alphas_cumprod; min_snr_gamma not supported.")
+            return torch.ones_like(timesteps, dtype=torch.float32)
         alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(timesteps.device)
         sqrt_alpha = alphas_cumprod[timesteps] ** 0.5
         sqrt_one_minus = (1.0 - alphas_cumprod[timesteps]).clamp(min=1e-8) ** 0.5
