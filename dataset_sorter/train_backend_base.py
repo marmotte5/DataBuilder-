@@ -326,6 +326,7 @@ class TrainBackendBase(ABC):
         """Freeze text encoders and move off GPU if caching."""
         for te in (self.text_encoder, self.text_encoder_2, self.text_encoder_3):
             if te is not None:
+                te.eval()  # Disable dropout/batchnorm training behavior
                 te.requires_grad_(False)
 
     def unfreeze_text_encoder(self, which: int = 1):
@@ -530,6 +531,7 @@ class TrainBackendBase(ABC):
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values to latents (used when latent caching is off)."""
+        self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
                 pixel_values.to(memory_format=torch.channels_last)

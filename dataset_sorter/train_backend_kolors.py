@@ -46,7 +46,9 @@ class KolorsBackend(TrainBackendBase):
         self.text_encoder = pipe.text_encoder     # ChatGLM-6B
         self.unet = pipe.unet                     # UNet2DConditionModel (SDXL arch)
         self.vae = pipe.vae
-        self.noise_scheduler = pipe.scheduler
+        # Use DDPMScheduler for training (pipeline may ship with a different scheduler)
+        from diffusers import DDPMScheduler
+        self.noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
         self.vae.to(self.device, dtype=self.dtype)
         self.vae.requires_grad_(False)
