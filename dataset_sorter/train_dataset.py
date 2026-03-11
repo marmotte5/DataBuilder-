@@ -410,9 +410,16 @@ class CachedTrainDataset(Dataset):
                     tokens = _tok_out.input_ids.to(device)
                     encoder_output = text_encoder(tokens, output_hidden_states=True)
 
-                _skip = max(clip_skip, 1)
-                _skip = min(_skip, len(encoder_output.hidden_states) - 2)
-                hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
+                # LLM text encoders (Qwen3) use the last hidden state [-1].
+                # CLIP models use the penultimate layer [-2] by default,
+                # adjusted by clip_skip.
+                if caption_preprocessor is not None:
+                    # LLM path: use last hidden state (matches encode_text_batch)
+                    hidden_states = encoder_output.hidden_states[-1].cpu()
+                else:
+                    _skip = max(clip_skip, 1)
+                    _skip = min(_skip, len(encoder_output.hidden_states) - 2)
+                    hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
                 # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state
                 pooled = (
                     encoder_output.pooler_output.cpu()

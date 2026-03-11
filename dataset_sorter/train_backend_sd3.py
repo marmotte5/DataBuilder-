@@ -1,11 +1,9 @@
-"""SD3 / Z-Image training backend.
+"""SD3 training backend.
 
 Architecture: SD3Transformer2DModel (MMDiT with joint attention).
 Prediction: flow matching.
 Resolution: 1024x1024 native.
 Text encoders: CLIP-L + CLIP-G + T5-XXL (triple encoder).
-
-Z-Image uses the same SD3 architecture with flow matching.
 
 Key differences from SDXL:
 - Uses transformer instead of UNet
@@ -25,7 +23,7 @@ log = logging.getLogger(__name__)
 
 
 class SD3Backend(TrainBackendBase):
-    """SD3 and Z-Image training backend."""
+    """SD3 training backend (MMDiT + CLIP-L/G + T5-XXL)."""
 
     model_name = "sd3"
     default_resolution = 1024
@@ -55,7 +53,7 @@ class SD3Backend(TrainBackendBase):
         self.vae.to(self.device, dtype=self.dtype)
         self.vae.requires_grad_(False)
 
-        log.info(f"Loaded SD3/Z-Image model from {model_path}")
+        log.info(f"Loaded SD3 model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
         """SD3 transformer target modules for LoRA."""
