@@ -348,6 +348,7 @@ class CachedTrainDataset(Dataset):
 
                 encoder_output = text_encoder(tokens, output_hidden_states=True)
                 _skip = max(clip_skip, 1)
+                _skip = min(_skip, len(encoder_output.hidden_states) - 2)
                 hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
                 # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state
                 pooled = (
@@ -372,7 +373,8 @@ class CachedTrainDataset(Dataset):
                     ).input_ids.to(device)
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-                    hidden_states_2 = encoder_output_2.hidden_states[-(_skip + 1)].cpu()
+                    _skip2 = min(_skip, len(encoder_output_2.hidden_states) - 2)
+                    hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].cpu()
                     pooled_2 = (
                         encoder_output_2.pooler_output.cpu()
                         if hasattr(encoder_output_2, "pooler_output") and encoder_output_2.pooler_output is not None

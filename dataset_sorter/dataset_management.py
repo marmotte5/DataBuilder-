@@ -8,6 +8,7 @@ Provides non-UI logic for:
 - Augmentation configuration
 """
 
+import math
 import random
 import re
 from collections import Counter
@@ -159,7 +160,7 @@ def compute_tag_frequency_histogram(
         bins = [(min_freq, max_freq)]
         bin_counts = [total_unique]
     else:
-        step = max(1, (max_freq - min_freq) / num_bins)
+        step = max(1, math.ceil((max_freq - min_freq) / num_bins))
         bins = []
         bin_counts = []
         for i in range(num_bins):
