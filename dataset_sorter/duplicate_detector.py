@@ -30,7 +30,9 @@ def _avg_hash(path: Path, hash_size: int = 8) -> Optional[int]:
         from PIL import Image
         with Image.open(path) as img:
             resized = img.convert("L").resize((hash_size, hash_size), Image.Resampling.LANCZOS)
-        pixels = list(resized.getdata())
+            # Must read pixel data inside the with block — closing img can
+            # invalidate the underlying buffer of derived images in some PIL versions.
+            pixels = list(resized.getdata())
         avg = sum(pixels) / len(pixels)
         return sum(1 << i for i, p in enumerate(pixels) if p >= avg)
     except Exception:
