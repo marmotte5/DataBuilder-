@@ -33,9 +33,14 @@ class SD2Backend(TrainBackendBase):
     def load_model(self, model_path: str):
         from diffusers import DDPMScheduler, StableDiffusionPipeline
 
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
-        )
+        if model_path.endswith((".safetensors", ".ckpt")):
+            pipe = StableDiffusionPipeline.from_single_file(
+                model_path, torch_dtype=self.dtype,
+            )
+        else:
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_path, torch_dtype=self.dtype,
+            )
 
         self.pipeline = pipe
         self.tokenizer = pipe.tokenizer

@@ -543,12 +543,7 @@ class TrainBackendBase(ABC):
         """Free all resources."""
         for attr in ("pipeline", "unet", "vae", "text_encoder",
                       "text_encoder_2", "text_encoder_3", "noise_scheduler"):
-            obj = getattr(self, attr, None)
-            if obj is not None:
-                try:
-                    del obj
-                except Exception:
-                    pass
+            if getattr(self, attr, None) is not None:
                 setattr(self, attr, None)
         self._cached_time_ids = None
         gc.collect()

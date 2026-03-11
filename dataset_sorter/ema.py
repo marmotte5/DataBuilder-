@@ -5,10 +5,13 @@ When cpu_offload=True, EMA weights live in system RAM to save ~2-4 GB VRAM.
 Transfer to GPU only when needed (saving checkpoints / generating samples).
 """
 
+import logging
 from typing import Iterable
 
 import torch
 import torch.nn as nn
+
+log = logging.getLogger(__name__)
 
 
 class EMAModel:
@@ -51,11 +54,15 @@ class EMAModel:
             # Batch transfer: gather all param data to CPU in one pass
             for sp, p in zip(self.shadow_params, _grad_params(parameters)):
                 p_data = p.data.to(sp.device, non_blocking=True)
-                if not torch.isnan(p_data).any():
+                if torch.isnan(p_data).any():
+                    log.warning("EMA update skipped: NaN detected in model parameters")
+                else:
                     sp.lerp_(p_data, one_minus_decay)
         else:
             for sp, p in zip(self.shadow_params, _grad_params(parameters)):
-                if not torch.isnan(p.data).any():
+                if torch.isnan(p.data).any():
+                    log.warning("EMA update skipped: NaN detected in model parameters")
+                else:
                     sp.lerp_(p.data, one_minus_decay)
 
     def store(self, parameters: Iterable[nn.Parameter]):

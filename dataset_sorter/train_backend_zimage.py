@@ -194,13 +194,24 @@ class ZImageBackend(TrainBackendBase):
         """Z-Image training step with flow matching + dynamic timestep shift."""
         config = self.config
 
-        u = self._sample_flow_timesteps(batch_size)
+        # Adaptive timestep sampling (shared with other flow models)
+        if self._timestep_ema_sampler is not None:
+            discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
+            u = discrete_ts.float() / 1000.0
+        else:
+            u = self._sample_flow_timesteps(batch_size)
 
         # Apply dynamic timestep shift
         shift = self._get_timestep_shift(latents)
         t = shift * u / (1 + (shift - 1) * u)
 
         noise = torch.randn_like(latents)
+        # Apply noise_offset (consistent with base flow_training_step)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                latents.shape[0], latents.shape[1], 1, 1,
+                device=latents.device, dtype=latents.dtype,
+            )
         noisy_latents = self._flow_interpolate(latents, noise, t)
 
         encoder_hidden = te_out[0]
@@ -216,6 +227,28 @@ class ZImageBackend(TrainBackendBase):
         if config.debiased_estimation:
             weight = 1.0 / (1.0 - t + 1e-6)
             loss = loss * weight
+
+        # Per-timestep EMA: update tracker and apply adaptive weighting
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            timesteps = (t * 1000).long()
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
+        # Token weighting (consistent with base flow_training_step)
+        if getattr(self, '_token_weight_mask', None) is not None:
+            mask = self._token_weight_mask
+            if mask.device != loss.device:
+                mask = mask.to(loss.device)
+            if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
+                sample_weight = mask.mean(dim=-1)
+                while sample_weight.dim() < loss.dim():
+                    sample_weight = sample_weight.unsqueeze(-1)
+                loss = loss * sample_weight
+            self._token_weight_mask = None
 
         return loss.mean()
 

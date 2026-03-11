@@ -75,14 +75,24 @@ class StableCascadeBackend(TrainBackendBase):
         return {"text_embeds": pooled}
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Cascade has no standard VAE — pass pixel values through."""
+        """Cascade prior expects image embeddings from Stage B, not raw pixels.
+
+        Without a Stage B encoder loaded, we pass pixel values through and
+        rely on latent caching (which should use the proper pipeline encoding).
+        Log a warning so users know non-cached mode is unsupported.
+        """
+        log.warning(
+            "Cascade prepare_latents called without latent cache — "
+            "Stage C prior requires Stage B embeddings. "
+            "Enable latent caching for correct training."
+        )
         return pixel_values
 
     def generate_sample(self, prompt: str, seed: int):
-        """Cascade prior returns image_embeddings, not images."""
-        return self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.config.sample_steps,
-            guidance_scale=self.config.sample_cfg_scale,
-            generator=torch.Generator(self.device).manual_seed(seed),
-        ).image_embeddings
+        """Cascade prior generates image_embeddings, not full images.
+
+        Since we only have Stage C (the prior), we cannot decode to pixels.
+        Return None to signal that sample preview is unavailable.
+        """
+        log.info("Cascade prior does not produce image samples (Stage B decoder required)")
+        return None

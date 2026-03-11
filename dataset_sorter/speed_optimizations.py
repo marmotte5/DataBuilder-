@@ -73,8 +73,8 @@ class SpeedTimestepSampler:
         # Per-timestep loss EMA for change-aware weighting
         self._loss_ema = torch.zeros(num_train_timesteps, device=self.device)
         self._loss_ema_prev = torch.zeros(num_train_timesteps, device=self.device)
+        self._ts_seen = torch.zeros(num_train_timesteps, dtype=torch.bool, device=self.device)
         self._step = 0
-        self._initialized = False
 
     def sample_timesteps(self, batch_size: int) -> torch.Tensor:
         """Sample timesteps using asymmetric Beta distribution.
@@ -102,8 +102,10 @@ class SpeedTimestepSampler:
         with torch.no_grad():
             for t, l in zip(timesteps, losses):
                 t_idx = t.item()
-                if not self._initialized:
+                if not self._ts_seen[t_idx]:
+                    # First observation for this timestep — initialize directly
                     self._loss_ema[t_idx] = l.item()
+                    self._ts_seen[t_idx] = True
                 else:
                     self._loss_ema[t_idx] = (
                         self.change_momentum * self._loss_ema[t_idx]
@@ -111,7 +113,6 @@ class SpeedTimestepSampler:
                     )
 
         if self._step < self.warmup_steps:
-            self._initialized = True
             return torch.ones(len(timesteps), device=self.device)
 
         # Snapshot EMA at end of warmup so first post-warmup weights
@@ -133,7 +134,6 @@ class SpeedTimestepSampler:
         if self._step % 10 == 0:
             self._loss_ema_prev.copy_(self._loss_ema)
 
-        self._initialized = True
         return weights
 
     def sample_flow_timesteps(self, batch_size: int) -> torch.Tensor:
