@@ -137,16 +137,18 @@ class TrainBackendBase(ABC):
         latents: torch.Tensor, timesteps: torch.Tensor,
     ) -> torch.Tensor:
         """V-prediction loss: v = alpha_t * noise - sigma_t * latents."""
+        # Compute alpha/sigma in fp32 to avoid bf16 precision loss in scheduling coefficients
         alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
-            device=timesteps.device, dtype=latents.dtype,
+            device=timesteps.device, dtype=torch.float32,
         )
         alpha_t = alphas_cumprod[timesteps] ** 0.5
         sigma_t = (1 - alphas_cumprod[timesteps]) ** 0.5
         while alpha_t.dim() < latents.dim():
             alpha_t = alpha_t.unsqueeze(-1)
             sigma_t = sigma_t.unsqueeze(-1)
-        target = alpha_t * noise - sigma_t * latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        # Compute target in fp32 to preserve precision in alpha*noise - sigma*latents
+        target = alpha_t * noise.float() - sigma_t * latents.float()
+        loss = F.mse_loss(noise_pred.float(), target, reduction="none")
         return loss.mean(dim=list(range(1, len(loss.shape))))
 
     def _compute_flow_loss(
@@ -154,8 +156,8 @@ class TrainBackendBase(ABC):
         latents: torch.Tensor,
     ) -> torch.Tensor:
         """Flow matching loss: target = noise - latents."""
-        target = noise - latents
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        target = noise.float() - latents.float()
+        loss = F.mse_loss(noise_pred.float(), target, reduction="none")
         return loss.mean(dim=list(range(1, len(loss.shape))))
 
     # ── Shared flow matching helpers ───────────────────────────────────
@@ -446,7 +448,9 @@ class TrainBackendBase(ABC):
         if not hasattr(self.noise_scheduler, 'alphas_cumprod'):
             log.warning("Scheduler lacks alphas_cumprod; min_snr_gamma not supported.")
             return torch.ones_like(timesteps, dtype=torch.float32)
-        alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(timesteps.device)
+        alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
+            device=timesteps.device, dtype=torch.float32,
+        )
         sqrt_alpha = alphas_cumprod[timesteps] ** 0.5
         sqrt_one_minus = (1.0 - alphas_cumprod[timesteps]).clamp(min=1e-8) ** 0.5
         snr = (sqrt_alpha / sqrt_one_minus) ** 2
@@ -515,7 +519,8 @@ class TrainBackendBase(ABC):
 
         if config.debiased_estimation:
             # Clamp denominator to prevent extreme weights when t → 1.0
-            weight = 1.0 / torch.clamp(1.0 - t + 1e-6, min=0.01)
+            # Compute weight in fp32 to avoid bf16 precision loss in division
+            weight = 1.0 / torch.clamp(1.0 - t.float() + 1e-6, min=0.01)
             loss = loss * weight
 
         # min_snr_gamma: not applicable to flow matching (requires alphas_cumprod).
