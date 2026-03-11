@@ -43,16 +43,20 @@ def _compute_lr_at_step(
     num_cycles: int,
 ) -> float:
     """Compute LR at a specific step (pure math, no torch needed)."""
+    # "constant" scheduler: diffusers ignores warmup_steps entirely,
+    # so the preview must show flat LR from step 0.
+    # Only "constant_with_warmup" has actual warmup.
+    if scheduler_type == "constant":
+        return base_lr
+
     # Warmup phase
     if step < warmup_steps and warmup_steps > 0:
         warmup_factor = step / warmup_steps
-        if scheduler_type == "constant":
-            return base_lr * warmup_factor
         if scheduler_type == "constant_with_warmup":
             return base_lr * warmup_factor
 
     # Post-warmup
-    if scheduler_type == "constant" or scheduler_type == "constant_with_warmup":
+    if scheduler_type == "constant_with_warmup":
         return base_lr
 
     # Progress after warmup

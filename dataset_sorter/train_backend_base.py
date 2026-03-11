@@ -524,6 +524,20 @@ class TrainBackendBase(ABC):
                         "(Flux, SD3, etc.) and will be ignored.")
             self._warned_snr_flow = True
 
+        # SpeeD change-aware loss weighting (CVPR 2025)
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
+
+        # Per-timestep EMA: update tracker and apply adaptive weighting
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
         # Token weighting (if enabled by UI)
         if getattr(self, '_token_weight_mask', None) is not None:
             mask = self._token_weight_mask
