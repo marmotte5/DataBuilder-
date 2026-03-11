@@ -64,7 +64,7 @@ FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 def _detect_model_type(model_path: str) -> str:
     """Try to auto-detect model type from path name."""
     p = model_path.lower()
-    for key in ["flux2", "flux", "sdxl", "sd3", "sd35", "pony", "sd15",
+    for key in ["flux2", "flux", "sdxl", "sd35", "sd3", "pony", "sd15",
                 "sd2", "pixart", "sana", "kolors", "cascade", "hunyuan",
                 "auraflow", "zimage", "hidream", "chroma"]:
         if key in p:
@@ -248,7 +248,7 @@ class GenerateWorker(QThread):
         if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
             try:
                 # Only offload if VRAM < 16GB
-                vram = torch.cuda.get_device_properties(0).total_mem / 1024**3
+                vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
                 if vram < 16:
                     pipe.enable_model_cpu_offload()
             except Exception:
@@ -470,6 +470,7 @@ class GenerateWorker(QThread):
         # Get appropriate pipeline (txt2img / img2img / inpaint)
         active_pipe = self._get_pipeline_for_mode()
 
+        succeeded = 0
         for i in range(total):
             if self._stop_requested:
                 self.finished_generating.emit(False, "Generation stopped by user.")
@@ -555,10 +556,14 @@ class GenerateWorker(QThread):
                     f"{mode_str}"
                 )
                 self.image_generated.emit(img, i, info)
+                succeeded += 1
 
             except Exception as e:
                 log.error(f"Generation failed for image {i + 1}: {e}")
                 self.error.emit(f"Image {i + 1} failed: {e}")
 
         self.progress.emit(total, total, "Generation complete!")
-        self.finished_generating.emit(True, f"Generated {total} image(s).")
+        if succeeded == 0 and total > 0:
+            self.finished_generating.emit(False, f"All {total} image(s) failed to generate.")
+        else:
+            self.finished_generating.emit(True, f"Generated {succeeded}/{total} image(s).")
