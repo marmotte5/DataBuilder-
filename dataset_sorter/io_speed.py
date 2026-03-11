@@ -128,7 +128,7 @@ def save_tensor_fast(tensor, path: Path, use_safetensors: bool = True):
         try:
             from safetensors.torch import save_file
             # safetensors requires a dict of named tensors
-            save_file({"data": tensor}, str(path).replace('.pt', '.safetensors'))
+            save_file({"data": tensor}, str(path.with_suffix('.safetensors')))
             return
         except ImportError:
             pass
@@ -141,7 +141,7 @@ def load_tensor_fast(path: Path, use_safetensors: bool = True):
     Supports memory-mapped loading for zero-copy access.
     """
     import torch
-    sf_path = Path(str(path).replace('.pt', '.safetensors'))
+    sf_path = path.with_suffix('.safetensors')
     if use_safetensors and sf_path.exists():
         try:
             from safetensors.torch import load_file
