@@ -322,6 +322,7 @@ class CachedTrainDataset(Dataset):
         clip_skip: int = 0,
         caption_preprocessor=None,
         max_token_length: int = 0,
+        max_token_length_2: int = 0,
     ):
         """Pre-compute and cache text encoder outputs.
 
@@ -331,6 +332,8 @@ class CachedTrainDataset(Dataset):
                 chat template so cached embeddings match live encoding.
             max_token_length: Override tokenizer.model_max_length if > 0.
                 Z-Image uses 512 while Qwen3's default is 32768.
+            max_token_length_2: Override tokenizer_2.model_max_length if > 0.
+                Hunyuan uses 256 for mT5 while model default may be larger.
 
         Speed optimizations:
         - Safetensors disk format (2-5x faster I/O)
@@ -438,9 +441,10 @@ class CachedTrainDataset(Dataset):
 
                 # Second text encoder (SDXL)
                 if tokenizer_2 is not None and text_encoder_2 is not None:
+                    _max_len2 = max_token_length_2 if max_token_length_2 > 0 else tokenizer_2.model_max_length
                     tokens_2 = tokenizer_2(
                         caption, padding="max_length",
-                        max_length=tokenizer_2.model_max_length,
+                        max_length=_max_len2,
                         truncation=True, return_tensors="pt",
                     ).input_ids.to(device)
 

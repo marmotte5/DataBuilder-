@@ -336,6 +336,12 @@ class Trainer:
                 from dataset_sorter.train_backend_zimage import _QWEN3_MAX_LENGTH
                 _max_tok_len = _QWEN3_MAX_LENGTH
 
+            # Hunyuan mT5 uses max_length=256 in encode_text_batch;
+            # must match during caching to avoid sequence length mismatch.
+            _max_tok_len_2 = 0
+            if getattr(self.backend, 'model_name', '') == 'hunyuan':
+                _max_tok_len_2 = 256
+
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
                 self.device, self.dtype,
@@ -346,6 +352,7 @@ class Trainer:
                 clip_skip=config.clip_skip,
                 caption_preprocessor=_caption_pp,
                 max_token_length=_max_tok_len,
+                max_token_length_2=_max_tok_len_2,
             )
 
             # Offload text encoders to free VRAM for training
