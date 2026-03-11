@@ -731,13 +731,38 @@ class Trainer:
                     encoder_hidden = clip_hidden
                 te_out = (encoder_hidden, pooled)
             elif len(te_cache) == 4:
-                # SDXL-style: (hidden1, pooled1, hidden2, pooled2)
-                # Batch transfer: move to GPU together, then cat
+                # Dual-TE cache: (hidden1, pooled1, hidden2, pooled2)
+                # Reconstruction depends on the backend because TE formats vary:
+                # - SDXL/Kolors: cat hidden + cat pooled (same seq lengths)
+                # - Flux: T5 hidden as primary, CLIP pooled only
+                # - Hunyuan: CLIP hidden + CLIP pooled, with mT5 hidden separate
                 h1 = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
-                h2 = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True)
-                encoder_hidden = torch.cat([h1, h2], dim=-1)
-                pooled = te_cache[3].to(self.device, dtype=self.dtype, non_blocking=True)
-                te_out = (encoder_hidden, pooled)
+                p1 = te_cache[1].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[1] is not None else None
+                h2 = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[2] is not None else None
+                p2 = te_cache[3].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[3] is not None else None
+
+                _model = getattr(self.backend, 'model_name', '')
+                if _model in ('flux', 'flux2'):
+                    # Flux: T5 hidden (h2) is the primary encoder_hidden,
+                    # CLIP pooled (p1) is the pooled projection
+                    encoder_hidden = h2 if h2 is not None else h1
+                    pooled = p1
+                    te_out = (encoder_hidden, pooled)
+                elif _model == 'hunyuan':
+                    # Hunyuan: CLIP hidden + pooled, mT5 hidden as 3rd element
+                    pooled = p1
+                    te_out = (h1, pooled, h2)
+                else:
+                    # SDXL/Kolors/Pony: concatenate both hidden + both pooled
+                    if h2 is not None:
+                        encoder_hidden = torch.cat([h1, h2], dim=-1)
+                    else:
+                        encoder_hidden = h1
+                    if p1 is not None and p2 is not None:
+                        pooled = torch.cat([p1, p2], dim=-1)
+                    else:
+                        pooled = p1 if p1 is not None else p2
+                    te_out = (encoder_hidden, pooled)
             elif len(te_cache) == 2:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
                 pooled = te_cache[1]
