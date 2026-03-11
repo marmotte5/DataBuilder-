@@ -87,7 +87,7 @@ def _pil_to_qpixmap(pil_image, max_w=512, max_h=512) -> QPixmap:
     img = pil_image.convert("RGB")
     data = img.tobytes("raw", "RGB")
     qimg = QImage(data, img.width, img.height, 3 * img.width, QImage.Format.Format_RGB888)
-    pixmap = QPixmap.fromImage(qimg)
+    pixmap = QPixmap.fromImage(qimg.copy())  # .copy() detaches from Python buffer
     return pixmap.scaled(max_w, max_h, Qt.AspectRatioMode.KeepAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
 
@@ -661,9 +661,13 @@ class GenerateTab(QWidget):
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         self._generated_images.append((pil_image, info))
-        # Evict oldest images when gallery exceeds cap to prevent memory leak
+        # Evict oldest images AND their thumbnails when gallery exceeds cap
         while len(self._generated_images) > self._max_gallery_images:
             self._generated_images.pop(0)
+            # Remove oldest thumbnail widget (index 0; last item is stretch)
+            item = self.thumb_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
         self._current_gallery_idx = len(self._generated_images) - 1
         self._display_current_image()
         self._add_thumbnail(pil_image, len(self._generated_images) - 1)

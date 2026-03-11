@@ -699,6 +699,7 @@ class MainWindow(QMainWindow):
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
+        self._push_undo("reset override")
         for tag in tags:
             self.manual_overrides.pop(tag, None)
         self._assign_entries_to_buckets()

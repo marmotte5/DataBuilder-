@@ -803,7 +803,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _collect_rlhf_now(self):
         """Manually trigger RLHF preference collection."""
         if self._training_worker:
-            round_idx = self.build_config().rlhf_dpo_rounds
+            round_idx = self._training_worker.config.rlhf_dpo_rounds
             self._training_worker.generate_rlhf_candidates(round_idx)
 
     def _on_rlhf_candidates(self, candidates: list, round_idx: int):
