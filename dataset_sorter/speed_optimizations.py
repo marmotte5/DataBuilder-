@@ -480,7 +480,7 @@ class CUDAGraphWrapper:
 
         # Replay
         self._graph.replay()
-        return self._static_output
+        return self._static_output.clone()
 
     def reset(self):
         """Reset the graph (e.g., when batch size changes)."""

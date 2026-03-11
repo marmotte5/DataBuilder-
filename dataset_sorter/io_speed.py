@@ -245,6 +245,8 @@ class MmapLatentCache:
     def write(self, idx: int, tensor):
         """Write a latent tensor at index idx."""
         import torch
+        if idx < 0 or idx >= self.num_images:
+            raise IndexError(f"MmapLatentCache: idx {idx} out of range [0, {self.num_images})")
         offset = idx * self._item_size
         data = tensor.to(torch.float32).contiguous().numpy().tobytes()
         if self._mm is None:
@@ -254,6 +256,8 @@ class MmapLatentCache:
     def read(self, idx: int):
         """Read a latent tensor at index idx (zero-copy via mmap)."""
         import torch
+        if idx < 0 or idx >= self.num_images:
+            raise IndexError(f"MmapLatentCache: idx {idx} out of range [0, {self.num_images})")
         offset = idx * self._item_size
         if self._mm is None:
             self.open()

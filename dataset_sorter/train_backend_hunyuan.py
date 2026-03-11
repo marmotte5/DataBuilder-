@@ -90,11 +90,16 @@ class HunyuanDiTBackend(TrainBackendBase):
 
         return (encoder_hidden, pooled, t5_hidden)
 
-    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
+                        image_hw: tuple[int, int] | None = None) -> Optional[dict]:
         """Hunyuan DiT conditioning."""
         if pooled is None:
             return None
-        resolution = self.config.resolution
+        # Use actual image dimensions when available (aspect ratio bucketing)
+        if image_hw is not None:
+            img_h, img_w = image_hw
+        else:
+            img_h = img_w = self.config.resolution
         # CLIP token length (model_max_length from tokenizer, typically 77)
         clip_len = getattr(self.tokenizer, "model_max_length", 77)
         # T5/mT5 token length (we use 256 in encode_text_batch)
@@ -115,10 +120,61 @@ class HunyuanDiTBackend(TrainBackendBase):
                 batch_size, t5_len, device=self.device, dtype=self.dtype,
             ),
             "image_meta_size": torch.tensor(
-                [resolution, resolution, resolution, resolution, 0, 0],
+                [img_h, img_w, img_h, img_w, 0, 0],
                 dtype=self.dtype, device=self.device,
             ).unsqueeze(0).expand(batch_size, -1),
             "style": torch.zeros(batch_size, dtype=torch.long, device=self.device),
         }
         return added_cond
+
+    def training_step(
+        self, latents: torch.Tensor, te_out: tuple, batch_size: int,
+    ) -> torch.Tensor:
+        """Hunyuan DiT training step — uses keyword args for transformer forward."""
+        from dataset_sorter.train_backend_base import autocast_device_type
+        config = self.config
+
+        noise = torch.randn_like(latents)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                latents.shape[0], latents.shape[1], 1, 1,
+                device=latents.device, dtype=latents.dtype,
+            )
+
+        timesteps = torch.randint(
+            0, self.noise_scheduler.config.num_train_timesteps,
+            (batch_size,), device=self.device,
+        ).long()
+
+        noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+
+        encoder_hidden = te_out[0]
+        pooled = te_out[1] if len(te_out) > 1 else None
+
+        _vae_sf = getattr(self, 'vae_scale_factor', 8)
+        lat_h, lat_w = latents.shape[2], latents.shape[3]
+        image_hw = (lat_h * _vae_sf, lat_w * _vae_sf)
+        added_cond = self.get_added_cond(batch_size, pooled=pooled, te_out=te_out,
+                                         image_hw=image_hw)
+
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            # DiT uses keyword arguments, not positional
+            fwd_kwargs = {
+                "hidden_states": noisy_latents,
+                "timestep": timesteps,
+                "encoder_hidden_states": encoder_hidden,
+            }
+            if added_cond is not None:
+                fwd_kwargs.update(added_cond)
+
+            noise_pred = self.unet(**fwd_kwargs).sample
+
+        loss = self.compute_loss(noise_pred, noise, latents, timesteps)
+
+        if config.min_snr_gamma > 0:
+            snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
+            loss = loss * snr_weights
+
+        return loss.mean()
 

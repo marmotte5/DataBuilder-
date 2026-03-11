@@ -68,7 +68,8 @@ class StableCascadeBackend(TrainBackendBase):
 
         return (hidden_states, pooled)
 
-    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = ()) -> Optional[dict]:
+    def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
+                        image_hw: tuple[int, int] | None = None) -> Optional[dict]:
         if pooled is None:
             return None
         return {"text_embeds": pooled}

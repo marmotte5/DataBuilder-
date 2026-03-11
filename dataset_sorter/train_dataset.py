@@ -142,8 +142,8 @@ class CachedTrainDataset(Dataset):
         # Keep raw caption with weight markers for token weighting
         result["raw_caption"] = self.captions[idx]
 
-        # --- Text encoder cache ---
-        if self._te_cached and idx in self._te_cache:
+        # --- Text encoder cache (skip if caption was modified by shuffle/dropout) ---
+        if self._te_cached and idx in self._te_cache and caption == self.captions[idx]:
             result["te_cache"] = self._te_cache[idx]
 
         # --- Pre-tokenized caption IDs (skip tokenizer calls during training) ---
@@ -238,10 +238,20 @@ class CachedTrainDataset(Dataset):
 
             to_encode.append(idx)
 
+        # Build inverted dedup index: representative idx → list of duplicate idxs
+        rep_to_dups: dict[int, list[int]] = {}
+        for idx in to_encode:
+            rep = idx_to_rep.get(idx, idx)
+            if rep != idx:
+                rep_to_dups.setdefault(rep, []).append(idx)
+
+        # Filter to_encode: only encode representatives (skip duplicates that will be filled later)
+        to_encode_unique = [idx for idx in to_encode if idx_to_rep.get(idx, idx) == idx]
+
         # Second pass: batch VAE encode, grouped by resolution
         # Group by resolution since batching requires same-size tensors
         resolution_groups: dict[tuple[int, int], list[tuple[int, torch.Tensor]]] = {}
-        for idx in to_encode:
+        for idx in to_encode_unique:
             if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
                 target_w, target_h = self._bucket_assignments[idx]
             else:
@@ -279,19 +289,19 @@ class CachedTrainDataset(Dataset):
                     latent = encoded[bi].cpu()
                     self._latent_cache[idx] = latent
 
-                    # Fill dedup targets that reference this idx
-                    for dup_idx in to_encode:
-                        if dup_idx != idx and idx_to_rep.get(dup_idx) == idx and dup_idx not in self._latent_cache:
-                            self._latent_cache[dup_idx] = latent
-                            if to_disk and self.cache_dir:
-                                pending_saves.append(
-                                    (self._latent_disk_path(dup_idx), compress_latent_fp16(latent))
-                                )
-
                     if to_disk and self.cache_dir:
                         pending_saves.append(
                             (self._latent_disk_path(idx), compress_latent_fp16(latent))
                         )
+
+                    # Fill dedup targets via O(1) lookup
+                    for dup_idx in rep_to_dups.get(idx, []):
+                        self._latent_cache[dup_idx] = latent
+                        if to_disk and self.cache_dir:
+                            pending_saves.append(
+                                (self._latent_disk_path(dup_idx), compress_latent_fp16(latent))
+                            )
+                        encoded_count += 1
 
                     encoded_count += 1
                     if progress_fn:

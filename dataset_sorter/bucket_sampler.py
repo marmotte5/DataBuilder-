@@ -186,6 +186,7 @@ class BucketBatchSampler:
         self.drop_last = drop_last
         self.shuffle = shuffle
         self.seed = seed
+        self._epoch_counter = 0
 
         # Group indices by bucket
         self.bucket_indices: dict[tuple[int, int], list[int]] = {}
@@ -209,7 +210,13 @@ class BucketBatchSampler:
             log.debug(f"  Bucket {bucket[0]}x{bucket[1]}: {len(indices)} images")
 
     def __iter__(self):
-        rng = random.Random(self.seed)
+        # Advance seed per call so each epoch gets different ordering
+        # while remaining reproducible for the same initial seed
+        if self.seed is not None:
+            rng = random.Random(self.seed + self._epoch_counter)
+            self._epoch_counter += 1
+        else:
+            rng = random.Random()
 
         # Build all batches
         all_batches = []
