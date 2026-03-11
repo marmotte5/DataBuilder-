@@ -357,6 +357,10 @@ class TrainingConfigIOMixin:
         config = TrainingConfig()
         for key, value in data.items():
             if hasattr(config, key):
+                # Skip JSON null values — keep the dataclass default instead
+                # of corrupting numeric/bool fields with None
+                if value is None:
+                    continue
                 try:
                     # Handle list fields
                     current = getattr(config, key)
@@ -365,6 +369,6 @@ class TrainingConfigIOMixin:
                     else:
                         setattr(config, key, type(current)(value))
                 except (ValueError, TypeError):
-                    setattr(config, key, value)
+                    pass  # Keep default rather than setting an incompatible value
         self.apply_config(config)
         self._log(f"Training config loaded: {path}")

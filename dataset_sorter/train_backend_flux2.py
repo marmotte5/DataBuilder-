@@ -69,6 +69,11 @@ class Flux2Backend(TrainBackendBase):
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
         """Encode with LLM text encoder, extracting multi-layer hidden states."""
+        if self.tokenizer is None or self.text_encoder is None:
+            raise RuntimeError(
+                "Flux 2 text encoder or tokenizer not loaded. "
+                "Check that the model path contains a valid Flux 2 pipeline."
+            )
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=512,
@@ -87,6 +92,11 @@ class Flux2Backend(TrainBackendBase):
             for layer_idx in self._hidden_state_layers:
                 if layer_idx < len(hidden_states):
                     selected.append(hidden_states[layer_idx])
+                else:
+                    log.warning(
+                        f"Flux 2 encoder has {len(hidden_states)} layers "
+                        f"but layer {layer_idx} was requested; skipping"
+                    )
 
             if selected:
                 # Concatenate along sequence dimension

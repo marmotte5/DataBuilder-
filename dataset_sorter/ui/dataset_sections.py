@@ -6,7 +6,7 @@ a specific dataset analysis feature (captions, tokens, histograms, etc.).
 
 from collections import Counter
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -814,12 +814,35 @@ class AugmentationSection(QWidget):
         return self._state
 
 
+class _DuplicateWorker(QThread):
+    """Run duplicate detection off the UI thread to prevent freezing."""
+
+    finished = pyqtSignal(list, str)  # (duplicates, report)
+
+    def __init__(self, paths, exact_only, hash_threshold, parent=None):
+        super().__init__(parent)
+        self._paths = paths
+        self._exact_only = exact_only
+        self._hash_threshold = hash_threshold
+
+    def run(self):
+        from dataset_sorter.duplicate_detector import find_duplicates, format_duplicate_report
+        duplicates = find_duplicates(
+            self._paths,
+            exact_only=self._exact_only,
+            hash_threshold=self._hash_threshold,
+        )
+        report = format_duplicate_report(duplicates, self._paths)
+        self.finished.emit(duplicates, report)
+
+
 class DuplicateSection(QWidget):
     """Duplicate / near-duplicate image detection."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._entries: list[ImageEntry] = []
+        self._worker = None
         self._build_ui()
 
     def _build_ui(self):
@@ -885,14 +908,18 @@ class DuplicateSection(QWidget):
         self.result_badge.setText("Scanning...")
         self.results_text.setPlainText("Analyzing images for duplicates...")
 
-        from dataset_sorter.duplicate_detector import find_duplicates, format_duplicate_report
         paths = [e.image_path for e in self._entries]
-        duplicates = find_duplicates(
+        self._worker = _DuplicateWorker(
             paths,
             exact_only=self.exact_only_check.isChecked(),
             hash_threshold=self.threshold_spin.value(),
+            parent=self,
         )
-        report = format_duplicate_report(duplicates, paths)
+        self._worker.finished.connect(self._on_detection_done)
+        self._worker.start()
+
+    def _on_detection_done(self, duplicates, report):
         self.results_text.setPlainText(report)
         self.result_badge.setText(f"{len(duplicates)} pair(s)")
         self.btn_detect.setEnabled(True)
+        self._worker = None

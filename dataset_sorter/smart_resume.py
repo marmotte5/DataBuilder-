@@ -88,7 +88,10 @@ def load_loss_history(output_dir: Path) -> list[tuple[int, float]]:
     all_points = []
     for run in data.get("runs", []):
         for pt in run.get("loss_points", []):
-            all_points.append((pt["step"], pt["loss"]))
+            try:
+                all_points.append((pt["step"], pt["loss"]))
+            except (KeyError, TypeError):
+                continue  # Skip malformed entries
 
     return sorted(all_points, key=lambda x: x[0])
 

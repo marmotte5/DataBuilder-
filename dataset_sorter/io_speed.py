@@ -63,7 +63,8 @@ def _get_fast_decoder():
                 with open(path, 'rb') as f:
                     bgr = _tjpeg.decode(f.read())
                 # TurboJPEG returns BGR numpy array → convert to RGB PIL
-                return Image.fromarray(bgr[:, :, ::-1])
+                # .copy() needed: negative-stride views can crash certain PIL/numpy combos
+                return Image.fromarray(bgr[:, :, ::-1].copy())
             # Non-JPEG: fall back to PIL (context manager ensures FD is closed)
             with Image.open(path) as img:
                 return img.convert("RGB")
@@ -195,6 +196,8 @@ def load_tensor_compressed(path: Path):
             return torch.load(io.BytesIO(decompressed), map_location="cpu", weights_only=True)
         except ImportError:
             pass
+    if not path.exists():
+        raise FileNotFoundError(f"Cached tensor not found: {path} (and no .lz4 variant)")
     return torch.load(path, map_location="cpu", weights_only=True)
 
 

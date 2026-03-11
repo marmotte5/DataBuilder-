@@ -212,6 +212,11 @@ def compute_image_log_probs(
     between the predicted noise and the actual noise at given timesteps.
     Lower loss = higher implicit "log-probability" under the model.
     """
+    # Cast to requested dtype if provided (prevents dtype mismatch with model weights)
+    if dtype is not None:
+        latents = latents.to(dtype=dtype)
+        noise = noise.to(dtype=dtype)
+
     noisy_latents = backend.noise_scheduler.add_noise(latents, noise, timesteps)
 
     encoder_hidden = te_out[0]
@@ -265,6 +270,15 @@ def dpo_training_step(
         DPO loss tensor
     """
     bsz = chosen_latents.shape[0]
+
+    # Validate shapes match — chosen and rejected must have identical spatial dims
+    # so they can share the same noise tensor for fair comparison
+    if chosen_latents.shape != rejected_latents.shape:
+        raise ValueError(
+            f"Shape mismatch: chosen_latents {chosen_latents.shape} vs "
+            f"rejected_latents {rejected_latents.shape}. "
+            f"Both must have identical dimensions for DPO."
+        )
 
     # Share the same noise and timesteps for fair comparison
     noise = torch.randn_like(chosen_latents)

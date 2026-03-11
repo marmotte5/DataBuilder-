@@ -449,8 +449,12 @@ AUGMENTATION_TYPES = [
 
 
 def get_augmentation_config() -> list[dict]:
-    """Return the full list of augmentation types with their defaults."""
-    return AUGMENTATION_TYPES
+    """Return the full list of augmentation types with their defaults.
+
+    Returns a deep copy to prevent callers from mutating the module-level data.
+    """
+    import copy
+    return copy.deepcopy(AUGMENTATION_TYPES)
 
 
 def get_default_augmentation_state() -> dict[str, dict]:
