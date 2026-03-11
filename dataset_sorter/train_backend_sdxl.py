@@ -64,6 +64,8 @@ class SDXLBackend(TrainBackendBase):
             [res, res, 0, 0, res, res],
             dtype=self.dtype, device=self.device,
         ).unsqueeze(0)
+        # Cache time_ids per bucket resolution to avoid per-step allocations
+        self._time_ids_cache: dict[tuple[int, int], torch.Tensor] = {}
 
         log.info(f"Loaded SDXL model from {model_path}")
 
@@ -111,10 +113,13 @@ class SDXLBackend(TrainBackendBase):
 
         if image_hw is not None:
             h, w = image_hw
-            time_ids = torch.tensor(
-                [h, w, 0, 0, h, w],
-                dtype=self.dtype, device=self.device,
-            ).unsqueeze(0).expand(batch_size, -1)
+            key = (h, w)
+            if key not in self._time_ids_cache:
+                self._time_ids_cache[key] = torch.tensor(
+                    [h, w, 0, 0, h, w],
+                    dtype=self.dtype, device=self.device,
+                ).unsqueeze(0)
+            time_ids = self._time_ids_cache[key].expand(batch_size, -1)
         else:
             time_ids = self._default_time_ids.expand(batch_size, -1)
 

@@ -113,18 +113,28 @@ class HunyuanDiTBackend(TrainBackendBase):
             device=self.device, dtype=self.dtype,
         )
 
-        added_cond = {
-            "text_embedding_mask": torch.ones(
-                batch_size, clip_len, device=self.device, dtype=self.dtype,
-            ),
-            "encoder_hidden_states_t5": t5_hidden,
-            "text_embedding_mask_t5": torch.ones(
-                batch_size, t5_len, device=self.device, dtype=self.dtype,
-            ),
-            "image_meta_size": torch.tensor(
+        # Lazy-init cached mask tensors to avoid per-step allocations
+        if not hasattr(self, "_clip_mask"):
+            self._clip_mask = torch.ones(
+                1, clip_len, device=self.device, dtype=self.dtype,
+            )
+            self._t5_mask = torch.ones(
+                1, t5_len, device=self.device, dtype=self.dtype,
+            )
+            self._meta_cache: dict[tuple[int, int], torch.Tensor] = {}
+
+        meta_key = (img_h, img_w)
+        if meta_key not in self._meta_cache:
+            self._meta_cache[meta_key] = torch.tensor(
                 [img_h, img_w, img_h, img_w, 0, 0],
                 dtype=self.dtype, device=self.device,
-            ).unsqueeze(0).expand(batch_size, -1),
+            ).unsqueeze(0)
+
+        added_cond = {
+            "text_embedding_mask": self._clip_mask.expand(batch_size, -1),
+            "encoder_hidden_states_t5": t5_hidden,
+            "text_embedding_mask_t5": self._t5_mask.expand(batch_size, -1),
+            "image_meta_size": self._meta_cache[meta_key].expand(batch_size, -1),
             "style": torch.zeros(batch_size, dtype=torch.long, device=self.device),
         }
         return added_cond

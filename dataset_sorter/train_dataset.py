@@ -374,6 +374,8 @@ class CachedTrainDataset(Dataset):
                         # Reconstruct tuple preserving None positions from key indices
                         # Keys are t00, t01, ... — missing indices were None at save time
                         keys = sorted(data.keys())
+                        if not keys:
+                            raise ValueError(f"Empty safetensors cache: {sf_path}")
                         max_idx = max(int(k[1:]) for k in keys) + 1
                         loaded = tuple(data.get(f"t{i:02d}") for i in range(max_idx))
                     except (ImportError, Exception):

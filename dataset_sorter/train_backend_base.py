@@ -143,9 +143,11 @@ class TrainBackendBase(ABC):
         )
         alpha_t = alphas_cumprod[timesteps] ** 0.5
         sigma_t = (1 - alphas_cumprod[timesteps]) ** 0.5
-        while alpha_t.dim() < latents.dim():
-            alpha_t = alpha_t.unsqueeze(-1)
-            sigma_t = sigma_t.unsqueeze(-1)
+        # Broadcast to match latent dims: (B,) → (B, 1, 1, ...) in one op
+        if alpha_t.dim() < latents.dim():
+            shape = (-1,) + (1,) * (latents.dim() - 1)
+            alpha_t = alpha_t.view(shape)
+            sigma_t = sigma_t.view(shape)
         # Compute target in fp32 to preserve precision in alpha*noise - sigma*latents
         target = alpha_t * noise.float() - sigma_t * latents.float()
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
@@ -189,6 +191,8 @@ class TrainBackendBase(ABC):
 
     def _pad_and_cat(self, tensors: list[torch.Tensor], dim: int = 1) -> torch.Tensor:
         """Pad tensors to matching feature dim, then concatenate along `dim`."""
+        if not tensors:
+            raise ValueError("_pad_and_cat called with empty tensor list")
         max_feat = max(t.shape[-1] for t in tensors)
         padded = []
         for t in tensors:

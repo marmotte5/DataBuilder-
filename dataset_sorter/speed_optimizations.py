@@ -98,19 +98,24 @@ class SpeedTimestepSampler:
         """
         self._step += 1
 
-        # Update per-timestep loss EMA
+        # Update per-timestep loss EMA (vectorized to avoid .item() CPU-GPU syncs)
         with torch.no_grad():
-            for t, l in zip(timesteps, losses):
-                t_idx = t.item()
-                if not self._ts_seen[t_idx]:
-                    # First observation for this timestep — initialize directly
-                    self._loss_ema[t_idx] = l.item()
-                    self._ts_seen[t_idx] = True
-                else:
-                    self._loss_ema[t_idx] = (
-                        self.change_momentum * self._loss_ema[t_idx]
-                        + (1 - self.change_momentum) * l.item()
-                    )
+            t_idx = timesteps.long()
+            new_mask = ~self._ts_seen[t_idx]
+            seen_mask = self._ts_seen[t_idx]
+
+            # First observation: initialize directly
+            if new_mask.any():
+                self._loss_ema[t_idx[new_mask]] = losses[new_mask].detach()
+                self._ts_seen[t_idx[new_mask]] = True
+
+            # Existing observations: EMA update
+            if seen_mask.any():
+                idx_seen = t_idx[seen_mask]
+                self._loss_ema[idx_seen] = (
+                    self.change_momentum * self._loss_ema[idx_seen]
+                    + (1 - self.change_momentum) * losses[seen_mask].detach()
+                )
 
         if self._step < self.warmup_steps:
             return torch.ones(len(timesteps), device=self.device)
@@ -120,12 +125,10 @@ class SpeedTimestepSampler:
         if self._step == self.warmup_steps:
             self._loss_ema_prev.copy_(self._loss_ema)
 
-        # Change-aware: weight = |current_ema - previous_ema| + epsilon
-        weights = torch.ones(len(timesteps), device=self.device)
-        for i, t in enumerate(timesteps):
-            t_idx = t.item()
-            change = abs(self._loss_ema[t_idx] - self._loss_ema_prev[t_idx])
-            weights[i] = 1.0 + change * 10.0  # Scale factor for impact
+        # Change-aware: weight = |current_ema - previous_ema| (vectorized)
+        t_idx = timesteps.long()
+        change = (self._loss_ema[t_idx] - self._loss_ema_prev[t_idx]).abs()
+        weights = 1.0 + change * 10.0  # Scale factor for impact
 
         # Normalize to mean=1 to not affect overall loss magnitude
         weights = weights / weights.mean().clamp(min=1e-6)
