@@ -229,6 +229,8 @@ class MmapLatentCache:
 
     def create(self):
         """Create the mmap backing file."""
+        if self._total_size == 0:
+            return
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         # Pre-allocate the file
         with open(self.cache_path, 'wb') as f:
@@ -443,8 +445,16 @@ def _jpeg_dimensions(f) -> tuple[int, int]:
             h = struct.unpack('>H', f.read(2))[0]
             w = struct.unpack('>H', f.read(2))[0]
             return w, h
+        # SOS (Start of Scan) — no dimensions found before scan data
+        if marker[1] == 0xDA:
+            raise ValueError("JPEG SOF marker not found before SOS")
         # Skip segment
-        length = struct.unpack('>H', f.read(2))[0]
+        length_data = f.read(2)
+        if len(length_data) < 2:
+            raise ValueError("Truncated JPEG segment")
+        length = struct.unpack('>H', length_data)[0]
+        if length < 2:
+            raise ValueError("Invalid JPEG segment length")
         f.seek(length - 2, 1)
 
 
@@ -610,8 +620,16 @@ class SharedMemoryLatentPool:
             self._shm = SharedMemory(name=self.name, create=True, size=self._total_bytes)
             log.info(f"Shared memory latent pool: {self._total_bytes / 1e6:.1f} MB")
         except FileExistsError:
-            # Reattach to existing
+            # Reattach to existing — validate size matches
             self._shm = SharedMemory(name=self.name, create=False)
+            if self._shm.size < self._total_bytes:
+                log.warning(
+                    f"Stale shared memory '{self.name}' has wrong size "
+                    f"({self._shm.size} vs {self._total_bytes}). Recreating."
+                )
+                self._shm.close()
+                self._shm.unlink()
+                self._shm = SharedMemory(name=self.name, create=True, size=self._total_bytes)
 
     def attach(self):
         """Attach to existing shared memory (for worker processes)."""

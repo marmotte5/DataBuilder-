@@ -114,6 +114,11 @@ class SpeedTimestepSampler:
             self._initialized = True
             return torch.ones(len(timesteps), device=self.device)
 
+        # Snapshot EMA at end of warmup so first post-warmup weights
+        # are based on actual loss changes, not vs. all-zeros.
+        if self._step == self.warmup_steps:
+            self._loss_ema_prev.copy_(self._loss_ema)
+
         # Change-aware: weight = |current_ema - previous_ema| + epsilon
         weights = torch.ones(len(timesteps), device=self.device)
         for i, t in enumerate(timesteps):
