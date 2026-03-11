@@ -99,12 +99,15 @@ class CurriculumSampler:
         if not self._active or self.temperature <= 0:
             return np.ones(self.num_images, dtype=np.float32) / self.num_images
 
-        # Compute weights from loss EMA
-        weights = self._loss_ema.copy()
+        # Compute weights from loss EMA (clamp to non-negative to prevent NaN from pow)
+        weights = np.maximum(self._loss_ema.copy(), 0.0)
 
-        # Apply temperature scaling
+        # Apply temperature scaling (safe: weights >= 0 after clamp)
         if self.temperature != 1.0:
             weights = weights ** self.temperature
+
+        # Replace any NaN/inf that slipped through
+        weights = np.nan_to_num(weights, nan=self.min_weight, posinf=self.min_weight)
 
         # Enforce minimum weight to prevent starvation
         weights = np.maximum(weights, self.min_weight)
@@ -259,10 +262,17 @@ class TimestepEMASampler:
 
         mean_loss = self._loss_ema[seen_mask].mean()
 
+        # Guard against NaN in loss EMA (e.g., from a NaN training loss)
+        if torch.isnan(mean_loss) or mean_loss < 1e-8:
+            return torch.ones(self.num_buckets, device=self.device) / self.num_buckets
+
         weights = torch.ones(self.num_buckets, device=self.device)
         for i in range(self.num_buckets):
             if self._seen_count[i] > 0:
-                relative_loss = self._loss_ema[i] / mean_loss.clamp(min=1e-8)
+                ema_val = self._loss_ema[i]
+                if torch.isnan(ema_val):
+                    continue  # Keep default weight=1
+                relative_loss = ema_val / mean_loss.clamp(min=1e-8)
                 if relative_loss < self.skip_threshold:
                     # Downweight well-learned buckets (don't skip entirely)
                     weights[i] = 0.1
@@ -271,7 +281,8 @@ class TimestepEMASampler:
                     weights[i] = relative_loss
             # Unseen buckets keep weight=1 (explore them)
 
-        # Normalize
+        # Normalize (NaN-safe)
+        weights = torch.nan_to_num(weights, nan=1.0)
         total = weights.sum()
         if total > 0:
             weights = weights / total
@@ -303,7 +314,8 @@ class TimestepEMASampler:
             if self._seen_count[b_idx] > 0:
                 weights[i] = (self._loss_ema[b_idx] / mean_loss.clamp(min=1e-8)).clamp(0.1, 5.0)
 
-        # Normalize to mean=1
+        # Normalize to mean=1 (NaN-safe)
+        weights = torch.nan_to_num(weights, nan=1.0)
         weights = weights / weights.mean().clamp(min=1e-6)
         return weights
 

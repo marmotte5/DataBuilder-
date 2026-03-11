@@ -243,7 +243,10 @@ class Muon(Optimizer):
         norm = M.norm()
         if norm < 1e-8:
             return torch.zeros_like(M).reshape(orig_shape)
-        X = M / norm
+
+        # Upcast to fp32 for iterations to prevent fp16 overflow in matrix products
+        orig_dtype = M.dtype
+        X = (M / norm).float()
 
         # Newton-Schulz iterations
         I = torch.eye(X.shape[1], device=X.device, dtype=X.dtype) if X.shape[0] <= X.shape[1] else None
@@ -258,7 +261,7 @@ class Muon(Optimizer):
                 XXt = X @ X.T
                 X = 0.5 * (3 * I_left - XXt) @ X
 
-        return X.reshape(orig_shape)
+        return X.to(orig_dtype).reshape(orig_shape)
 
 
 def create_muon_param_groups(model, lr: float = 0.02, adamw_lr: float = 1e-4,

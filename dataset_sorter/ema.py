@@ -50,10 +50,13 @@ class EMAModel:
         if self.cpu_offload:
             # Batch transfer: gather all param data to CPU in one pass
             for sp, p in zip(self.shadow_params, _grad_params(parameters)):
-                sp.lerp_(p.data.to(sp.device, non_blocking=True), one_minus_decay)
+                p_data = p.data.to(sp.device, non_blocking=True)
+                if not torch.isnan(p_data).any():
+                    sp.lerp_(p_data, one_minus_decay)
         else:
             for sp, p in zip(self.shadow_params, _grad_params(parameters)):
-                sp.lerp_(p.data, one_minus_decay)
+                if not torch.isnan(p.data).any():
+                    sp.lerp_(p.data, one_minus_decay)
 
     def store(self, parameters: Iterable[nn.Parameter]):
         """Save current model params (before replacing with EMA for inference)."""

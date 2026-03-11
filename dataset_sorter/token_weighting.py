@@ -67,7 +67,7 @@ class TokenWeightParser:
 
         for match in _WEIGHT_PATTERN.finditer(caption):
             text = match.group(1).strip()
-            weight = float(match.group(2))
+            weight = max(0.0, min(float(match.group(2)), 10.0))  # Clamp to [0, 10]
             token_weights[text] = weight
             # Replace {text:weight} with just the text
             clean = clean.replace(match.group(0), text)

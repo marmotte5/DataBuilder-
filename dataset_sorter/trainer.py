@@ -564,6 +564,15 @@ class Trainer:
                 loss = self._training_step(batch)
                 loss = loss / grad_accum_steps
 
+                # ── NaN guard: skip backward if loss is NaN/Inf ──
+                if torch.isnan(loss) or torch.isinf(loss):
+                    log.warning(
+                        f"NaN/Inf loss at step {self.state.global_step}, "
+                        f"skipping backward pass"
+                    )
+                    self.optimizer.zero_grad(set_to_none=True)
+                    continue
+
                 # ── Backward (with GradScaler for fp16) ──
                 if self.grad_scaler is not None:
                     self.grad_scaler.scale(loss).backward()
