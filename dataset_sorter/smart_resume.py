@@ -260,7 +260,7 @@ def compute_adjustments(
         # (steps[-1] - steps[0]).  Compute duration correctly.
         steps_in_plateau = max(0, analysis.total_steps - (
             analysis.plateau_start_step - analysis._first_step
-        )) if analysis._first_step > 0 else 0
+        ))
 
         if steps_in_plateau > analysis.total_steps * 0.3:
             # Long plateau — significant LR reduction to find lower minimum

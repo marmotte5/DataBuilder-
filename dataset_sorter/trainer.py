@@ -715,8 +715,10 @@ class Trainer:
                 self._save_checkpoint(f"epoch_{epoch + 1:04d}")
 
         # Clean up DataLoader workers (persistent_workers keep processes alive)
-        if hasattr(dataloader, '_iterator') and dataloader._iterator is not None:
-            dataloader._iterator._shutdown_workers()
+        # Unwrap AsyncGPUPrefetcher if present to access the real DataLoader
+        _real_loader = getattr(dataloader, 'dataloader', dataloader)
+        if hasattr(_real_loader, '_iterator') and _real_loader._iterator is not None:
+            _real_loader._iterator._shutdown_workers()
         del dataloader
         if self.device.type == "cuda":
             torch.cuda.empty_cache()

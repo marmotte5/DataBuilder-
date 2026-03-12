@@ -49,13 +49,12 @@ def _compute_lr_at_step(
     if scheduler_type == "constant":
         return base_lr
 
-    # Warmup phase
+    # Warmup phase (applies to all schedulers except "constant")
     if step < warmup_steps and warmup_steps > 0:
         warmup_factor = step / warmup_steps
-        if scheduler_type == "constant_with_warmup":
-            return base_lr * warmup_factor
+        return base_lr * warmup_factor
 
-    # Post-warmup
+    # Post-warmup for constant_with_warmup
     if scheduler_type == "constant_with_warmup":
         return base_lr
 
