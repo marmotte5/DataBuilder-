@@ -443,6 +443,7 @@ class CachedTrainDataset(Dataset):
                 te_result = (hidden_states, pooled)
                 hidden_states_2 = None
                 pooled_2 = None
+                tokens_2 = None
 
                 # Cache tokenized IDs (avoids re-tokenization every step)
                 token_id_result = (_tok_out.input_ids.cpu(),)

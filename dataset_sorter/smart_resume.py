@@ -195,7 +195,7 @@ def analyze_loss_curve(
         result.trend = "plateau"
         # Find where plateau started
         for i in range(n - 1, 0, -1):
-            if abs(smoothed[i] - smoothed[-1]) > smoothed[-1] * 0.03:
+            if abs(smoothed[i] - smoothed[-1]) > abs(smoothed[-1]) * 0.03 + 1e-8:
                 result.plateau_start_step = steps[min(i, len(steps) - 1)]
                 break
         result.confidence = 0.8
