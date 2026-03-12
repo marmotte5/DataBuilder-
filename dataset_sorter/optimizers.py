@@ -231,30 +231,32 @@ class Muon(Optimizer):
     def _newton_schulz_orthogonalize(M: torch.Tensor, num_steps: int = 5) -> torch.Tensor:
         """Orthogonalize matrix via Newton-Schulz iteration.
 
-        Converges to the nearest orthogonal matrix (Polar decomposition).
-        Each iteration: X_{k+1} = 0.5 * X_k * (3I - X_k^T X_k)
+        Uses quintic polynomial coefficients from the Muon paper for fast
+        convergence (typically 5 steps).  Operates on the smaller of
+        X @ X.T or X.T @ X by transposing tall matrices to wide form.
         """
         # Reshape to 2D for orthogonalization
         orig_shape = M.shape
         if M.dim() > 2:
             M = M.reshape(M.shape[0], -1)
 
-        # Normalize to unit Frobenius norm for convergence (all σ < 1)
+        # Normalize for convergence
         norm = M.norm()
         if norm < 1e-8:
             return torch.zeros_like(M).reshape(orig_shape)
 
         # Upcast to fp32 for iterations to prevent fp16 overflow in matrix products
         orig_dtype = M.dtype
+
+        # Transpose tall matrices so X @ X.T is the smaller product
+        transposed = M.shape[0] > M.shape[1]
+        if transposed:
+            M = M.T
+
         X = (M / norm).float()
 
-        # Transpose so we always work with rows <= cols (use X @ X^T form)
-        transposed = X.shape[0] > X.shape[1]
-        if transposed:
-            X = X.T
-
         # Quintic Newton-Schulz iteration: p(σ) = (15σ - 10σ³ + 3σ⁵) / 8
-        # Has cubic convergence (p(1)=1, p'(1)=0, p''(1)=0) vs quadratic for standard cubic
+        # Has cubic convergence (p(1)=1, p'(1)=0, p''(1)=0)
         a, b, c = (15.0/8, -10.0/8, 3.0/8)
         for _ in range(num_steps):
             A = X @ X.T
