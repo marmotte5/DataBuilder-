@@ -55,7 +55,7 @@ def has_gpu() -> bool:
     try:
         import torch
         return torch.cuda.is_available() or torch.backends.mps.is_available()
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError, OSError):
         return False
 
 
