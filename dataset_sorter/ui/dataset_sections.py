@@ -1211,6 +1211,7 @@ class ConceptCoverageSection(QWidget):
             self._run_analysis()
 
     def _run_analysis(self):
+        """Launch concept coverage analysis on a worker thread."""
         if not self._entries:
             self.detail_text.setPlainText("No dataset loaded. Scan a dataset first.")
             return
@@ -1230,6 +1231,7 @@ class ConceptCoverageSection(QWidget):
         self._worker.start()
 
     def _on_analysis_done(self, result):
+        """Handle analysis results: update score cards and show the concepts view."""
         self._analysis = result
         self.btn_analyze.setEnabled(True)
         self.status_badge.setText("Done")
@@ -1276,6 +1278,7 @@ class ConceptCoverageSection(QWidget):
         self._show_view("concepts")
 
     def _show_view(self, view: str):
+        """Switch the table between 'concepts', 'underrep', or 'best' images view."""
         if not self._analysis:
             return
 
@@ -1496,6 +1499,7 @@ class TagSpecificitySection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the specificity UI: stat cards, threshold control, view toggles, table, and detail panel."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
