@@ -188,6 +188,7 @@ class TagPanel(QWidget):
 
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Search tags...")
+        self.filter_input.setToolTip("Filter tags by name (150 ms debounce)")
         self.filter_input.setClearButtonEnabled(True)
         self.filter_input.textChanged.connect(self._on_filter_text_changed)
         layout.addWidget(self.filter_input)

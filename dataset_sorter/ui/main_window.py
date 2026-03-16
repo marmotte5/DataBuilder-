@@ -47,6 +47,7 @@ from dataset_sorter.ui.generate_tab import GenerateTab
 from dataset_sorter.ui.auto_pipeline_dialog import AutoPipelineDialog
 from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
+from dataset_sorter.ui.toast import show_toast
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +132,12 @@ class MainWindow(QMainWindow):
             "(Ctrl+S save, Ctrl+O load, Ctrl+T theme, Ctrl+E export)"
         )
 
+    def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
+        """Show a non-blocking toast notification anchored to the central widget."""
+        central = self.centralWidget()
+        if central:
+            show_toast(central, text, variant, duration_ms)
+
     def _build_ui(self):
         """Construct all widgets: top path bar, scan controls, security banner, splitter panels, and bottom bar."""
         central = QWidget()
@@ -148,6 +155,7 @@ class MainWindow(QMainWindow):
         self.source_input.setToolTip("Path to the source image directory. Drag and drop a folder here.")
         top.addWidget(self.source_input, 2)
         btn_src = QPushButton("Browse")
+        btn_src.setToolTip("Browse for source directory")
         btn_src.clicked.connect(self._browse_source)
         top.addWidget(btn_src)
         top.addWidget(self._label("Output"))
@@ -156,6 +164,7 @@ class MainWindow(QMainWindow):
         self.output_input.setToolTip("Path for exported dataset. Drag and drop a folder here.")
         top.addWidget(self.output_input, 2)
         btn_out = QPushButton("Browse")
+        btn_out.setToolTip("Browse for output directory")
         btn_out.clicked.connect(self._browse_output)
         top.addWidget(btn_out)
 
@@ -200,12 +209,14 @@ class MainWindow(QMainWindow):
         scan_bar.addStretch()
 
         self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setToolTip("Cancel the current scan or export (Escape)")
         self.btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_cancel.setVisible(False)
         self.btn_cancel.clicked.connect(self._cancel_operation)
         scan_bar.addWidget(self.btn_cancel)
 
         self.btn_scan = QPushButton("Scan")
+        self.btn_scan.setToolTip("Scan the source directory for images and tags (Ctrl+R)")
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_scan.clicked.connect(self._start_scan)
         scan_bar.addWidget(self.btn_scan)
@@ -254,6 +265,7 @@ class MainWindow(QMainWindow):
         # Bottom bar
         bottom = QHBoxLayout()
         self.btn_dry = QPushButton("Dry Run (Summary)")
+        self.btn_dry.setToolTip("Preview how images will be distributed across buckets (Ctrl+D)")
         self.btn_dry.clicked.connect(self._dry_run)
         bottom.addWidget(self.btn_dry)
 
@@ -267,6 +279,7 @@ class MainWindow(QMainWindow):
 
         bottom.addStretch()
         self.btn_export = QPushButton("Export (copy only)")
+        self.btn_export.setToolTip("Export dataset to output directory — copies images into bucket folders (Ctrl+E)")
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_export.clicked.connect(self._start_export)
         bottom.addWidget(self.btn_export)
@@ -328,6 +341,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(get_stylesheet())
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
         self.statusBar().showMessage(f"Switched to {new_mode} theme.")
+        self._toast(f"Switched to {new_mode} theme", "info")
 
     # -- Progress persistence --
 
@@ -553,6 +567,7 @@ class MainWindow(QMainWindow):
             f"Scan complete: {len(self.entries)} images, "
             f"{n_txt} txt files, {len(self.tag_counts)} unique tags."
         )
+        self._toast(f"Scan complete — {len(self.entries)} images found", "success")
 
     # -- Tag index & buckets --
 
@@ -687,6 +702,7 @@ class MainWindow(QMainWindow):
         snap = self._undo_stack.pop()
         self._restore_snapshot(snap)
         self.statusBar().showMessage(f"Undo: {snap.description}")
+        self._toast(f"Undo: {snap.description}", "info")
 
     def _redo(self):
         """Re-apply a previously undone tag operation from the redo stack."""
@@ -697,6 +713,7 @@ class MainWindow(QMainWindow):
         snap = self._redo_stack.pop()
         self._restore_snapshot(snap)
         self.statusBar().showMessage(f"Redo: {snap.description}")
+        self._toast(f"Redo: {snap.description}", "info")
 
     def _after_tag_edit(self):
         """Recalculate indexes, auto-buckets, and bucket assignments after any tag modification."""
@@ -741,10 +758,12 @@ class MainWindow(QMainWindow):
             for tag in tags:
                 self.manual_overrides.pop(tag, None)
             self.statusBar().showMessage(f"Override removed for {len(tags)} tag(s).")
+            self._toast(f"Override removed for {len(tags)} tag(s)", "info")
         else:
             for tag in tags:
                 self.manual_overrides[tag] = value
             self.statusBar().showMessage(f"Override -> bucket {value} for {len(tags)} tag(s).")
+            self._toast(f"Override applied — bucket {value}", "success")
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
 
@@ -759,6 +778,7 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
         self.statusBar().showMessage(f"Override reset for {len(tags)} tag(s).")
+        self._toast(f"Override reset for {len(tags)} tag(s)", "info")
 
     # -- Tag deletion --
 
@@ -772,6 +792,7 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
         self.statusBar().showMessage(f"{len(tags)} tag(s) marked for deletion.")
+        self._toast(f"{len(tags)} tag(s) deleted", "warning")
 
     def _restore_selected_tags(self):
         """Un-delete the selected tags, making them active again for bucket assignment."""
@@ -784,6 +805,7 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
         self.statusBar().showMessage(f"{len(tags)} tag(s) restored.")
+        self._toast(f"{len(tags)} tag(s) restored", "success")
 
     def _restore_all_tags(self):
         """Un-delete every soft-deleted tag at once."""
@@ -793,6 +815,7 @@ class MainWindow(QMainWindow):
         self._assign_entries_to_buckets()
         self._refresh_all_ui()
         self.statusBar().showMessage(f"{n} tag(s) restored.")
+        self._toast(f"All {n} tag(s) restored", "success")
 
     # -- Tag editing --
 
@@ -836,6 +859,7 @@ class MainWindow(QMainWindow):
                 self.deleted_tags.add(new_name)
         self._after_tag_edit()
         self.override_panel.set_editor_info(f"Renamed ({count} changes).")
+        self._toast(f"Tag renamed — {count} entries updated", "success")
 
     def _merge_tags(self, target):
         """Merge all selected tags into a single target tag.
@@ -873,6 +897,7 @@ class MainWindow(QMainWindow):
             self.deleted_tags.discard(tag)
         self._after_tag_edit()
         self.override_panel.set_editor_info(f"Merged to \"{target}\" ({count} changes).")
+        self._toast(f"Tags merged into \"{target}\"", "success")
 
     def _search_replace_tags(self, search, replace):
         """Perform substring search-and-replace across all tags in every entry.
@@ -915,6 +940,7 @@ class MainWindow(QMainWindow):
         self.deleted_tags = new_del
         self._after_tag_edit()
         self.override_panel.set_editor_info(f"\"{search}\" -> \"{replace}\": {modified} entries modified.")
+        self._toast(f"Search & replace done — {modified} entries", "success")
 
     # -- Bucket names --
 
@@ -926,6 +952,7 @@ class MainWindow(QMainWindow):
         for i in range(1, MAX_BUCKETS + 1):
             self.bucket_names[i] = s
         self.statusBar().showMessage(f"Name \"{s}\" applied to all buckets.")
+        self._toast(f"Bucket name \"{s}\" applied to all", "success")
 
     # -- Config --
 
@@ -944,8 +971,10 @@ class MainWindow(QMainWindow):
         try:
             Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
             self.statusBar().showMessage(f"Config saved: {path}")
+            self._toast("Configuration saved", "success")
         except OSError as e:
             self.statusBar().showMessage(f"Error: {e}")
+            self._toast(f"Save failed: {e}", "error")
 
     def _load_config(self):
         """Load configuration from a JSON file, fully replacing current state.
@@ -1004,6 +1033,7 @@ class MainWindow(QMainWindow):
             self._assign_entries_to_buckets()
             self._refresh_all_ui()
         self.statusBar().showMessage(f"Config loaded: {path}")
+        self._toast("Configuration loaded", "success")
 
     # -- Recommendations --
 
@@ -1041,6 +1071,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.reco_tab, '_last_config') and self.reco_tab._last_config is not None:
             self.training_tab.apply_config(self.reco_tab._last_config)
             self.statusBar().showMessage("Recommendations applied to Training tab.")
+            self._toast("Recommendations applied to Training tab", "success")
         else:
             self.statusBar().showMessage("No recommendations yet. Click Recalculate first.")
 
@@ -1068,6 +1099,7 @@ class MainWindow(QMainWindow):
             self.deleted_tags.discard(old_tag)
         self._after_tag_edit()
         self.statusBar().showMessage(f"Renamed \"{old_tag}\" -> \"{new_tag}\" ({count} entries).")
+        self._toast(f"Spellcheck fix applied", "success")
 
     # -- Image tab --
 
@@ -1079,6 +1111,7 @@ class MainWindow(QMainWindow):
             entry.assigned_bucket = bucket
             self.image_tab.refresh()
             self.statusBar().showMessage(f"Image forced to bucket {bucket}.")
+            self._toast(f"Image forced to bucket {bucket}", "success")
 
     def _reset_image_bucket(self, index):
         """Remove the forced bucket for an image and recalculate its assignment from tags."""
@@ -1088,6 +1121,7 @@ class MainWindow(QMainWindow):
             self._assign_single_entry_bucket(entry)
             self.image_tab.refresh()
             self.statusBar().showMessage("Image bucket reset.")
+            self._toast("Image bucket reset", "info")
 
     def _navigate_to_image(self, index):
         """Navigate the Images tab to the given image index."""
@@ -1147,6 +1181,7 @@ class MainWindow(QMainWindow):
             f"Pipeline: {len(new_deleted_tags)} tags removed, "
             f"{len(merge_pairs)} pairs merged."
         )
+        self._toast("Pipeline cleaning applied", "success")
 
     def _apply_pipeline_reorder(self):
         """Refresh UI after tag reorder from pipeline."""
@@ -1167,6 +1202,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Smart buckets applied: {applied} tags re-bucketed by importance."
         )
+        self._toast(f"Smart buckets applied — {applied} tags", "success")
 
     def _apply_importance_cleaning(self, delete_tags: set, caption_conversions: list):
         """Apply tag cleaning from importance analysis.
@@ -1197,6 +1233,7 @@ class MainWindow(QMainWindow):
         if caption_conversions:
             parts.append(f"{len(caption_conversions)} captions consolidated")
         self.statusBar().showMessage(f"Importance cleaning: {', '.join(parts)}.")
+        self._toast("Importance cleaning applied", "success")
 
     def _apply_pipeline_training(self, config, model_path: str, output_dir: str):
         """Apply config and start training from pipeline."""
@@ -1310,8 +1347,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Permission Error", "No write permission on the output directory.")
         elif errors > 0:
             self.statusBar().showMessage(f"Export done: {copied} copied, {errors} error(s). See export_errors.log.")
+            self._toast(f"Export done with {errors} error(s)", "warning")
         else:
             self.statusBar().showMessage(f"Export complete: {copied} image(s) copied.")
+            self._toast(f"Export complete — {copied} image(s) copied", "success")
 
 
 def run():

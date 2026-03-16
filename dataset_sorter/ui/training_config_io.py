@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QFileDialog
 
 from dataset_sorter.constants import MODEL_TYPE_KEYS, VRAM_TIERS
 from dataset_sorter.models import TrainingConfig
+from dataset_sorter.ui.toast import show_toast
 
 
 class TrainingConfigIOMixin:
@@ -373,8 +374,10 @@ class TrainingConfigIOMixin:
                 encoding="utf-8",
             )
             self._log(f"Training config saved: {path}")
+            show_toast(self, "Training config saved", "success")
         except OSError as e:
             self._log(f"ERROR saving config: {e}")
+            show_toast(self, "Config save failed", "error")
 
     def _load_training_config(self):
         """Open a Load dialog and restore training config from a JSON file.
@@ -420,3 +423,4 @@ class TrainingConfigIOMixin:
                     pass  # Keep default rather than setting an incompatible value
         self.apply_config(config)
         self._log(f"Training config loaded: {path}")
+        show_toast(self, "Training config loaded", "success")

@@ -24,6 +24,7 @@ from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
+from dataset_sorter.ui.toast import show_toast
 from dataset_sorter.training_presets import (
     TRAINING_PRESETS, get_preset_labels, apply_preset,
 )
@@ -190,16 +191,20 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         paths_grid.addWidget(self._muted("Base Model"), 0, 0)
         self.model_path_input = QLineEdit()
         self.model_path_input.setPlaceholderText("Path to .safetensors / HuggingFace model ID...")
+        self.model_path_input.setToolTip("Local path to a .safetensors/.ckpt file or a HuggingFace model ID")
         paths_grid.addWidget(self.model_path_input, 0, 1)
         btn_model = QPushButton("Browse")
+        btn_model.setToolTip("Browse for a base model file")
         btn_model.clicked.connect(self._browse_model)
         paths_grid.addWidget(btn_model, 0, 2)
 
         paths_grid.addWidget(self._muted("Output Dir"), 1, 0)
         self.output_dir_input = QLineEdit()
         self.output_dir_input.setPlaceholderText("Training output directory...")
+        self.output_dir_input.setToolTip("Directory where checkpoints, logs, and samples will be saved")
         paths_grid.addWidget(self.output_dir_input, 1, 1)
         btn_out = QPushButton("Browse")
+        btn_out.setToolTip("Browse for training output directory")
         btn_out.clicked.connect(self._browse_output)
         paths_grid.addWidget(btn_out, 1, 2)
 
@@ -425,12 +430,14 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_row.addWidget(self.btn_resume)
 
         self.btn_stop = QPushButton("Stop Training")
+        self.btn_stop.setToolTip("Stop training gracefully after the current step")
         self.btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_training)
         btn_row.addWidget(self.btn_stop)
 
         self.btn_train = QPushButton("Start Training")
+        self.btn_train.setToolTip("Validate settings and begin training on the current dataset")
         self.btn_train.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_train.clicked.connect(self._start_training)
         btn_row.addWidget(self.btn_train)
@@ -462,6 +469,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         config = apply_preset(config, key)
         self.apply_config(config)
         self._log(f"Applied preset: {TRAINING_PRESETS[key]['label']}")
+        show_toast(self, f"Preset applied: {TRAINING_PRESETS[key]['label']}", "success")
 
     def _group(self, title: str) -> QGroupBox:
         """Create a QGroupBox with the given title for use in config sections."""
@@ -964,6 +972,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"\n{'=' * 40}")
         self._log(f"Training {'completed' if success else 'failed'}: {message}")
         self._log(f"{'=' * 40}")
+        if success:
+            show_toast(self, "Training completed", "success", 4000)
+        else:
+            show_toast(self, f"Training failed: {message[:60]}", "error", 4000)
         # Log final VRAM peak
         try:
             from dataset_sorter.disk_space import get_vram_snapshot

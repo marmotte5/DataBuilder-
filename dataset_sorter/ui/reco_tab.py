@@ -19,6 +19,7 @@ from dataset_sorter.constants import (
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
+from dataset_sorter.ui.toast import show_toast
 
 
 class RecoTab(QWidget):
@@ -36,11 +37,13 @@ class RecoTab(QWidget):
         row1.setSpacing(10)
         row1.addWidget(self._field_label("Model"))
         self.model_combo = QComboBox()
+        self.model_combo.setToolTip("Select the model architecture for training recommendations")
         self.model_combo.addItems(MODEL_TYPE_LABELS)
         self.model_combo.setCurrentIndex(2)  # SDXL LoRA default
         row1.addWidget(self.model_combo, 1)
         row1.addWidget(self._field_label("VRAM"))
         self.vram_combo = QComboBox()
+        self.vram_combo.setToolTip("Your GPU VRAM — recommendations adjust batch size and precision accordingly")
         self.vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
         self.vram_combo.setCurrentIndex(3)  # 24 GB default
         row1.addWidget(self.vram_combo)
@@ -128,6 +131,7 @@ class RecoTab(QWidget):
         btn_row.addWidget(self.btn_export_json)
 
         self.btn_recalc = QPushButton("Recalculate")
+        self.btn_recalc.setToolTip("Recalculate training recommendations based on current settings")
         self.btn_recalc.setStyleSheet(ACCENT_BUTTON_STYLE)
         btn_row.addWidget(self.btn_recalc)
         layout.addLayout(btn_row)
@@ -211,8 +215,10 @@ class RecoTab(QWidget):
         content = export_onetrainer_toml(self._last_config)
         try:
             Path(path).write_text(content, encoding="utf-8")
+            show_toast(self, "TOML config exported", "success")
         except OSError as e:
             QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")
+            show_toast(self, "Export failed", "error")
 
     def _export_json(self):
         """Prompt the user to save the current config as a kohya_ss JSON file."""
@@ -227,5 +233,7 @@ class RecoTab(QWidget):
         content = export_kohya_json(self._last_config)
         try:
             Path(path).write_text(content, encoding="utf-8")
+            show_toast(self, "JSON config exported", "success")
         except OSError as e:
             QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")
+            show_toast(self, "Export failed", "error")

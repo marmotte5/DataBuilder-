@@ -30,6 +30,7 @@ from dataset_sorter.ui.theme import (
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE, CARD_STYLE,
     SECTION_SUBHEADER_STYLE,
 )
+from dataset_sorter.ui.toast import show_toast
 
 
 # ── Constants ───────────────────────────────────────────────────────────────
@@ -190,19 +191,23 @@ class GenerateTab(QWidget):
         mg.addWidget(QLabel("Model path:"), 0, 0)
         self.model_path_edit = QLineEdit()
         self.model_path_edit.setPlaceholderText("HuggingFace ID or local path...")
+        self.model_path_edit.setToolTip("HuggingFace model ID or path to a local model file/folder")
         mg.addWidget(self.model_path_edit, 0, 1, 1, 2)
         btn_browse_model = QPushButton("Browse")
+        btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
 
         mg.addWidget(QLabel("Model type:"), 1, 0)
         self.model_type_combo = QComboBox()
+        self.model_type_combo.setToolTip("Architecture type of the base model")
         for k, v in GEN_MODEL_TYPES.items():
             self.model_type_combo.addItem(v, k)
         mg.addWidget(self.model_type_combo, 1, 1)
 
         mg.addWidget(QLabel("Precision:"), 1, 2)
         self.precision_combo = QComboBox()
+        self.precision_combo.setToolTip("Floating-point precision for inference (bf16 recommended)")
         for k, v in GEN_PRECISIONS.items():
             self.precision_combo.addItem(v, k)
         mg.addWidget(self.precision_combo, 1, 3)
@@ -210,9 +215,11 @@ class GenerateTab(QWidget):
         # Load / Unload buttons
         btn_row = QHBoxLayout()
         self.btn_load = QPushButton("Load Model")
+        self.btn_load.setToolTip("Load the model into GPU memory for inference")
         self.btn_load.setStyleSheet(ACCENT_BUTTON_STYLE)
         btn_row.addWidget(self.btn_load)
         self.btn_unload = QPushButton("Unload")
+        self.btn_unload.setToolTip("Unload the model and free GPU memory")
         self.btn_unload.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_unload.setEnabled(False)
         btn_row.addWidget(self.btn_unload)
@@ -232,6 +239,7 @@ class GenerateTab(QWidget):
         lora_layout.addLayout(self.lora_container)
 
         btn_add_lora = QPushButton("+ Add LoRA")
+        btn_add_lora.setToolTip("Add a LoRA/DoRA adapter to stack on top of the base model")
         btn_add_lora.clicked.connect(self._add_lora_entry)
         lora_layout.addWidget(btn_add_lora)
 
@@ -281,6 +289,7 @@ class GenerateTab(QWidget):
         # Sampler / Scheduler
         params.addWidget(QLabel("Sampler:"), 0, 0)
         self.scheduler_combo = QComboBox()
+        self.scheduler_combo.setToolTip("Diffusion sampling algorithm (Euler A is a good default)")
         for k, v in GEN_SCHEDULERS.items():
             self.scheduler_combo.addItem(v, k)
         params.addWidget(self.scheduler_combo, 0, 1)
@@ -290,6 +299,7 @@ class GenerateTab(QWidget):
         self.steps_spin = QSpinBox()
         self.steps_spin.setRange(1, 200)
         self.steps_spin.setValue(28)
+        self.steps_spin.setToolTip("Number of denoising steps (more = slower but often better quality)")
         params.addWidget(self.steps_spin, 0, 3)
 
         # CFG Scale
@@ -298,6 +308,7 @@ class GenerateTab(QWidget):
         self.cfg_spin.setRange(1.0, 30.0)
         self.cfg_spin.setSingleStep(0.5)
         self.cfg_spin.setValue(7.0)
+        self.cfg_spin.setToolTip("Classifier-Free Guidance scale — higher = more prompt adherence")
         params.addWidget(self.cfg_spin, 1, 1)
 
         # Seed
@@ -323,6 +334,7 @@ class GenerateTab(QWidget):
         # Resolution
         params.addWidget(QLabel("Resolution:"), 2, 0)
         self.resolution_combo = QComboBox()
+        self.resolution_combo.setToolTip("Output image resolution preset")
         for w, h in RESOLUTIONS:
             self.resolution_combo.addItem(f"{w} x {h}", (w, h))
         self.resolution_combo.setCurrentIndex(6)  # 1024x1024
@@ -341,6 +353,7 @@ class GenerateTab(QWidget):
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 100)
         self.batch_spin.setValue(1)
+        self.batch_spin.setToolTip("Number of images to generate in this batch")
         params.addWidget(self.batch_spin, 3, 1)
 
         # Custom resolution
@@ -418,10 +431,12 @@ class GenerateTab(QWidget):
         # -- Generate / Stop buttons --
         gen_row = QHBoxLayout()
         self.btn_generate = QPushButton("Generate")
+        self.btn_generate.setToolTip("Generate images using the current settings")
         self.btn_generate.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_generate.setEnabled(False)
         gen_row.addWidget(self.btn_generate)
         self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setToolTip("Stop generation after the current image finishes")
         self.btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_stop.setEnabled(False)
         gen_row.addWidget(self.btn_stop)
@@ -472,6 +487,7 @@ class GenerateTab(QWidget):
         # Gallery navigation
         nav_row = QHBoxLayout()
         self.btn_prev = QPushButton("< Prev")
+        self.btn_prev.setToolTip("View previous generated image")
         self.btn_prev.setEnabled(False)
         self.btn_prev.clicked.connect(self._prev_image)
         nav_row.addWidget(self.btn_prev)
@@ -481,16 +497,19 @@ class GenerateTab(QWidget):
         nav_row.addWidget(self.gallery_label)
 
         self.btn_next = QPushButton("Next >")
+        self.btn_next.setToolTip("View next generated image")
         self.btn_next.setEnabled(False)
         self.btn_next.clicked.connect(self._next_image)
         nav_row.addWidget(self.btn_next)
 
         self.btn_save = QPushButton("Save Image")
+        self.btn_save.setToolTip("Save the currently displayed image to disk")
         self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self._save_current_image)
         nav_row.addWidget(self.btn_save)
 
         self.btn_save_all = QPushButton("Save All")
+        self.btn_save_all.setToolTip("Save all generated images to a folder")
         self.btn_save_all.setEnabled(False)
         self.btn_save_all.clicked.connect(self._save_all_images)
         nav_row.addWidget(self.btn_save_all)
@@ -617,6 +636,7 @@ class GenerateTab(QWidget):
         self.btn_unload.setEnabled(True)
         self.btn_generate.setEnabled(True)
         self.progress_bar.setVisible(False)
+        show_toast(self, "Model loaded", "success")
 
     def _on_unload_model(self):
         """Unload the current model, free GPU memory, and reset UI state."""
@@ -629,6 +649,7 @@ class GenerateTab(QWidget):
         self.status_label.setText("Model unloaded.")
         self.btn_unload.setEnabled(False)
         self.btn_generate.setEnabled(False)
+        show_toast(self, "Model unloaded", "info")
 
     # ── Generation ──────────────────────────────────────────────────────
 
@@ -919,6 +940,7 @@ class GenerateTab(QWidget):
         if path:
             self._save_with_metadata(pil_img, path)
             self.status_label.setText(f"Saved: {path}")
+            show_toast(self, "Image saved", "success")
 
     def _save_all_images(self):
         """Prompt for an output folder and save all gallery images as PNGs."""
@@ -934,3 +956,4 @@ class GenerateTab(QWidget):
             self._save_with_metadata(pil_img, str(path))
 
         self.status_label.setText(f"Saved {len(self._generated_images)} images to {folder}")
+        show_toast(self, f"{len(self._generated_images)} images saved", "success")
