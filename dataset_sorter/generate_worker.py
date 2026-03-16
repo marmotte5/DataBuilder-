@@ -323,40 +323,26 @@ class GenerateWorker(QThread):
             # Fallback: generic DiffusionPipeline
             pipe_cls = diffusers.DiffusionPipeline
 
-        # For single-file checkpoints (.safetensors, .ckpt) with models that
-        # don't have from_single_file (e.g. trust_remote_code / DiffusionPipeline),
-        # try StableDiffusionPipeline.from_single_file as a universal fallback,
-        # or point the user to use a diffusers-format folder instead.
         try:
             if is_single_file:
                 kwargs.pop("safety_checker", None)
                 if hasattr(pipe_cls, "from_single_file"):
                     pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                elif model_type in TRUST_REMOTE_CODE_MODELS:
+                    # Custom models (Z-Image, Flux2, etc.): load the base pipeline
+                    # from HuggingFace, then swap in fine-tuned weights from the
+                    # single .safetensors file.
+                    pipe = self._load_single_file_custom(
+                        model_path, model_type, dtype, kwargs
+                    )
+                    if pipe is None:
+                        return None
                 else:
-                    # Try common pipeline classes that support from_single_file
-                    loaded = False
-                    for fallback_name in (
-                        "StableDiffusion3Pipeline",
-                        "StableDiffusionXLPipeline",
-                        "StableDiffusionPipeline",
-                    ):
-                        fallback_cls = getattr(diffusers, fallback_name, None)
-                        if fallback_cls and hasattr(fallback_cls, "from_single_file"):
-                            try:
-                                pipe = fallback_cls.from_single_file(model_path, **kwargs)
-                                loaded = True
-                                break
-                            except Exception:
-                                continue
-                    if not loaded:
-                        self.error.emit(
-                            f"Cannot load single .safetensors file for {model_type}. "
-                            f"Please use a diffusers-format model folder instead, "
-                            f"or convert with: "
-                            f"python -c \"from diffusers import DiffusionPipeline; "
-                            f"p = DiffusionPipeline.from_single_file('{model_path}'); "
-                            f"p.save_pretrained('model_folder')\""
-                        )
+                    # Try standard pipeline classes as fallback
+                    pipe = self._load_single_file_fallback(
+                        model_path, dtype, kwargs
+                    )
+                    if pipe is None:
                         return None
             else:
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
@@ -369,6 +355,104 @@ class GenerateWorker(QThread):
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
 
         return pipe
+
+    def _load_single_file_custom(self, model_path: str, model_type: str, dtype, kwargs: dict):
+        """Load a single-file checkpoint for custom trust_remote_code models.
+
+        Strategy: load the base pipeline from HuggingFace, then replace the
+        transformer/unet weights with the fine-tuned weights from the file.
+        """
+        import torch
+        import diffusers
+        from safetensors.torch import load_file
+
+        # Base model repos for custom architectures
+        BASE_REPOS = {
+            "zimage":  "Freepik/z-image",
+            "flux2":   "black-forest-labs/FLUX.1-dev",
+            "chroma":  "lodestone-horizon/chroma",
+            "hidream": "HiDream-ai/HiDream-I1-Full",
+        }
+
+        base_repo = BASE_REPOS.get(model_type)
+        if not base_repo:
+            self.error.emit(
+                f"No base model repo known for '{model_type}'. "
+                f"Use a diffusers-format model folder instead."
+            )
+            return None
+
+        self.progress.emit(15, 100, f"Loading base {model_type} pipeline from {base_repo}...")
+
+        try:
+            pipe = diffusers.DiffusionPipeline.from_pretrained(
+                base_repo, **kwargs,
+            )
+        except Exception as e:
+            self.error.emit(
+                f"Failed to load base pipeline from {base_repo}: {e}\n\n"
+                f"Make sure you have internet access for the first download."
+            )
+            return None
+
+        # Find the trainable component (transformer or unet)
+        model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
+        if model_component is None:
+            self.error.emit(f"Cannot find transformer/unet in {model_type} pipeline.")
+            return None
+
+        self.progress.emit(30, 100, "Loading fine-tuned weights...")
+
+        try:
+            state_dict = load_file(model_path)
+
+            # Check if weights are prefixed (e.g. "transformer.") and strip
+            first_key = next(iter(state_dict), "")
+            prefix = ""
+            for candidate in ("transformer.", "unet.", "model."):
+                if first_key.startswith(candidate):
+                    prefix = candidate
+                    break
+
+            if prefix:
+                state_dict = {
+                    k[len(prefix):]: v for k, v in state_dict.items()
+                    if k.startswith(prefix)
+                }
+
+            missing, unexpected = model_component.load_state_dict(state_dict, strict=False)
+            if missing:
+                log.warning(f"Missing keys when loading weights: {len(missing)} keys")
+            if unexpected:
+                log.warning(f"Unexpected keys when loading weights: {len(unexpected)} keys")
+
+        except Exception as e:
+            self.error.emit(f"Failed to load weights from {model_path}: {e}")
+            return None
+
+        return pipe
+
+    def _load_single_file_fallback(self, model_path: str, dtype, kwargs: dict):
+        """Try standard pipeline classes for single-file loading."""
+        import diffusers
+
+        for fallback_name in (
+            "StableDiffusion3Pipeline",
+            "StableDiffusionXLPipeline",
+            "StableDiffusionPipeline",
+        ):
+            fallback_cls = getattr(diffusers, fallback_name, None)
+            if fallback_cls and hasattr(fallback_cls, "from_single_file"):
+                try:
+                    return fallback_cls.from_single_file(model_path, **kwargs)
+                except Exception:
+                    continue
+
+        self.error.emit(
+            f"Cannot load single .safetensors file. "
+            f"Please use a diffusers-format model folder instead."
+        )
+        return None
 
     def _load_loras(self, pipe, adapters: list[dict]):
         """Load one or more LoRA/DoRA adapters into the pipeline."""
