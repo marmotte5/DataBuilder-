@@ -20,6 +20,7 @@ from dataset_sorter.ui.dataset_sections import (
     DuplicateSection,
     ConceptCoverageSection,
     TagSpecificitySection,
+    TagImportanceSection,
 )
 
 
@@ -37,6 +38,8 @@ class DatasetTab(QWidget):
 
     apply_tag_fix = pyqtSignal(str, str)  # (old_tag, new_tag) for spell-check apply
     navigate_to_image = pyqtSignal(int)  # navigate to image index
+    apply_smart_buckets = pyqtSignal(dict)  # {tag: bucket} from importance analysis
+    apply_importance_cleaning = pyqtSignal(set, list)  # (delete_tags, caption_conversions)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,6 +90,13 @@ class DatasetTab(QWidget):
         self.specificity_section.navigate_to_image.connect(self.navigate_to_image.emit)
         tabs.addTab(self.specificity_section, "Tag Specificity")
 
+        # 9. Tag Importance (smart concept-aware scoring)
+        self.importance_section = TagImportanceSection()
+        self.importance_section.navigate_to_image.connect(self.navigate_to_image.emit)
+        self.importance_section.apply_smart_buckets.connect(self.apply_smart_buckets.emit)
+        self.importance_section.apply_tag_cleaning.connect(self.apply_importance_cleaning.emit)
+        tabs.addTab(self.importance_section, "Tag Importance")
+
         layout.addWidget(tabs)
 
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
@@ -131,6 +141,9 @@ class DatasetTab(QWidget):
 
         # Tag specificity (auto-runs analysis)
         self.specificity_section.set_data(entries, active_counts, _del)
+
+        # Tag importance (concept detection + smart bucketing)
+        self.importance_section.set_data(entries, tag_counts, _del)
 
     def get_augmentation_state(self) -> dict:
         return self.augmentation_section.get_state()

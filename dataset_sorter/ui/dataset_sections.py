@@ -1798,3 +1798,527 @@ class TagSpecificitySection(QWidget):
         )
 
         self.detail_text.setPlainText("\n".join(lines))
+
+
+# ── Tag Importance Analysis Worker ───────────────────────────────────
+
+class _ImportanceWorker(QThread):
+    """Run tag importance analysis in a background thread."""
+    finished = pyqtSignal(object)  # TagImportanceReport
+
+    def __init__(self, entries, tag_counts, deleted_tags, parent=None):
+        super().__init__(parent)
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._deleted_tags = deleted_tags
+
+    def run(self):
+        from dataset_sorter.tag_importance import analyze_tag_importance
+        result = analyze_tag_importance(
+            self._entries, self._tag_counts, self._deleted_tags,
+        )
+        self.finished.emit(result)
+
+
+class TagImportanceSection(QWidget):
+    """Smart tag importance analysis — concept detection and training-aware scoring.
+
+    Automatically detects:
+    - The dataset's concept root (e.g., "alitalia" from alitalia_* tags)
+    - Tag types: concept, detail, composition, generic, caption, noise
+    - Training importance scores (what the model should focus on)
+    - Smart bucket assignments based on importance, not just frequency
+
+    Solves the problem where concept tags like alitalia_woman_jacket (93 count)
+    get bucket 1 (same as "solo") because both are common — even though
+    alitalia_woman_jacket IS the concept the model should learn.
+    """
+
+    navigate_to_image = pyqtSignal(int)
+    apply_smart_buckets = pyqtSignal(dict)  # {tag: bucket}
+    apply_tag_cleaning = pyqtSignal(set, list)  # (tags_to_delete, caption_conversions)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries = []
+        self._tag_counts = Counter()
+        self._deleted_tags = set()
+        self._report = None
+        self._worker = None
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = QLabel("Tag Importance for Training")
+        header.setStyleSheet(SECTION_HEADER_STYLE)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Detects your dataset's concept (e.g., \"alitalia\" from alitalia_* tags), "
+            "classifies every tag by training value, and finds caption-style tags "
+            "that should be cleaned up. Replaces frequency-only bucketing with "
+            "training-aware importance scoring."
+        )
+        desc.setStyleSheet(MUTED_LABEL_STYLE)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Stat cards
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+
+        self.concept_card, self.concept_val = self._stat_card("Concept Root")
+        stats_row.addWidget(self.concept_card)
+
+        self.core_card, self.core_val = self._stat_card("Concept Tags")
+        stats_row.addWidget(self.core_card)
+
+        self.caption_card, self.caption_val = self._stat_card("Caption Tags")
+        stats_row.addWidget(self.caption_card)
+
+        self.noise_card, self.noise_val = self._stat_card("Noise Tags")
+        stats_row.addWidget(self.noise_card)
+
+        layout.addLayout(stats_row)
+
+        # Controls
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+
+        ctrl.addStretch()
+
+        self.btn_analyze = QPushButton("Analyze Importance")
+        self.btn_analyze.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_analyze.clicked.connect(self._run_analysis)
+        ctrl.addWidget(self.btn_analyze)
+
+        self.btn_apply_buckets = QPushButton("Apply Smart Buckets")
+        self.btn_apply_buckets.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self.btn_apply_buckets.setToolTip(
+            "Replace frequency-based buckets with importance-based buckets. "
+            "Concept tags get low buckets (high priority), noise gets high buckets."
+        )
+        self.btn_apply_buckets.setEnabled(False)
+        self.btn_apply_buckets.clicked.connect(self._apply_smart_buckets)
+        ctrl.addWidget(self.btn_apply_buckets)
+
+        self.btn_clean = QPushButton("Clean Noise & Captions")
+        self.btn_clean.setStyleSheet(DANGER_BUTTON_STYLE)
+        self.btn_clean.setToolTip(
+            "Delete noise tags and consolidate caption-style tags "
+            "into their matching real tags."
+        )
+        self.btn_clean.setEnabled(False)
+        self.btn_clean.clicked.connect(self._apply_cleaning)
+        ctrl.addWidget(self.btn_clean)
+
+        self.status_badge = QLabel("")
+        self.status_badge.setStyleSheet(TAG_BADGE_STYLE)
+        ctrl.addWidget(self.status_badge)
+        layout.addLayout(ctrl)
+
+        # View toggle
+        view_row = QHBoxLayout()
+        self.btn_view_concept = QPushButton("Concept Tags")
+        self.btn_view_concept.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_view_concept.clicked.connect(lambda: self._show_view("concept"))
+        view_row.addWidget(self.btn_view_concept)
+
+        self.btn_view_all = QPushButton("All Tags by Importance")
+        self.btn_view_all.clicked.connect(lambda: self._show_view("all"))
+        view_row.addWidget(self.btn_view_all)
+
+        self.btn_view_captions = QPushButton("Caption Tags")
+        self.btn_view_captions.clicked.connect(lambda: self._show_view("captions"))
+        view_row.addWidget(self.btn_view_captions)
+
+        self.btn_view_noise = QPushButton("Noise & Generic")
+        self.btn_view_noise.clicked.connect(lambda: self._show_view("noise"))
+        view_row.addWidget(self.btn_view_noise)
+
+        view_row.addStretch()
+        layout.addLayout(view_row)
+
+        # Results table
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Tag", "Type", "Importance", "Count", "Smart Bucket"]
+        )
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        layout.addWidget(self.table, 1)
+
+        # Detail panel
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setMaximumHeight(200)
+        layout.addWidget(self.detail_text)
+
+    def _stat_card(self, label: str):
+        card = QWidget()
+        card.setStyleSheet(CARD_STYLE)
+        vbox = QVBoxLayout(card)
+        vbox.setContentsMargins(8, 6, 8, 6)
+        vbox.setSpacing(2)
+        val = QLabel("\u2014")
+        val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        val.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 700; "
+            f"background: transparent;"
+        )
+        vbox.addWidget(val)
+        lbl = QLabel(label)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600; "
+            f"background: transparent; text-transform: uppercase;"
+        )
+        vbox.addWidget(lbl)
+        return card, val
+
+    def set_data(self, entries, tag_counts, deleted_tags=None):
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._deleted_tags = deleted_tags or set()
+        if entries and tag_counts:
+            self._run_analysis()
+
+    def _run_analysis(self):
+        if not self._entries:
+            self.detail_text.setPlainText("No dataset loaded.")
+            return
+
+        self.btn_analyze.setEnabled(False)
+        self.status_badge.setText("Analyzing...")
+
+        self._worker = _ImportanceWorker(
+            self._entries, self._tag_counts, self._deleted_tags, parent=self,
+        )
+        self._worker.finished.connect(self._on_analysis_done)
+        self._worker.start()
+
+    def _on_analysis_done(self, report):
+        self._report = report
+        self.btn_analyze.setEnabled(True)
+        self.btn_apply_buckets.setEnabled(True)
+        self.btn_clean.setEnabled(True)
+        self.status_badge.setText("Done")
+
+        # Update stat cards
+        if report.concept_roots:
+            root_name = report.concept_roots[0][0]
+            self.concept_val.setText(f"\"{root_name}\"")
+            self.concept_val.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 16px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        else:
+            self.concept_val.setText("None")
+            self.concept_val.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+
+        tc = report.type_counts()
+        from dataset_sorter.tag_importance import TagType
+        n_concept = tc.get(TagType.CONCEPT_CORE, 0) + tc.get(TagType.CONCEPT_DETAIL, 0)
+        n_caption = tc.get(TagType.CAPTION, 0)
+        n_noise = tc.get(TagType.NOISE, 0)
+
+        self.core_val.setText(str(n_concept))
+        self.caption_val.setText(str(n_caption))
+        self.noise_val.setText(str(n_noise))
+
+        if n_concept > 0:
+            self.core_val.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        if n_noise > 0:
+            self.noise_val.setStyleSheet(
+                f"color: {COLORS['danger']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+
+        self.detail_text.setPlainText(report.summary())
+        self._show_view("concept")
+
+    def _show_view(self, view: str):
+        if not self._report:
+            return
+        self.table.setSortingEnabled(False)
+
+        if view == "concept":
+            self._show_concept_view()
+        elif view == "all":
+            self._show_all_view()
+        elif view == "captions":
+            self._show_captions_view()
+        elif view == "noise":
+            self._show_noise_view()
+
+        self.table.setSortingEnabled(True)
+
+    def _show_concept_view(self):
+        """Show concept-related tags — the most important ones."""
+        from dataset_sorter.tag_importance import TagType
+
+        report = self._report
+        concept_types = {TagType.CONCEPT_CORE, TagType.CONCEPT_DETAIL}
+        tags = [
+            (t, tt)
+            for t, tt in report.tag_types.items()
+            if tt in concept_types
+        ]
+        tags.sort(key=lambda x: report.importance_scores.get(x[0], 0), reverse=True)
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Concept Tag", "Type", "Importance", "Count", "Smart Bucket"]
+        )
+        self.table.setRowCount(len(tags))
+
+        core_color = QColor(COLORS["success"])
+        detail_color = QColor(COLORS["accent"])
+        type_labels = {
+            TagType.CONCEPT_CORE: "CORE",
+            TagType.CONCEPT_DETAIL: "detail",
+        }
+
+        for row, (tag, tag_type) in enumerate(tags):
+            item = QTableWidgetItem(tag)
+            if tag_type == TagType.CONCEPT_CORE:
+                item.setForeground(core_color)
+            else:
+                item.setForeground(detail_color)
+            self.table.setItem(row, 0, item)
+
+            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type))
+            if tag_type == TagType.CONCEPT_CORE:
+                type_item.setForeground(core_color)
+            self.table.setItem(row, 1, type_item)
+
+            imp = report.importance_scores.get(tag, 0)
+            imp_item = QTableWidgetItem()
+            imp_item.setData(Qt.ItemDataRole.DisplayRole, round(imp, 3))
+            self.table.setItem(row, 2, imp_item)
+
+            count = self._tag_counts.get(tag, 0)
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, count)
+            self.table.setItem(row, 3, count_item)
+
+            bucket = report.smart_buckets.get(tag, 0)
+            bucket_item = QTableWidgetItem()
+            bucket_item.setData(Qt.ItemDataRole.DisplayRole, bucket)
+            self.table.setItem(row, 4, bucket_item)
+
+    def _show_all_view(self):
+        """Show all tags sorted by importance."""
+        report = self._report
+        from dataset_sorter.tag_importance import TagType
+
+        tags = sorted(
+            report.importance_scores.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )[:500]
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Tag", "Type", "Importance", "Count", "Smart Bucket"]
+        )
+        self.table.setRowCount(len(tags))
+
+        type_colors = {
+            TagType.CONCEPT_CORE: QColor(COLORS["success"]),
+            TagType.CONCEPT_DETAIL: QColor(COLORS["accent"]),
+            TagType.NOISE: QColor(COLORS["danger"]),
+            TagType.CAPTION: QColor(COLORS["text_muted"]),
+        }
+
+        type_short = {
+            TagType.CONCEPT_CORE: "CONCEPT",
+            TagType.CONCEPT_DETAIL: "concept-detail",
+            TagType.VISUAL_DETAIL: "visual",
+            TagType.COMPOSITION: "composition",
+            TagType.GENERIC: "generic",
+            TagType.CAPTION: "caption",
+            TagType.NOISE: "NOISE",
+        }
+
+        for row, (tag, imp) in enumerate(tags):
+            tag_type = report.tag_types.get(tag, TagType.VISUAL_DETAIL)
+            color = type_colors.get(tag_type)
+
+            tag_item = QTableWidgetItem(tag)
+            if color:
+                tag_item.setForeground(color)
+            self.table.setItem(row, 0, tag_item)
+
+            type_item = QTableWidgetItem(type_short.get(tag_type, tag_type))
+            if color:
+                type_item.setForeground(color)
+            self.table.setItem(row, 1, type_item)
+
+            imp_item = QTableWidgetItem()
+            imp_item.setData(Qt.ItemDataRole.DisplayRole, round(imp, 3))
+            self.table.setItem(row, 2, imp_item)
+
+            count = self._tag_counts.get(tag, 0)
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, count)
+            self.table.setItem(row, 3, count_item)
+
+            bucket = report.smart_buckets.get(tag, 0)
+            bucket_item = QTableWidgetItem()
+            bucket_item.setData(Qt.ItemDataRole.DisplayRole, bucket)
+            self.table.setItem(row, 4, bucket_item)
+
+    def _show_captions_view(self):
+        """Show caption-style tags with their matching real tags."""
+        report = self._report
+        captions = report.caption_tags
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Caption Tag", "Matches Real Tag", "Count", "Action", ""]
+        )
+        self.table.setRowCount(len(captions))
+
+        match_color = QColor(COLORS["success"])
+        no_match_color = QColor(COLORS["text_muted"])
+
+        for row, (tag, count, match) in enumerate(captions):
+            self.table.setItem(row, 0, QTableWidgetItem(tag))
+
+            if match:
+                match_item = QTableWidgetItem(match)
+                match_item.setForeground(match_color)
+            else:
+                match_item = QTableWidgetItem("(no match)")
+                match_item.setForeground(no_match_color)
+            self.table.setItem(row, 1, match_item)
+
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, count)
+            self.table.setItem(row, 2, count_item)
+
+            action = "Delete (redundant)" if match else "Delete (sentence)"
+            self.table.setItem(row, 3, QTableWidgetItem(action))
+            self.table.setItem(row, 4, QTableWidgetItem(""))
+
+        self.detail_text.setPlainText(
+            f"{len(captions)} caption-style tags found.\n"
+            "These are full sentences that shouldn't be tags. Tags matching a "
+            "real concept tag are redundant and can be safely removed.\n"
+            "Click 'Clean Noise & Captions' to remove them all."
+        )
+
+    def _show_noise_view(self):
+        """Show noise and generic tags."""
+        from dataset_sorter.tag_importance import TagType
+
+        report = self._report
+        noise_types = {TagType.NOISE, TagType.GENERIC}
+        tags = [
+            (t, tt)
+            for t, tt in report.tag_types.items()
+            if tt in noise_types
+        ]
+        tags.sort(key=lambda x: self._tag_counts.get(x[0], 0), reverse=True)
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Tag", "Type", "Importance", "Count", "Action"]
+        )
+        self.table.setRowCount(len(tags))
+
+        noise_color = QColor(COLORS["danger"])
+        generic_color = QColor(COLORS["text_muted"])
+
+        type_labels = {TagType.NOISE: "NOISE", TagType.GENERIC: "generic"}
+
+        for row, (tag, tag_type) in enumerate(tags):
+            color = noise_color if tag_type == TagType.NOISE else generic_color
+
+            tag_item = QTableWidgetItem(tag)
+            tag_item.setForeground(color)
+            self.table.setItem(row, 0, tag_item)
+
+            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type))
+            type_item.setForeground(color)
+            self.table.setItem(row, 1, type_item)
+
+            imp = report.importance_scores.get(tag, 0)
+            imp_item = QTableWidgetItem()
+            imp_item.setData(Qt.ItemDataRole.DisplayRole, round(imp, 3))
+            self.table.setItem(row, 2, imp_item)
+
+            count = self._tag_counts.get(tag, 0)
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, count)
+            self.table.setItem(row, 3, count_item)
+
+            action = "Remove" if tag_type == TagType.NOISE else "Low priority"
+            self.table.setItem(row, 4, QTableWidgetItem(action))
+
+        self.detail_text.setPlainText(
+            f"{len(tags)} noise/generic tags found.\n"
+            "NOISE tags are metadata, quality markers, and booru junk — remove them.\n"
+            "GENERIC tags are things the base model already knows (indoors, shirt, etc.) — "
+            "they add little training value but aren't harmful."
+        )
+
+    def _apply_smart_buckets(self):
+        """Emit smart buckets to replace frequency-based bucketing."""
+        if self._report and self._report.smart_buckets:
+            self.apply_smart_buckets.emit(self._report.smart_buckets)
+            self.detail_text.setPlainText(
+                "Smart buckets applied!\n"
+                "Concept tags now get low buckets (high training priority).\n"
+                "Noise and generic tags get high buckets."
+            )
+
+    def _apply_cleaning(self):
+        """Emit noise/caption tags for deletion."""
+        if not self._report:
+            return
+        from dataset_sorter.tag_importance import TagType
+
+        # Collect noise tags for deletion
+        to_delete = set()
+        for tag, tt in self._report.tag_types.items():
+            if tt == TagType.NOISE:
+                to_delete.add(tag)
+
+        # Collect caption tags that have a matching real tag
+        caption_conversions = []
+        for tag, count, match in self._report.caption_tags:
+            if match:
+                caption_conversions.append((tag, match))
+            else:
+                # Caption with no match -> just delete
+                to_delete.add(tag)
+
+        self.apply_tag_cleaning.emit(to_delete, caption_conversions)
+        self.detail_text.setPlainText(
+            f"Cleaning applied!\n"
+            f"  Deleted: {len(to_delete)} noise/caption tags\n"
+            f"  Consolidated: {len(caption_conversions)} caption -> real tag"
+        )

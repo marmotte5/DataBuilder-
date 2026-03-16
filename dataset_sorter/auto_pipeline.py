@@ -25,6 +25,7 @@ from dataset_sorter.tag_specificity import (
     analyze_tag_specificity,
     rank_image_tags_by_specificity,
 )
+from dataset_sorter.tag_importance import analyze_tag_importance
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ class PipelineAnalysis:
         self.common_tags: list[str] = []
         self.near_duplicates: list[tuple[str, str, float]] = []
         self.specificity_data: dict = {}
+        self.importance_report = None  # TagImportanceReport
         self.total_images: int = 0
         self.total_tags: int = 0
         self.tags_to_remove: set[str] = set()
@@ -187,6 +189,16 @@ class PipelineAnalysis:
             lines.append(f"Near-duplicate tag pairs: {len(self.near_duplicates)}")
             for a, b, sim in self.near_duplicates[:10]:
                 lines.append(f"  - \"{a}\" ≈ \"{b}\" ({sim:.0%})")
+            lines.append("")
+
+        # Importance analysis
+        if self.importance_report:
+            r = self.importance_report
+            lines.append(f"Concept root detected: \"{r.concept_root}\"" if r.concept_root else "No concept root detected")
+            concept_count = sum(1 for c in r.classifications.values() if c.name.startswith("CONCEPT"))
+            lines.append(f"Concept tags: {concept_count}")
+            if r.caption_tags:
+                lines.append(f"Caption-style tags: {len(r.caption_tags)}")
             lines.append("")
 
         stats = self.specificity_data.get("stats", {})
@@ -255,6 +267,21 @@ class AutoPipeline:
         a.specificity_data = analyze_tag_specificity(
             self.entries, active_counts, self.deleted_tags,
         )
+
+        # 6. Tag importance analysis (concept detection)
+        a.importance_report = analyze_tag_importance(
+            self.entries, self.tag_counts, self.deleted_tags,
+        )
+
+        # Protect concept tags from "common" removal — being common is
+        # GOOD for concept tags (the model needs them on every image)
+        if a.importance_report and a.importance_report.concept_root:
+            from dataset_sorter.tag_importance import TagType
+            concept_tags = {
+                tag for tag, ttype in a.importance_report.classifications.items()
+                if ttype in (TagType.CONCEPT_CORE, TagType.CONCEPT_DETAIL)
+            }
+            a.common_tags = [t for t in a.common_tags if t not in concept_tags]
 
         # Build removal set
         a.tags_to_remove = set(a.noise_tags) | set(a.common_tags)

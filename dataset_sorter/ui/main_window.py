@@ -297,6 +297,8 @@ class MainWindow(QMainWindow):
 
         self.dataset_tab.apply_tag_fix.connect(self._apply_spellcheck_fix)
         self.dataset_tab.navigate_to_image.connect(self._navigate_to_image)
+        self.dataset_tab.apply_smart_buckets.connect(self._apply_smart_buckets_from_importance)
+        self.dataset_tab.apply_importance_cleaning.connect(self._apply_importance_cleaning)
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
@@ -1074,6 +1076,51 @@ class MainWindow(QMainWindow):
         """Refresh UI after tag reorder from pipeline."""
         self._rebuild_tag_index()
         self._refresh_all_ui()
+
+    def _apply_smart_buckets_from_importance(self, bucket_map: dict):
+        """Apply smart importance-based bucket assignments as manual overrides."""
+        self._push_undo("Smart bucket assignment")
+        applied = 0
+        for tag, bucket in bucket_map.items():
+            if tag in self.tag_to_entries:
+                for idx in self.tag_to_entries[tag]:
+                    self.manual_overrides[idx] = bucket
+                    self.entries[idx].assigned_bucket = bucket
+                applied += 1
+        self._refresh_all_ui()
+        self.statusBar().showMessage(
+            f"Smart buckets applied: {applied} tags re-bucketed by importance."
+        )
+
+    def _apply_importance_cleaning(self, delete_tags: set, caption_conversions: list):
+        """Apply tag cleaning from importance analysis.
+
+        delete_tags: set of noise/generic tags to soft-delete
+        caption_conversions: list of (caption_text, replacement_tag) pairs
+        """
+        self._push_undo("Importance-based cleaning")
+
+        # Soft-delete noise tags
+        self.deleted_tags.update(delete_tags)
+
+        # Apply caption conversions (rename caption-style tags to real tags)
+        for caption_text, real_tag in caption_conversions:
+            for idx in list(self.tag_to_entries.get(caption_text, [])):
+                entry = self.entries[idx]
+                if real_tag in entry.tags:
+                    # Real tag already present — just remove the caption
+                    entry.tags = [t for t in entry.tags if t != caption_text]
+                else:
+                    # Replace caption with the real tag
+                    entry.tags = [real_tag if t == caption_text else t for t in entry.tags]
+
+        self._after_tag_edit()
+        parts = []
+        if delete_tags:
+            parts.append(f"{len(delete_tags)} noise tags removed")
+        if caption_conversions:
+            parts.append(f"{len(caption_conversions)} captions consolidated")
+        self.statusBar().showMessage(f"Importance cleaning: {', '.join(parts)}.")
 
     def _apply_pipeline_training(self, config, model_path: str, output_dir: str):
         """Apply config and start training from pipeline."""
