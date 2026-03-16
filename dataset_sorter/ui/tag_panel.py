@@ -177,7 +177,7 @@ class TagPanel(QWidget):
         layout.setSpacing(10)
 
         header_row = QHBoxLayout()
-        header = QLabel("Dataset Tags")
+        header = QLabel("Your Tags")
         header.setStyleSheet(SECTION_HEADER_STYLE)
         header_row.addWidget(header)
         header_row.addStretch()
@@ -186,9 +186,24 @@ class TagPanel(QWidget):
         header_row.addWidget(self.tag_count_badge)
         layout.addLayout(header_row)
 
+        # Help hint for beginners
+        self.help_hint = QLabel(
+            "Tags are text labels describing your images. "
+            "Click a tag to see its images. Ctrl+click to select multiple."
+        )
+        self.help_hint.setWordWrap(True)
+        self.help_hint.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; "
+            f"background: transparent; padding: 0 0 4px 0;"
+        )
+        layout.addWidget(self.help_hint)
+
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("Search tags...")
-        self.filter_input.setToolTip("Filter tags by name (150 ms debounce)")
+        self.filter_input.setPlaceholderText("Type to search for a tag...")
+        self.filter_input.setToolTip(
+            "Filter the tag list by typing part of a tag name.\n"
+            "The list updates automatically as you type."
+        )
         self.filter_input.setClearButtonEnabled(True)
         self.filter_input.textChanged.connect(self._on_filter_text_changed)
         layout.addWidget(self.filter_input)

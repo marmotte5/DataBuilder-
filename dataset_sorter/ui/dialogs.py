@@ -15,7 +15,7 @@ class DryRunDialog(QDialog):
     def __init__(self, bucket_summary, total_images, hidden_empty, parent=None):
         """Build the dry-run dialog showing a table of bucket assignments and image counts."""
         super().__init__(parent)
-        self.setWindowTitle("Export Summary")
+        self.setWindowTitle("Export Preview — What Will Be Created")
         self.setMinimumSize(580, 480)
         self.accepted_export = False
 
@@ -23,16 +23,24 @@ class DryRunDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        info = QLabel(f"{total_images} images in {len(bucket_summary)} active buckets")
+        info = QLabel(f"{total_images} images will be organized into {len(bucket_summary)} folders")
         info.setStyleSheet(
             f"color: {COLORS['text']}; font-size: 16px; font-weight: 700; "
             f"background: transparent;"
         )
         layout.addWidget(info)
 
+        explain = QLabel(
+            "Below is a preview of how your images will be sorted into folders. "
+            "Click \"Start Export\" to create the folders, or \"Cancel\" to go back and make changes."
+        )
+        explain.setWordWrap(True)
+        explain.setStyleSheet(MUTED_LABEL_STYLE)
+        layout.addWidget(explain)
+
         table = QTableWidget()
         table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Folder", "Name", "Images"])
+        table.setHorizontalHeaderLabels(["Folder Path", "Bucket Name", "Number of Images"])
         table.setRowCount(len(bucket_summary))
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().setVisible(False)

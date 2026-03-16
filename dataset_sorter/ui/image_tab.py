@@ -79,7 +79,7 @@ class ImageTab(QWidget):
         nav = QHBoxLayout()
         nav.setSpacing(8)
         self.btn_prev = QPushButton("Previous")
-        self.btn_prev.setToolTip("Go to previous image")
+        self.btn_prev.setToolTip("Show the previous image in your dataset")
         self.btn_prev.setStyleSheet(NAV_BUTTON_STYLE)
         self.btn_prev.clicked.connect(self._go_prev)
         nav.addWidget(self.btn_prev)
@@ -88,12 +88,15 @@ class ImageTab(QWidget):
         self.jump_spinner = QSpinBox()
         self.jump_spinner.setMinimum(1)
         self.jump_spinner.setMaximum(1)
-        self.jump_spinner.setToolTip("Jump to image number")
+        self.jump_spinner.setToolTip(
+            "Type a number and press Enter to jump directly to that image.\n"
+            "Useful when you have hundreds or thousands of images."
+        )
         self.jump_spinner.setMaximumWidth(100)
         self.jump_spinner.editingFinished.connect(self._on_jump)
         nav.addWidget(self.jump_spinner)
 
-        self.index_label = QLabel("0 / 0")
+        self.index_label = QLabel("Scan your images to browse them here")
         self.index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.index_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 600; "
@@ -102,7 +105,7 @@ class ImageTab(QWidget):
         nav.addWidget(self.index_label, 1)
 
         self.btn_next = QPushButton("Next")
-        self.btn_next.setToolTip("Go to next image")
+        self.btn_next.setToolTip("Show the next image in your dataset")
         self.btn_next.setStyleSheet(NAV_BUTTON_STYLE)
         self.btn_next.clicked.connect(self._go_next)
         nav.addWidget(self.btn_next)
@@ -134,24 +137,28 @@ class ImageTab(QWidget):
 
         ov_row = QHBoxLayout()
         ov_row.setSpacing(8)
-        lbl = QLabel("Bucket:")
+        lbl = QLabel("Move to bucket:")
         lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 500; "
             f"font-size: 12px; background: transparent;"
         )
+        lbl.setToolTip("Override which bucket folder this specific image goes into")
         ov_row.addWidget(lbl)
         self.override_spinner = QSpinBox()
         self.override_spinner.setRange(0, MAX_BUCKETS)
         self.override_spinner.setSpecialValueText("Auto")
-        self.override_spinner.setToolTip("Select bucket number for this image (0 = auto)")
+        self.override_spinner.setToolTip(
+            "Pick a bucket number for this image.\n"
+            "\"Auto\" lets the app decide based on the image's tags."
+        )
         ov_row.addWidget(self.override_spinner)
-        bf = QPushButton("Force Bucket")
-        bf.setToolTip("Force this image into the selected bucket")
+        bf = QPushButton("Apply")
+        bf.setToolTip("Move this image to the selected bucket number")
         bf.setStyleSheet(ACCENT_BUTTON_STYLE)
         bf.clicked.connect(self._on_force)
         ov_row.addWidget(bf)
         brst = QPushButton("Reset")
-        brst.setToolTip("Remove forced bucket and revert to tag-based assignment")
+        brst.setToolTip("Remove the override and let the app auto-assign this image")
         brst.clicked.connect(self._on_reset)
         ov_row.addWidget(brst)
         layout.addLayout(ov_row)

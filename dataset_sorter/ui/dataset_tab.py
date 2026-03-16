@@ -59,45 +59,54 @@ class DatasetTab(QWidget):
 
         # 1. Caption Preview
         self.caption_section = CaptionPreviewSection()
-        tabs.addTab(self.caption_section, "Caption Preview")
+        tabs.addTab(self.caption_section, "Captions")
+        tabs.setTabToolTip(0, "Preview what your image captions look like after shuffling and dropout")
 
         # 2. Token Counts
         self.token_section = TokenCountSection()
         tabs.addTab(self.token_section, "Token Counts")
+        tabs.setTabToolTip(1, "Check how long your captions are (models have token limits)")
 
         # 3. Tag Histogram
         self.histogram_section = TagHistogramSection()
-        tabs.addTab(self.histogram_section, "Tag Histogram")
+        tabs.addTab(self.histogram_section, "Tag Chart")
+        tabs.setTabToolTip(2, "Visual chart showing how often each tag appears in your dataset")
 
         # 4. Spell Check
         self.spellcheck_section = SpellCheckSection()
         self.spellcheck_section.apply_fix.connect(self.apply_tag_fix.emit)
         tabs.addTab(self.spellcheck_section, "Spell Check")
+        tabs.setTabToolTip(3, "Find and fix typos in your tags automatically")
 
         # 5. Augmentation
         self.augmentation_section = AugmentationSection()
         tabs.addTab(self.augmentation_section, "Augmentation")
+        tabs.setTabToolTip(4, "Add variations to your images (flip, rotate, crop) to increase dataset size")
 
         # 6. Duplicates
         self.duplicate_section = DuplicateSection()
-        tabs.addTab(self.duplicate_section, "Duplicates")
+        tabs.addTab(self.duplicate_section, "Find Duplicates")
+        tabs.setTabToolTip(5, "Detect duplicate or very similar images in your dataset")
 
         # 7. Concept Coverage
         self.concept_section = ConceptCoverageSection()
         self.concept_section.navigate_to_image.connect(self.navigate_to_image.emit)
-        tabs.addTab(self.concept_section, "Concept Coverage")
+        tabs.addTab(self.concept_section, "Concepts")
+        tabs.setTabToolTip(6, "See what concepts (subjects, styles) your dataset covers")
 
         # 8. Tag Specificity
         self.specificity_section = TagSpecificitySection()
         self.specificity_section.navigate_to_image.connect(self.navigate_to_image.emit)
-        tabs.addTab(self.specificity_section, "Tag Specificity")
+        tabs.addTab(self.specificity_section, "Tag Rarity")
+        tabs.setTabToolTip(7, "Analyze which tags are rare vs. common in your dataset")
 
         # 9. Tag Importance (smart concept-aware scoring)
         self.importance_section = TagImportanceSection()
         self.importance_section.navigate_to_image.connect(self.navigate_to_image.emit)
         self.importance_section.apply_smart_buckets.connect(self.apply_smart_buckets.emit)
         self.importance_section.apply_tag_cleaning.connect(self.apply_importance_cleaning.emit)
-        tabs.addTab(self.importance_section, "Tag Importance")
+        tabs.addTab(self.importance_section, "Smart Sorting")
+        tabs.setTabToolTip(8, "AI-powered tag scoring and automatic bucket assignment")
 
         layout.addWidget(tabs)
 

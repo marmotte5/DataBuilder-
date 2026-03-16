@@ -48,6 +48,7 @@ from dataset_sorter.ui.auto_pipeline_dialog import AutoPipelineDialog
 from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 from dataset_sorter.ui.toast import show_toast
+from dataset_sorter.ui.help_tab import HelpTab
 
 log = logging.getLogger(__name__)
 
@@ -128,8 +129,8 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._load_progress_state()
         self.statusBar().showMessage(
-            "Ready. Select a source folder and start scanning. "
-            "(Ctrl+S save, Ctrl+O load, Ctrl+T theme, Ctrl+E export)"
+            "Ready! Start by choosing a source folder above, then click \"Scan Images\". "
+            "See the \"Getting Started\" tab for a full guide."
         )
 
     def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
@@ -146,31 +147,59 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
+        # ── Workflow guide banner ──
+        self.workflow_banner = QLabel(
+            "How to use:  "
+            "1. Choose your image folder below  "
+            "2. Click \"Scan\" to find all images and tags  "
+            "3. Review and edit tags in the panels below  "
+            "4. Click \"Export\" to save your organized dataset"
+        )
+        self.workflow_banner.setStyleSheet(
+            f"background-color: {COLORS['accent_subtle']}; "
+            f"color: {COLORS['accent_hover']}; "
+            f"border: 1px solid {COLORS['accent']}; border-radius: 10px; "
+            f"padding: 10px 18px; font-size: 12px; font-weight: 600;"
+        )
+        self.workflow_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.workflow_banner.setWordWrap(True)
+        root.addWidget(self.workflow_banner)
+
         # Top bar — paths (drag-and-drop enabled)
         top = QHBoxLayout()
         top.setSpacing(10)
-        top.addWidget(self._label("Source"))
+        src_label = self._label("Source Folder")
+        src_label.setToolTip("Where your images and .txt tag files are stored")
+        top.addWidget(src_label)
         self.source_input = DragDropLineEdit()
-        self.source_input.setPlaceholderText("Source directory path (or drag & drop)...")
-        self.source_input.setToolTip("Path to the source image directory. Drag and drop a folder here.")
+        self.source_input.setPlaceholderText("Your image folder — drag & drop or click Browse...")
+        self.source_input.setToolTip(
+            "The folder containing your training images (.png, .jpg, .webp) "
+            "and their text description files (.txt). You can drag a folder here."
+        )
         top.addWidget(self.source_input, 2)
         btn_src = QPushButton("Browse")
-        btn_src.setToolTip("Browse for source directory")
+        btn_src.setToolTip("Open a folder picker to choose your image folder")
         btn_src.clicked.connect(self._browse_source)
         top.addWidget(btn_src)
-        top.addWidget(self._label("Output"))
+        out_label = self._label("Output Folder")
+        out_label.setToolTip("Where the organized dataset will be created (your originals are never changed)")
+        top.addWidget(out_label)
         self.output_input = DragDropLineEdit()
-        self.output_input.setPlaceholderText("Output directory path (or drag & drop)...")
-        self.output_input.setToolTip("Path for exported dataset. Drag and drop a folder here.")
+        self.output_input.setPlaceholderText("Where to save results — drag & drop or click Browse...")
+        self.output_input.setToolTip(
+            "An empty folder where the organized dataset will be exported. "
+            "Images are copied here — your originals stay untouched."
+        )
         top.addWidget(self.output_input, 2)
         btn_out = QPushButton("Browse")
-        btn_out.setToolTip("Browse for output directory")
+        btn_out.setToolTip("Open a folder picker to choose the output folder")
         btn_out.clicked.connect(self._browse_output)
         top.addWidget(btn_out)
 
         # Theme toggle
         self.btn_theme = QPushButton("Light")
-        self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
+        self.btn_theme.setToolTip("Switch between dark and light appearance (Ctrl+T)")
         self.btn_theme.setMaximumWidth(60)
         self.btn_theme.clicked.connect(self._toggle_theme)
         top.addWidget(self.btn_theme)
@@ -181,23 +210,25 @@ class MainWindow(QMainWindow):
         scan_bar = QHBoxLayout()
         scan_bar.setSpacing(8)
 
-        wlbl = QLabel("Workers:")
+        wlbl = QLabel("Scan Speed:")
+        wlbl.setToolTip("More workers = faster scanning on fast drives (SSD)")
         wlbl.setStyleSheet(MUTED_LABEL_STYLE)
         scan_bar.addWidget(wlbl)
         self.workers_spinner = QSpinBox()
         self.workers_spinner.setRange(1, 32)
         self.workers_spinner.setValue(DEFAULT_NUM_WORKERS)
         self.workers_spinner.setToolTip(
-            "Number of parallel threads for scanning. "
-            "Higher = faster on large datasets with SSDs."
+            "How many images to process at the same time.\n"
+            "Higher number = faster scanning, but uses more CPU.\n"
+            "Default (4) works well for most computers."
         )
         self.workers_spinner.setMaximumWidth(70)
         scan_bar.addWidget(self.workers_spinner)
 
         self.gpu_checkbox = QCheckBox("GPU validation")
         self.gpu_checkbox.setToolTip(
-            "Use GPU to validate images during scan (requires torch + torchvision). "
-            "Catches corrupt files early. Works with CUDA and Apple Metal."
+            "Optional: Use your graphics card to check for corrupted images.\n"
+            "Leave unchecked if you're not sure — scanning works fine without it."
         )
         self.gpu_checkbox.setEnabled(self._gpu_available)
         if not self._gpu_available:
@@ -209,14 +240,17 @@ class MainWindow(QMainWindow):
         scan_bar.addStretch()
 
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setToolTip("Cancel the current scan or export (Escape)")
+        self.btn_cancel.setToolTip("Stop the current scanning or exporting process (Escape)")
         self.btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_cancel.setVisible(False)
         self.btn_cancel.clicked.connect(self._cancel_operation)
         scan_bar.addWidget(self.btn_cancel)
 
-        self.btn_scan = QPushButton("Scan")
-        self.btn_scan.setToolTip("Scan the source directory for images and tags (Ctrl+R)")
+        self.btn_scan = QPushButton("Scan Images")
+        self.btn_scan.setToolTip(
+            "Read all images and tags from your source folder.\n"
+            "This is always the first step! (Shortcut: Ctrl+R)"
+        )
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_scan.clicked.connect(self._start_scan)
         scan_bar.addWidget(self.btn_scan)
@@ -224,8 +258,8 @@ class MainWindow(QMainWindow):
 
         # Security banner
         banner = QLabel(
-            "READ-ONLY — Source files are never modified, renamed, moved or "
-            "deleted. All operations happen in the output directory only."
+            "Your files are safe! This app NEVER modifies, renames, moves, or "
+            "deletes your original images. Everything is saved to the output folder only."
         )
         banner.setStyleSheet(SECURITY_BANNER_STYLE)
         banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -245,18 +279,36 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.override_panel)
 
         right_tabs = QTabWidget()
+
+        # Help tab first — so beginners see it immediately
+        self.help_tab = HelpTab()
+        right_tabs.addTab(self.help_tab, "Getting Started")
+        right_tabs.setTabToolTip(0, "New here? Start with this beginner-friendly guide!")
+
         self.preview_tab = PreviewTab()
         right_tabs.addTab(self.preview_tab, "Preview")
+        right_tabs.setTabToolTip(1, "See thumbnail images for the selected tag")
+
         self.reco_tab = RecoTab()
         right_tabs.addTab(self.reco_tab, "Recommendations")
+        right_tabs.setTabToolTip(2, "Get suggested training settings for your model and GPU")
+
         self.image_tab = ImageTab()
-        right_tabs.addTab(self.image_tab, "Images")
+        right_tabs.addTab(self.image_tab, "Image Browser")
+        right_tabs.setTabToolTip(3, "Browse through all your images one by one")
+
         self.dataset_tab = DatasetTab()
-        right_tabs.addTab(self.dataset_tab, "Dataset Mgmt")
+        right_tabs.addTab(self.dataset_tab, "Dataset Analysis")
+        right_tabs.setTabToolTip(4, "Analyze tags, find duplicates, check spelling, and more")
+
         self.training_tab = TrainingTab()
         right_tabs.addTab(self.training_tab, "Training")
+        right_tabs.setTabToolTip(5, "Configure and run LoRA/model training directly")
+
         self.generate_tab = GenerateTab()
         right_tabs.addTab(self.generate_tab, "Generate")
+        right_tabs.setTabToolTip(6, "Test your trained model by generating images")
+
         splitter.addWidget(right_tabs)
 
         splitter.setSizes([500, 300, 400])
@@ -264,22 +316,29 @@ class MainWindow(QMainWindow):
 
         # Bottom bar
         bottom = QHBoxLayout()
-        self.btn_dry = QPushButton("Dry Run (Summary)")
-        self.btn_dry.setToolTip("Preview how images will be distributed across buckets (Ctrl+D)")
+        self.btn_dry = QPushButton("Preview Export")
+        self.btn_dry.setToolTip(
+            "See a summary of how your images will be organized before exporting.\n"
+            "No files are created — it's just a preview. (Shortcut: Ctrl+D)"
+        )
         self.btn_dry.clicked.connect(self._dry_run)
         bottom.addWidget(self.btn_dry)
 
         self.btn_auto_pipeline = QPushButton("One-Click Pipeline")
         self.btn_auto_pipeline.setToolTip(
-            "Auto clean tags, optimize weights, and launch training — all in one click"
+            "Automate everything: clean tags, optimize settings, and start training.\n"
+            "Great for beginners who want quick results without manual setup."
         )
         self.btn_auto_pipeline.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_auto_pipeline.clicked.connect(self._open_auto_pipeline)
         bottom.addWidget(self.btn_auto_pipeline)
 
         bottom.addStretch()
-        self.btn_export = QPushButton("Export (copy only)")
-        self.btn_export.setToolTip("Export dataset to output directory — copies images into bucket folders (Ctrl+E)")
+        self.btn_export = QPushButton("Export Dataset")
+        self.btn_export.setToolTip(
+            "Copy your images into organized bucket folders in the output directory.\n"
+            "Your original files are never touched — only copies are made. (Shortcut: Ctrl+E)"
+        )
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_export.clicked.connect(self._start_export)
         bottom.addWidget(self.btn_export)
@@ -488,7 +547,9 @@ class MainWindow(QMainWindow):
         """Validate the source directory and launch a background ScanWorker to discover images and tags."""
         source = self.source_input.text().strip()
         if not source or not Path(source).is_dir():
-            self.statusBar().showMessage("Error: invalid source directory.")
+            self.statusBar().showMessage(
+                "Please enter a valid source folder path above before scanning."
+            )
             return
 
         # Clean up previous worker (cancel first, then wait with timeout)
@@ -544,7 +605,10 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(True)
 
         if not entries:
-            self.statusBar().showMessage("Scan returned no results (cancelled or empty).")
+            self.statusBar().showMessage(
+                "No images found. Make sure your source folder contains "
+                ".png, .jpg, or .webp images with matching .txt tag files."
+            )
             return
 
         self.statusBar().showMessage(f"Processing {len(entries)} entries...")
@@ -727,17 +791,24 @@ class MainWindow(QMainWindow):
     def _on_tag_selection(self, tags):
         """Update the override panel info and preview when the tag selection changes."""
         if not tags:
-            self.override_panel.set_selected_info("No tag selected")
+            self.override_panel.set_selected_info("Click a tag in the left panel to get started")
             self.preview_tab.clear()
             return
         if len(tags) == 1:
             tag = tags[0]
             count = self.tag_counts.get(tag, 0)
-            self.override_panel.set_selected_info(f"Tag: {tag} ({count} occurrences)")
+            bucket = self.tag_auto_buckets.get(tag, "?")
+            override = self.manual_overrides.get(tag)
+            info = f"Tag: \"{tag}\" — appears in {count} image(s), bucket {bucket}"
+            if override:
+                info += f" (manually set to {override})"
+            self.override_panel.set_selected_info(info)
             indices = self.tag_to_entries.get(tag, [])
             self.preview_tab.update_preview(tag, indices, self.entries)
         else:
-            self.override_panel.set_selected_info(f"{len(tags)} tags selected")
+            self.override_panel.set_selected_info(
+                f"{len(tags)} tags selected — use the tools below to edit them all at once"
+            )
             self.preview_tab.clear()
 
     # -- Overrides --
@@ -1040,7 +1111,11 @@ class MainWindow(QMainWindow):
     def _update_recommendations(self):
         """Recalculate training recommendations based on current dataset statistics and display them."""
         if not self.entries:
-            self.reco_tab.set_output("Scan a dataset to get recommendations.")
+            self.reco_tab.set_output(
+                "Scan your images first (Step 2), then click \"Get Recommendations\".\n\n"
+                "The app will analyze your dataset and suggest optimal training settings\n"
+                "based on your model type, GPU memory, and dataset size."
+            )
             return
         bucket_counts = Counter(e.assigned_bucket for e in self.entries)
         config = recommender.recommend(

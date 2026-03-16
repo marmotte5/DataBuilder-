@@ -22,7 +22,9 @@ class PreviewTab(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        self.info_label = QLabel("Select a tag to view images.")
+        self.info_label = QLabel(
+            "Click on any tag in the left panel to see thumbnail previews of its images here."
+        )
         self.info_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 13px; "
             f"padding: 8px 12px; background: {COLORS['surface']}; "
@@ -91,7 +93,7 @@ class PreviewTab(QWidget):
     def clear(self):
         """Clear the thumbnail grid and reset the info label to default text."""
         self._clear()
-        self.info_label.setText("Select a tag to view images.")
+        self.info_label.setText("Click on any tag in the left panel to see thumbnail previews of its images here.")
 
     def _clear(self):
         """Remove and delete all widgets from the thumbnail grid."""

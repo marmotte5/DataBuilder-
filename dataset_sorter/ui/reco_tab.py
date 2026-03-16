@@ -32,18 +32,37 @@ class RecoTab(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
+        # Intro text
+        intro = QLabel(
+            "Get recommended training settings based on your model, GPU, and dataset. "
+            "Not sure what to pick? The defaults work well for most people."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            f"background: transparent; padding: 0 0 4px 0;"
+        )
+        layout.addWidget(intro)
+
         # Row 1: Model & VRAM
         row1 = QHBoxLayout()
         row1.setSpacing(10)
-        row1.addWidget(self._field_label("Model"))
+        row1.addWidget(self._field_label("AI Model"))
         self.model_combo = QComboBox()
-        self.model_combo.setToolTip("Select the model architecture for training recommendations")
+        self.model_combo.setToolTip(
+            "Which AI model are you training?\n"
+            "If unsure, SDXL LoRA is a popular choice for image generation."
+        )
         self.model_combo.addItems(MODEL_TYPE_LABELS)
         self.model_combo.setCurrentIndex(2)  # SDXL LoRA default
         row1.addWidget(self.model_combo, 1)
-        row1.addWidget(self._field_label("VRAM"))
+        row1.addWidget(self._field_label("GPU Memory"))
         self.vram_combo = QComboBox()
-        self.vram_combo.setToolTip("Your GPU VRAM — recommendations adjust batch size and precision accordingly")
+        self.vram_combo.setToolTip(
+            "How much video memory (VRAM) does your GPU have?\n"
+            "Check in Task Manager (Windows) or nvidia-smi (Linux).\n"
+            "Common: RTX 3060=12GB, RTX 3090/4090=24GB"
+        )
         self.vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
         self.vram_combo.setCurrentIndex(3)  # 24 GB default
         row1.addWidget(self.vram_combo)
@@ -52,13 +71,21 @@ class RecoTab(QWidget):
         # Row 2: Network & Optimizer
         row2 = QHBoxLayout()
         row2.setSpacing(10)
-        row2.addWidget(self._field_label("Network"))
+        row2.addWidget(self._field_label("Network Type"))
         self.network_combo = QComboBox()
+        self.network_combo.setToolTip(
+            "The type of training adapter to use.\n"
+            "LoRA is the most popular and recommended for beginners."
+        )
         for key, label in NETWORK_TYPES.items():
             self.network_combo.addItem(label, key)
         row2.addWidget(self.network_combo, 1)
         row2.addWidget(self._field_label("Optimizer"))
         self.optimizer_combo = QComboBox()
+        self.optimizer_combo.setToolTip(
+            "The math algorithm used during training.\n"
+            "Adafactor is a good default — it adjusts the learning rate automatically."
+        )
         for key, label in OPTIMIZERS.items():
             self.optimizer_combo.addItem(label, key)
         row2.addWidget(self.optimizer_combo, 1)
@@ -68,31 +95,35 @@ class RecoTab(QWidget):
         row3 = QHBoxLayout()
         row3.setSpacing(16)
 
-        self.ema_cpu_check = QCheckBox("EMA CPU offload")
+        self.ema_cpu_check = QCheckBox("Save GPU memory (EMA offload)")
         self.ema_cpu_check.setChecked(True)
         self.ema_cpu_check.setToolTip(
-            "Offload EMA weights to CPU RAM — saves ~2-4 GB VRAM on 24 GB GPUs"
+            "Moves some data to regular RAM to free up GPU memory.\n"
+            "Recommended if you have limited VRAM (saves ~2-4 GB)."
         )
         row3.addWidget(self.ema_cpu_check)
 
-        self.tag_shuffle_check = QCheckBox("Tag shuffle")
+        self.tag_shuffle_check = QCheckBox("Shuffle tags")
         self.tag_shuffle_check.setChecked(True)
         self.tag_shuffle_check.setToolTip(
-            "Shuffle tag order each epoch. Keeps first N tags (trigger word) fixed."
+            "Randomize the order of tags each training round.\n"
+            "Helps the model learn better. Your trigger word stays first."
         )
         row3.addWidget(self.tag_shuffle_check)
 
-        self.cache_latents_check = QCheckBox("Cache latents")
+        self.cache_latents_check = QCheckBox("Speed up training (cache)")
         self.cache_latents_check.setChecked(True)
         self.cache_latents_check.setToolTip(
-            "Pre-compute and cache VAE latents. Saves time on multi-epoch training."
+            "Pre-processes images once and caches the results.\n"
+            "Makes training much faster, especially with many training rounds."
         )
         row3.addWidget(self.cache_latents_check)
 
-        self.fp8_check = QCheckBox("fp8 base model")
+        self.fp8_check = QCheckBox("Low memory mode (fp8)")
         self.fp8_check.setChecked(False)
         self.fp8_check.setToolTip(
-            "Load base model in fp8 quantization — saves ~50% model VRAM"
+            "Load the AI model using less precision to save ~50% GPU memory.\n"
+            "Useful if you have a small GPU (8-12 GB). May slightly reduce quality."
         )
         row3.addWidget(self.fp8_check)
 
@@ -120,18 +151,27 @@ class RecoTab(QWidget):
         btn_row.setSpacing(8)
         btn_row.addStretch()
 
-        self.btn_export_toml = QPushButton("Export TOML")
-        self.btn_export_toml.setToolTip("Export config as OneTrainer-compatible TOML file")
+        self.btn_export_toml = QPushButton("Save as TOML")
+        self.btn_export_toml.setToolTip(
+            "Save settings as a .toml file for OneTrainer.\n"
+            "Use this if you train with OneTrainer."
+        )
         self.btn_export_toml.clicked.connect(self._export_toml)
         btn_row.addWidget(self.btn_export_toml)
 
-        self.btn_export_json = QPushButton("Export JSON")
-        self.btn_export_json.setToolTip("Export config as kohya_ss-compatible JSON file")
+        self.btn_export_json = QPushButton("Save as JSON")
+        self.btn_export_json.setToolTip(
+            "Save settings as a .json file for kohya_ss.\n"
+            "Use this if you train with kohya_ss."
+        )
         self.btn_export_json.clicked.connect(self._export_json)
         btn_row.addWidget(self.btn_export_json)
 
-        self.btn_recalc = QPushButton("Recalculate")
-        self.btn_recalc.setToolTip("Recalculate training recommendations based on current settings")
+        self.btn_recalc = QPushButton("Get Recommendations")
+        self.btn_recalc.setToolTip(
+            "Calculate the best training settings for your choices above.\n"
+            "The results appear in the text box below."
+        )
         self.btn_recalc.setStyleSheet(ACCENT_BUTTON_STYLE)
         btn_row.addWidget(self.btn_recalc)
         layout.addLayout(btn_row)
@@ -147,6 +187,15 @@ class RecoTab(QWidget):
             f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 12px; }}"
         )
         layout.addWidget(self.text_output, 1)
+
+        # Default helpful text
+        self.text_output.setPlainText(
+            "Scan your images first, then click \"Get Recommendations\" above.\n\n"
+            "The app will suggest the best training settings based on:\n"
+            "  - Your chosen model type\n"
+            "  - Your GPU memory\n"
+            "  - The size of your dataset\n"
+        )
 
         # Store last config for export
         self._last_config = None
@@ -190,9 +239,14 @@ class RecoTab(QWidget):
         is_full = model_key.endswith("_full")
         self.network_combo.setEnabled(not is_full)
         if is_full:
-            self.network_combo.setToolTip("Network type is not applicable for full finetune")
+            self.network_combo.setToolTip(
+                "Full fine-tuning trains the entire model, so no adapter network is needed."
+            )
         else:
-            self.network_combo.setToolTip("")
+            self.network_combo.setToolTip(
+                "The type of training adapter to use.\n"
+                "LoRA is the most popular and recommended for beginners."
+            )
 
     def set_output(self, text):
         """Display the given text in the read-only output area."""
