@@ -26,6 +26,7 @@ from dataset_sorter.dataset_management import (
     get_semantic_groups,
     get_augmentation_config,
     get_default_augmentation_state,
+    find_best_images_per_concept,
 )
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SECTION_HEADER_STYLE,
@@ -949,3 +950,429 @@ class DuplicateSection(QWidget):
         self.result_badge.setText(f"{len(duplicates)} pair(s)")
         self.btn_detect.setEnabled(True)
         self._worker = None
+
+
+class _ConceptAnalysisWorker(QThread):
+    """Run concept coverage analysis off the UI thread."""
+
+    finished = pyqtSignal(dict)  # analysis result
+
+    def __init__(self, entries, tag_counts, tag_to_entries, deleted_tags,
+                 top_n, parent=None):
+        super().__init__(parent)
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._tag_to_entries = tag_to_entries
+        self._deleted_tags = deleted_tags
+        self._top_n = top_n
+
+    def run(self):
+        result = find_best_images_per_concept(
+            self._entries,
+            self._tag_counts,
+            self._tag_to_entries,
+            deleted_tags=self._deleted_tags,
+            top_n=self._top_n,
+        )
+        self.finished.emit(result)
+
+
+class ConceptCoverageSection(QWidget):
+    """Automatic concept coverage analysis — finds best images per concept.
+
+    Scores every tag by importance (TF-IDF) and every image by concept
+    richness. For each concept tag, ranks and displays the best
+    representative images. Flags under-represented concepts that may
+    need more training data.
+
+    Runs automatically after scan for hands-free operation.
+    """
+
+    navigate_to_image = pyqtSignal(int)  # index in entries list
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries = []
+        self._tag_counts = Counter()
+        self._tag_to_entries = {}
+        self._deleted_tags = set()
+        self._analysis = None
+        self._worker = None
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = QLabel("Concept Coverage Analysis")
+        header.setStyleSheet(SECTION_HEADER_STYLE)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Automatically identifies the most important concept tags and "
+            "finds the best representative images for each. Under-represented "
+            "concepts are flagged so you can add more training data."
+        )
+        desc.setStyleSheet(MUTED_LABEL_STYLE)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Overall score + controls
+        score_row = QHBoxLayout()
+        score_row.setSpacing(12)
+
+        self.score_card, self.score_val = self._stat_card("Coverage Score")
+        score_row.addWidget(self.score_card)
+
+        self.concepts_card, self.concepts_val = self._stat_card("Concepts")
+        score_row.addWidget(self.concepts_card)
+
+        self.underrep_card, self.underrep_val = self._stat_card("Under-Repr.")
+        score_row.addWidget(self.underrep_card)
+
+        self.top_images_card, self.top_images_val = self._stat_card("Top Images")
+        score_row.addWidget(self.top_images_card)
+
+        layout.addLayout(score_row)
+
+        # Controls
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+
+        ctrl.addWidget(QLabel("Top N per concept:"))
+        self.top_n_spin = QSpinBox()
+        self.top_n_spin.setRange(1, 20)
+        self.top_n_spin.setValue(5)
+        self.top_n_spin.setMaximumWidth(70)
+        ctrl.addWidget(self.top_n_spin)
+
+        ctrl.addStretch()
+
+        self.btn_analyze = QPushButton("Analyze Concepts")
+        self.btn_analyze.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_analyze.clicked.connect(self._run_analysis)
+        ctrl.addWidget(self.btn_analyze)
+
+        self.status_badge = QLabel("")
+        self.status_badge.setStyleSheet(TAG_BADGE_STYLE)
+        ctrl.addWidget(self.status_badge)
+        layout.addLayout(ctrl)
+
+        # View selector
+        view_row = QHBoxLayout()
+        self.btn_concepts = QPushButton("Top Concepts")
+        self.btn_concepts.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_concepts.clicked.connect(lambda: self._show_view("concepts"))
+        view_row.addWidget(self.btn_concepts)
+
+        self.btn_underrep = QPushButton("Under-Represented")
+        self.btn_underrep.clicked.connect(lambda: self._show_view("underrep"))
+        view_row.addWidget(self.btn_underrep)
+
+        self.btn_best_images = QPushButton("Best Images Overall")
+        self.btn_best_images.clicked.connect(lambda: self._show_view("best"))
+        view_row.addWidget(self.btn_best_images)
+
+        view_row.addStretch()
+        layout.addLayout(view_row)
+
+        # Results table
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Concept / Image", "Score", "Images", "Quality", "Action"]
+        )
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        layout.addWidget(self.table, 1)
+
+        # Detail panel for selected concept
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setMaximumHeight(180)
+        layout.addWidget(self.detail_text)
+
+    def _stat_card(self, label: str):
+        card = QWidget()
+        card.setStyleSheet(CARD_STYLE)
+        vbox = QVBoxLayout(card)
+        vbox.setContentsMargins(8, 6, 8, 6)
+        vbox.setSpacing(2)
+        val = QLabel("\u2014")
+        val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        val.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 700; "
+            f"background: transparent;"
+        )
+        vbox.addWidget(val)
+        lbl = QLabel(label)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600; "
+            f"background: transparent; text-transform: uppercase;"
+        )
+        vbox.addWidget(lbl)
+        return card, val
+
+    def set_data(self, entries, tag_counts, tag_to_entries, deleted_tags=None):
+        """Set data and auto-run analysis."""
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._tag_to_entries = tag_to_entries
+        self._deleted_tags = deleted_tags or set()
+        # Auto-run analysis when data is available
+        if entries and tag_counts:
+            self._run_analysis()
+
+    def _run_analysis(self):
+        if not self._entries:
+            self.detail_text.setPlainText("No dataset loaded. Scan a dataset first.")
+            return
+
+        self.btn_analyze.setEnabled(False)
+        self.status_badge.setText("Analyzing...")
+
+        self._worker = _ConceptAnalysisWorker(
+            self._entries,
+            self._tag_counts,
+            self._tag_to_entries,
+            self._deleted_tags,
+            self.top_n_spin.value(),
+            parent=self,
+        )
+        self._worker.finished.connect(self._on_analysis_done)
+        self._worker.start()
+
+    def _on_analysis_done(self, result):
+        self._analysis = result
+        self.btn_analyze.setEnabled(True)
+        self.status_badge.setText("Done")
+
+        # Update stat cards
+        overall = result.get("overall_score", 0)
+        self.score_val.setText(f"{overall:.0f}%")
+        if overall >= 70:
+            self.score_val.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        elif overall >= 40:
+            self.score_val.setStyleSheet(
+                f"color: {COLORS['warning']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        else:
+            self.score_val.setStyleSheet(
+                f"color: {COLORS['danger']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+
+        n_concepts = len(result.get("concepts", {}))
+        self.concepts_val.setText(str(n_concepts))
+
+        n_underrep = len(result.get("underrepresented", []))
+        self.underrep_val.setText(str(n_underrep))
+        if n_underrep > 0:
+            self.underrep_val.setStyleSheet(
+                f"color: {COLORS['warning']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        else:
+            self.underrep_val.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+
+        n_images = len(result.get("image_scores", []))
+        self.top_images_val.setText(str(n_images))
+
+        # Show concepts view by default
+        self._show_view("concepts")
+
+    def _show_view(self, view: str):
+        if not self._analysis:
+            return
+
+        self.table.setSortingEnabled(False)
+
+        if view == "concepts":
+            self._show_concepts_view()
+        elif view == "underrep":
+            self._show_underrep_view()
+        elif view == "best":
+            self._show_best_images_view()
+
+        self.table.setSortingEnabled(True)
+
+    def _show_concepts_view(self):
+        """Show top concepts sorted by importance."""
+        concepts = self._analysis.get("concepts", {})
+        # Sort by importance descending
+        sorted_concepts = sorted(
+            concepts.items(), key=lambda x: x[1]["importance"], reverse=True,
+        )
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Concept Tag", "Importance", "Images", "Quality", "View Best"]
+        )
+
+        self.table.setRowCount(len(sorted_concepts))
+        good_color = QColor(COLORS["success"])
+        fair_color = QColor(COLORS["warning"])
+        poor_color = QColor(COLORS["danger"])
+
+        for row, (tag, info) in enumerate(sorted_concepts):
+            self.table.setItem(row, 0, QTableWidgetItem(tag))
+
+            imp_item = QTableWidgetItem()
+            imp_item.setData(Qt.ItemDataRole.DisplayRole, round(info["importance"], 2))
+            self.table.setItem(row, 1, imp_item)
+
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, info["image_count"])
+            self.table.setItem(row, 2, count_item)
+
+            quality = info["coverage_quality"]
+            q_item = QTableWidgetItem(quality.upper())
+            if quality == "good":
+                q_item.setForeground(good_color)
+            elif quality == "fair":
+                q_item.setForeground(fair_color)
+            else:
+                q_item.setForeground(poor_color)
+            self.table.setItem(row, 3, q_item)
+
+            btn = QPushButton("View")
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['accent']}; "
+                f"color: {COLORS['bg']}; border: none; border-radius: 4px; "
+                f"padding: 3px 10px; font-weight: 600; font-size: 11px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
+            )
+            btn.clicked.connect(
+                lambda checked, t=tag: self._show_concept_detail(t)
+            )
+            self.table.setCellWidget(row, 4, btn)
+
+    def _show_underrep_view(self):
+        """Show under-represented concepts that need more images."""
+        underrep = self._analysis.get("underrepresented", [])
+
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Concept Tag", "Importance", "Image Count", "Issue"]
+        )
+
+        self.table.setRowCount(len(underrep))
+        warning_color = QColor(COLORS["warning"])
+        danger_color = QColor(COLORS["danger"])
+
+        for row, item in enumerate(underrep):
+            self.table.setItem(row, 0, QTableWidgetItem(item["tag"]))
+
+            imp_item = QTableWidgetItem()
+            imp_item.setData(
+                Qt.ItemDataRole.DisplayRole, round(item["importance"], 2),
+            )
+            self.table.setItem(row, 1, imp_item)
+
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, item["count"])
+            count_item.setForeground(danger_color)
+            self.table.setItem(row, 2, count_item)
+
+            reason = item["reason"].replace("_", " ").title()
+            reason_item = QTableWidgetItem(reason)
+            reason_item.setForeground(warning_color)
+            self.table.setItem(row, 3, reason_item)
+
+        if not underrep:
+            self.detail_text.setPlainText(
+                "All concepts have good coverage. No action needed."
+            )
+        else:
+            self.detail_text.setPlainText(
+                f"{len(underrep)} concept(s) need more training images.\n"
+                "Consider adding more images for these concepts to ensure "
+                "the model learns them well."
+            )
+
+    def _show_best_images_view(self):
+        """Show all images ranked by concept coverage score."""
+        image_scores = self._analysis.get("image_scores", [])
+        # Show top 200
+        top = image_scores[:200]
+
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["#", "Image Path", "Score", "Go To"]
+        )
+
+        self.table.setRowCount(len(top))
+        for row, (idx, score) in enumerate(top):
+            rank_item = QTableWidgetItem()
+            rank_item.setData(Qt.ItemDataRole.DisplayRole, row + 1)
+            self.table.setItem(row, 0, rank_item)
+
+            path = str(self._entries[idx].image_path.name) if idx < len(self._entries) else "?"
+            self.table.setItem(row, 1, QTableWidgetItem(path))
+
+            score_item = QTableWidgetItem()
+            score_item.setData(Qt.ItemDataRole.DisplayRole, round(score, 2))
+            self.table.setItem(row, 2, score_item)
+
+            btn = QPushButton("Go")
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['accent']}; "
+                f"color: {COLORS['bg']}; border: none; border-radius: 4px; "
+                f"padding: 3px 10px; font-weight: 600; font-size: 11px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
+            )
+            btn.clicked.connect(
+                lambda checked, i=idx: self.navigate_to_image.emit(i)
+            )
+            self.table.setCellWidget(row, 3, btn)
+
+        self.detail_text.setPlainText(
+            f"Showing top {len(top)} images by concept coverage score.\n"
+            "Higher-scored images carry more important/unique concept tags "
+            "and are the most valuable for training."
+        )
+
+    def _show_concept_detail(self, tag: str):
+        """Show detailed info about a specific concept's best images."""
+        concepts = self._analysis.get("concepts", {})
+        info = concepts.get(tag)
+        if not info:
+            return
+
+        lines = [
+            f"Concept: {tag}",
+            f"Importance: {info['importance']:.2f}",
+            f"Total images: {info['image_count']}",
+            f"Coverage quality: {info['coverage_quality'].upper()}",
+            "",
+            f"Best {len(info['best_images'])} representative images:",
+        ]
+        for i, img in enumerate(info["best_images"], 1):
+            path = img["path"].split("/")[-1] if "/" in img["path"] else img["path"].split("\\")[-1]
+            tags_preview = ", ".join(img["tags"][:8])
+            if len(img["tags"]) > 8:
+                tags_preview += f" ... (+{len(img['tags']) - 8} more)"
+            lines.append(f"  {i}. {path} (score: {img['score']:.2f})")
+            lines.append(f"     Tags: {tags_preview}")
+
+        self.detail_text.setPlainText("\n".join(lines))

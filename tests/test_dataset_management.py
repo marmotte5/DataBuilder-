@@ -14,7 +14,11 @@ from dataset_sorter.dataset_management import (
     find_similar_tags,
     get_augmentation_config,
     get_default_augmentation_state,
+    compute_tag_importance,
+    score_image_concept_coverage,
+    find_best_images_per_concept,
 )
+from dataset_sorter.models import ImageEntry
 
 
 # ── Caption Augmentation Preview ─────────────────────────────────────
@@ -207,3 +211,142 @@ class TestAugmentationConfig:
         assert "params" in state["color_jitter"]
         assert "brightness" in state["color_jitter"]["params"]
         assert state["color_jitter"]["params"]["brightness"] == 0.1
+
+
+# ── Concept Coverage Analyzer ──────────────────────────────────────
+
+def _make_entry(tags):
+    """Helper to create a minimal ImageEntry with tags."""
+    from pathlib import Path
+    return ImageEntry(image_path=Path(f"/fake/{id(tags)}.png"), tags=tags)
+
+
+class TestTagImportance:
+    def test_empty(self):
+        assert compute_tag_importance(Counter(), 0) == {}
+
+    def test_quality_tags_penalized(self):
+        counts = Counter({"masterpiece": 50, "blue eyes": 10})
+        scores = compute_tag_importance(counts, 100)
+        # Quality/meta tag should score much lower
+        assert scores["masterpiece"] < scores["blue eyes"]
+
+    def test_rare_tags_score_higher(self):
+        counts = Counter({"common_tag": 90, "rare_tag": 3})
+        scores = compute_tag_importance(counts, 100)
+        assert scores["rare_tag"] > scores["common_tag"]
+
+    def test_all_same_count(self):
+        counts = Counter({"a": 10, "b": 10, "c": 10})
+        scores = compute_tag_importance(counts, 30)
+        # All should have the same importance
+        assert scores["a"] == scores["b"] == scores["c"]
+
+
+class TestImageConceptCoverage:
+    def test_empty_tags(self):
+        score = score_image_concept_coverage([], {"a": 1.0})
+        assert score == 0.0
+
+    def test_basic_scoring(self):
+        importance = {"tag_a": 2.0, "tag_b": 1.0, "tag_c": 3.0}
+        score = score_image_concept_coverage(["tag_a", "tag_c"], importance)
+        assert score == 5.0
+
+    def test_deleted_tags_excluded(self):
+        importance = {"tag_a": 2.0, "tag_b": 1.0}
+        score = score_image_concept_coverage(
+            ["tag_a", "tag_b"], importance, deleted_tags={"tag_b"},
+        )
+        assert score == 2.0
+
+    def test_unknown_tags_zero(self):
+        importance = {"known": 5.0}
+        score = score_image_concept_coverage(["known", "unknown"], importance)
+        assert score == 5.0
+
+
+class TestFindBestImagesPerConcept:
+    def _make_dataset(self):
+        entries = [
+            _make_entry(["blue eyes", "long hair", "solo"]),
+            _make_entry(["blue eyes", "masterpiece"]),
+            _make_entry(["red hair", "outdoor", "detailed"]),
+            _make_entry(["blue eyes", "red hair", "long hair"]),
+            _make_entry(["solo"]),
+        ]
+        tag_counts = Counter()
+        tag_to_entries = {}
+        for idx, e in enumerate(entries):
+            for tag in e.tags:
+                tag_counts[tag] += 1
+                tag_to_entries.setdefault(tag, []).append(idx)
+        return entries, tag_counts, tag_to_entries
+
+    def test_basic_analysis(self):
+        entries, tag_counts, tag_to_entries = self._make_dataset()
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries, top_n=3,
+        )
+        assert "concepts" in result
+        assert "underrepresented" in result
+        assert "overall_score" in result
+        assert "image_scores" in result
+        assert 0 <= result["overall_score"] <= 100
+
+    def test_concepts_found(self):
+        entries, tag_counts, tag_to_entries = self._make_dataset()
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries, top_n=3,
+        )
+        concepts = result["concepts"]
+        # "blue eyes" appears 3 times, should be a concept
+        assert "blue eyes" in concepts
+        assert concepts["blue eyes"]["image_count"] == 3
+        assert len(concepts["blue eyes"]["best_images"]) <= 3
+
+    def test_quality_tags_excluded_from_concepts(self):
+        entries, tag_counts, tag_to_entries = self._make_dataset()
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries,
+        )
+        concepts = result["concepts"]
+        # "masterpiece" is a quality tag, excluded from concept list
+        assert "masterpiece" not in concepts
+
+    def test_deleted_tags_excluded(self):
+        entries, tag_counts, tag_to_entries = self._make_dataset()
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries,
+            deleted_tags={"blue eyes"}, top_n=3,
+        )
+        assert "blue eyes" not in result["concepts"]
+
+    def test_image_scores_sorted_descending(self):
+        entries, tag_counts, tag_to_entries = self._make_dataset()
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries,
+        )
+        scores = [s for _, s in result["image_scores"]]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_empty_dataset(self):
+        result = find_best_images_per_concept([], Counter(), {})
+        assert result["concepts"] == {}
+        assert result["underrepresented"] == []
+        assert result["overall_score"] == 0.0
+        assert result["image_scores"] == []
+
+    def test_min_tag_count_filtering(self):
+        entries = [
+            _make_entry(["unique_concept", "solo"]),
+            _make_entry(["solo"]),
+        ]
+        tag_counts = Counter({"unique_concept": 1, "solo": 2})
+        tag_to_entries = {"unique_concept": [0], "solo": [0, 1]}
+        result = find_best_images_per_concept(
+            entries, tag_counts, tag_to_entries, min_tag_count=2,
+        )
+        # unique_concept only appears once, below min_tag_count=2
+        assert "unique_concept" not in result["concepts"]
+        assert "solo" in result["concepts"]

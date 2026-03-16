@@ -18,6 +18,7 @@ from dataset_sorter.ui.dataset_sections import (
     SpellCheckSection,
     AugmentationSection,
     DuplicateSection,
+    ConceptCoverageSection,
 )
 
 
@@ -34,11 +35,13 @@ class DatasetTab(QWidget):
     """
 
     apply_tag_fix = pyqtSignal(str, str)  # (old_tag, new_tag) for spell-check apply
+    navigate_to_image = pyqtSignal(int)  # navigate to image index
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._entries: list[ImageEntry] = []
         self._tag_counts = Counter()
+        self._tag_to_entries: dict[str, list[int]] = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -73,10 +76,16 @@ class DatasetTab(QWidget):
         self.duplicate_section = DuplicateSection()
         tabs.addTab(self.duplicate_section, "Duplicates")
 
+        # 7. Concept Coverage
+        self.concept_section = ConceptCoverageSection()
+        self.concept_section.navigate_to_image.connect(self.navigate_to_image.emit)
+        tabs.addTab(self.concept_section, "Concept Coverage")
+
         layout.addWidget(tabs)
 
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
-                  deleted_tags: set | None = None):
+                  deleted_tags: set | None = None,
+                  tag_to_entries: dict[str, list[int]] | None = None):
         """Update all sections with current dataset data.
 
         When deleted_tags is provided, captions, histograms, and spell-check
@@ -84,6 +93,7 @@ class DatasetTab(QWidget):
         """
         self._entries = entries
         self._tag_counts = tag_counts
+        self._tag_to_entries = tag_to_entries or {}
         _del = deleted_tags or set()
 
         # Filter tag_counts to exclude deleted tags
@@ -107,6 +117,11 @@ class DatasetTab(QWidget):
 
         # Duplicates
         self.duplicate_section.set_entries(entries)
+
+        # Concept coverage (auto-runs analysis)
+        self.concept_section.set_data(
+            entries, tag_counts, self._tag_to_entries, _del,
+        )
 
     def get_augmentation_state(self) -> dict:
         return self.augmentation_section.get_state()

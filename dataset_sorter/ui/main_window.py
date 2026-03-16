@@ -286,6 +286,7 @@ class MainWindow(QMainWindow):
         self.image_tab.reset_bucket.connect(self._reset_image_bucket)
 
         self.dataset_tab.apply_tag_fix.connect(self._apply_spellcheck_fix)
+        self.dataset_tab.navigate_to_image.connect(self._navigate_to_image)
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
@@ -602,7 +603,9 @@ class MainWindow(QMainWindow):
         self.image_tab.set_data(
             self.entries, self.deleted_tags, self.manual_overrides,
         )
-        self.dataset_tab.set_data(self.entries, self.tag_counts, self.deleted_tags)
+        self.dataset_tab.set_data(
+            self.entries, self.tag_counts, self.deleted_tags, self.tag_to_entries,
+        )
 
     # -- Undo / Redo --
 
@@ -997,6 +1000,17 @@ class MainWindow(QMainWindow):
             self._assign_single_entry_bucket(entry)
             self.image_tab.refresh()
             self.statusBar().showMessage("Image bucket reset.")
+
+    def _navigate_to_image(self, index):
+        """Navigate the Images tab to the given image index."""
+        if 0 <= index < len(self.entries):
+            self.image_tab._current_index = index
+            self.image_tab._show_current()
+            # Switch to the Images tab
+            parent = self.image_tab.parent()
+            if hasattr(parent, 'setCurrentWidget'):
+                parent.setCurrentWidget(self.image_tab)
+            self.statusBar().showMessage(f"Navigated to image {index + 1}.")
 
     # -- Dry run & Export --
 

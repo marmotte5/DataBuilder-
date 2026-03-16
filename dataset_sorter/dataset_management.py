@@ -492,3 +492,236 @@ def get_default_augmentation_state() -> dict[str, dict]:
             }
         state[aug["key"]] = entry
     return state
+
+
+# ── Concept Coverage Analyzer ────────────────────────────────────────
+
+# Tags that are purely about quality/meta, not about visual concepts.
+# These are downweighted when computing concept importance.
+_QUALITY_META_TAGS = {
+    "masterpiece", "best quality", "high quality", "high resolution",
+    "highres", "absurdres", "incredibly absurdres", "ultra detailed",
+    "very detailed", "extremely detailed", "detailed", "hd", "uhd", "4k", "8k",
+    "worst quality", "low quality", "bad quality", "normal quality",
+    "lowres", "blurry", "jpeg artifacts",
+    "score_9", "score_8_up", "score_7_up", "score_6_up", "score_5_up",
+    "score_4_up",
+}
+
+
+def compute_tag_importance(
+    tag_counts: Counter,
+    total_images: int,
+    quality_penalty: float = 0.1,
+) -> dict[str, float]:
+    """Compute TF-IDF-inspired importance score for each tag.
+
+    Tags that appear in a moderate fraction of images (not too rare, not
+    ubiquitous) score highest. Quality/meta tags are penalized.
+
+    Score = IDF * specificity_bonus * quality_factor
+
+    Where:
+    - IDF = log(total_images / count)  — rare tags score higher
+    - specificity_bonus = 1 + (1 - count/total_images) — boost tags that
+      distinguish images from each other
+    - quality_factor = quality_penalty for meta tags, 1.0 otherwise
+
+    Returns dict of tag -> importance score (higher = more concept-defining).
+    """
+    if not tag_counts or total_images == 0:
+        return {}
+
+    scores = {}
+    for tag, count in tag_counts.items():
+        # IDF component: rare tags are more informative
+        idf = math.log(max(total_images, 1) / max(count, 1)) + 1.0
+
+        # Specificity: tags covering fewer images are more discriminating
+        specificity = 1.0 + (1.0 - count / max(total_images, 1))
+
+        # Quality/meta penalty
+        tag_lower = tag.lower().strip()
+        q_factor = quality_penalty if tag_lower in _QUALITY_META_TAGS else 1.0
+
+        scores[tag] = idf * specificity * q_factor
+
+    return scores
+
+
+def score_image_concept_coverage(
+    image_tags: list[str],
+    tag_importance: dict[str, float],
+    deleted_tags: set[str] | None = None,
+) -> float:
+    """Score how concept-rich an image is based on its tags.
+
+    Sum of importance scores for all active (non-deleted) tags on the image.
+    Images with many important concept tags score highest.
+    """
+    total = 0.0
+    for tag in image_tags:
+        if deleted_tags and tag in deleted_tags:
+            continue
+        total += tag_importance.get(tag, 0.0)
+    return total
+
+
+def find_best_images_per_concept(
+    entries: list,
+    tag_counts: Counter,
+    tag_to_entries: dict[str, list[int]],
+    deleted_tags: set[str] | None = None,
+    top_n: int = 5,
+    min_tag_count: int = 2,
+) -> dict:
+    """Automatically find the best images for each concept tag.
+
+    For each concept tag (excluding quality/meta tags), ranks images by
+    how well they represent that concept. An image is a good representative
+    if it:
+    1. Contains the concept tag
+    2. Has few other dominant concept tags (focused, not cluttered)
+    3. Has high overall concept coverage (well-tagged)
+
+    Args:
+        entries: List of ImageEntry objects.
+        tag_counts: Counter of tag -> occurrence count.
+        tag_to_entries: Dict of tag -> list of entry indices.
+        deleted_tags: Tags to ignore.
+        top_n: Number of best images to return per concept.
+        min_tag_count: Minimum tag occurrences to be considered a concept.
+
+    Returns:
+        dict with keys:
+        - concepts: dict of tag -> {
+            importance: float,
+            best_images: list of {index, path, score, tags},
+            coverage_quality: "good" | "fair" | "poor",
+            image_count: int,
+          }
+        - underrepresented: list of {tag, count, importance, reason}
+        - overall_score: float (0-100, dataset concept coverage quality)
+        - image_scores: list of (index, score) for all images, sorted desc
+    """
+    if not entries or not tag_counts:
+        return {
+            "concepts": {},
+            "underrepresented": [],
+            "overall_score": 0.0,
+            "image_scores": [],
+        }
+
+    deleted = deleted_tags or set()
+    total_images = len(entries)
+
+    # 1. Compute tag importance scores
+    tag_importance = compute_tag_importance(tag_counts, total_images)
+
+    # 2. Score every image
+    image_scores = []
+    for idx, entry in enumerate(entries):
+        score = score_image_concept_coverage(entry.tags, tag_importance, deleted)
+        image_scores.append((idx, score))
+    image_scores.sort(key=lambda x: x[1], reverse=True)
+
+    # 3. For each concept tag, find best representative images
+    concepts = {}
+    concept_tags = [
+        tag for tag, count in tag_counts.items()
+        if count >= min_tag_count
+        and tag.lower().strip() not in _QUALITY_META_TAGS
+        and tag not in deleted
+    ]
+
+    for tag in concept_tags:
+        entry_indices = tag_to_entries.get(tag, [])
+        if not entry_indices:
+            continue
+
+        # Score images for this specific concept:
+        # Prefer images where this tag is "dominant" (high fraction of total importance)
+        candidate_scores = []
+        for idx in entry_indices:
+            entry = entries[idx]
+            total_importance = score_image_concept_coverage(
+                entry.tags, tag_importance, deleted,
+            )
+            tag_imp = tag_importance.get(tag, 0.0)
+
+            # Focus score: how much of this image's identity is about this concept
+            active_tags = [t for t in entry.tags if t not in deleted]
+            n_active = max(len(active_tags), 1)
+            focus = tag_imp / max(total_importance, 1e-8)
+
+            # Combined: overall quality * focus on this concept
+            # Also factor in tag count — well-tagged images are better for training
+            combined = total_importance * (0.4 + 0.6 * focus) * math.log(n_active + 1)
+            candidate_scores.append((idx, combined))
+
+        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+        best = candidate_scores[:top_n]
+
+        # Coverage quality assessment
+        n_images = len(entry_indices)
+        importance = tag_importance.get(tag, 0.0)
+        if n_images >= 10:
+            quality = "good"
+        elif n_images >= 3:
+            quality = "fair"
+        else:
+            quality = "poor"
+
+        concepts[tag] = {
+            "importance": importance,
+            "best_images": [
+                {
+                    "index": idx,
+                    "path": str(entries[idx].image_path),
+                    "score": score,
+                    "tags": entries[idx].tags,
+                }
+                for idx, score in best
+            ],
+            "coverage_quality": quality,
+            "image_count": n_images,
+        }
+
+    # 4. Find under-represented concepts
+    underrepresented = []
+    for tag in concept_tags:
+        n_images = len(tag_to_entries.get(tag, []))
+        importance = tag_importance.get(tag, 0.0)
+
+        if n_images == 1 and importance > 1.5:
+            underrepresented.append({
+                "tag": tag,
+                "count": n_images,
+                "importance": importance,
+                "reason": "single_image",
+            })
+        elif n_images <= 3 and importance > 2.0:
+            underrepresented.append({
+                "tag": tag,
+                "count": n_images,
+                "importance": importance,
+                "reason": "very_few_images",
+            })
+
+    underrepresented.sort(key=lambda x: x["importance"], reverse=True)
+
+    # 5. Overall dataset score (0-100)
+    if concepts:
+        good = sum(1 for c in concepts.values() if c["coverage_quality"] == "good")
+        fair = sum(1 for c in concepts.values() if c["coverage_quality"] == "fair")
+        total_concepts = len(concepts)
+        overall = ((good * 1.0 + fair * 0.5) / max(total_concepts, 1)) * 100
+    else:
+        overall = 0.0
+
+    return {
+        "concepts": concepts,
+        "underrepresented": underrepresented,
+        "overall_score": min(100.0, overall),
+        "image_scores": image_scores,
+    }
