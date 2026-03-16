@@ -19,6 +19,7 @@ from dataset_sorter.ui.dataset_sections import (
     AugmentationSection,
     DuplicateSection,
     ConceptCoverageSection,
+    TagSpecificitySection,
 )
 
 
@@ -81,6 +82,11 @@ class DatasetTab(QWidget):
         self.concept_section.navigate_to_image.connect(self.navigate_to_image.emit)
         tabs.addTab(self.concept_section, "Concept Coverage")
 
+        # 8. Tag Specificity
+        self.specificity_section = TagSpecificitySection()
+        self.specificity_section.navigate_to_image.connect(self.navigate_to_image.emit)
+        tabs.addTab(self.specificity_section, "Tag Specificity")
+
         layout.addWidget(tabs)
 
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
@@ -122,6 +128,9 @@ class DatasetTab(QWidget):
         self.concept_section.set_data(
             entries, tag_counts, self._tag_to_entries, _del,
         )
+
+        # Tag specificity (auto-runs analysis)
+        self.specificity_section.set_data(entries, active_counts, _del)
 
     def get_augmentation_state(self) -> dict:
         return self.augmentation_section.get_state()

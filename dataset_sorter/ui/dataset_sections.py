@@ -28,6 +28,7 @@ from dataset_sorter.dataset_management import (
     get_default_augmentation_state,
     find_best_images_per_concept,
 )
+from dataset_sorter.tag_specificity import analyze_tag_specificity
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SECTION_HEADER_STYLE,
     SECTION_SUBHEADER_STYLE, MUTED_LABEL_STYLE, TAG_BADGE_STYLE,
@@ -1374,5 +1375,426 @@ class ConceptCoverageSection(QWidget):
                 tags_preview += f" ... (+{len(img['tags']) - 8} more)"
             lines.append(f"  {i}. {path} (score: {img['score']:.2f})")
             lines.append(f"     Tags: {tags_preview}")
+
+        self.detail_text.setPlainText("\n".join(lines))
+
+
+class _SpecificityWorker(QThread):
+    """Run tag specificity analysis off the UI thread."""
+
+    finished = pyqtSignal(dict)
+
+    def __init__(self, entries, tag_counts, deleted_tags, threshold, parent=None):
+        super().__init__(parent)
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._deleted_tags = deleted_tags
+        self._threshold = threshold
+
+    def run(self):
+        result = analyze_tag_specificity(
+            self._entries,
+            self._tag_counts,
+            deleted_tags=self._deleted_tags,
+            subset_threshold=self._threshold,
+        )
+        self.finished.emit(result)
+
+
+class TagSpecificitySection(QWidget):
+    """Smart tag specificity analysis — discovers tag hierarchies and focus tags.
+
+    For each image, identifies the most specific tag (e.g. "alitalia uniform"
+    rather than "woman" or "uniform"). Detects subset relationships between
+    tags to build hierarchies automatically.
+
+    Designed for 50k+ image datasets — runs analysis on a worker thread.
+    """
+
+    navigate_to_image = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries = []
+        self._tag_counts = Counter()
+        self._deleted_tags = set()
+        self._analysis = None
+        self._worker = None
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = QLabel("Tag Specificity & Hierarchy")
+        header.setStyleSheet(SECTION_HEADER_STYLE)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Discovers which tags are more specific than others by analyzing "
+            "co-occurrence patterns. For example: if every image tagged "
+            "\"alitalia uniform\" is also tagged \"air hostess uniform\" and "
+            "\"woman\", the engine ranks \"alitalia uniform\" as the focus tag."
+        )
+        desc.setStyleSheet(MUTED_LABEL_STYLE)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Stat cards row
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+
+        self.hierarchies_card, self.hierarchies_val = self._stat_card("Hierarchies")
+        stats_row.addWidget(self.hierarchies_card)
+
+        self.specific_card, self.specific_val = self._stat_card("Specific Tags")
+        stats_row.addWidget(self.specific_card)
+
+        self.depth_card, self.depth_val = self._stat_card("Avg Depth")
+        stats_row.addWidget(self.depth_card)
+
+        self.images_card, self.images_val = self._stat_card("Images")
+        stats_row.addWidget(self.images_card)
+
+        layout.addLayout(stats_row)
+
+        # Controls
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+
+        ctrl.addWidget(QLabel("Subset threshold:"))
+        self.threshold_spin = QDoubleSpinBox()
+        self.threshold_spin.setRange(0.50, 0.99)
+        self.threshold_spin.setValue(0.85)
+        self.threshold_spin.setSingleStep(0.05)
+        self.threshold_spin.setDecimals(2)
+        self.threshold_spin.setMaximumWidth(80)
+        self.threshold_spin.setToolTip(
+            "How much overlap is needed to consider tag A a subset of tag B. "
+            "Lower = find more relationships but less accurate. "
+            "0.85 = 85% of A's images must also have B."
+        )
+        ctrl.addWidget(self.threshold_spin)
+
+        ctrl.addStretch()
+
+        self.btn_analyze = QPushButton("Analyze Specificity")
+        self.btn_analyze.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_analyze.clicked.connect(self._run_analysis)
+        ctrl.addWidget(self.btn_analyze)
+
+        self.status_badge = QLabel("")
+        self.status_badge.setStyleSheet(TAG_BADGE_STYLE)
+        ctrl.addWidget(self.status_badge)
+        layout.addLayout(ctrl)
+
+        # View toggle buttons
+        view_row = QHBoxLayout()
+        self.btn_hierarchies = QPushButton("Hierarchy Chains")
+        self.btn_hierarchies.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_hierarchies.clicked.connect(lambda: self._show_view("hierarchies"))
+        view_row.addWidget(self.btn_hierarchies)
+
+        self.btn_all_scores = QPushButton("All Tags by Specificity")
+        self.btn_all_scores.clicked.connect(lambda: self._show_view("scores"))
+        view_row.addWidget(self.btn_all_scores)
+
+        self.btn_focus = QPushButton("Image Focus Tags")
+        self.btn_focus.clicked.connect(lambda: self._show_view("focus"))
+        view_row.addWidget(self.btn_focus)
+
+        view_row.addStretch()
+        layout.addLayout(view_row)
+
+        # Results table
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Tag / Chain", "Specificity", "Images", "Depth"]
+        )
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        layout.addWidget(self.table, 1)
+
+        # Detail panel
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setMaximumHeight(180)
+        layout.addWidget(self.detail_text)
+
+    def _stat_card(self, label: str):
+        card = QWidget()
+        card.setStyleSheet(CARD_STYLE)
+        vbox = QVBoxLayout(card)
+        vbox.setContentsMargins(8, 6, 8, 6)
+        vbox.setSpacing(2)
+        val = QLabel("\u2014")
+        val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        val.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 700; "
+            f"background: transparent;"
+        )
+        vbox.addWidget(val)
+        lbl = QLabel(label)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600; "
+            f"background: transparent; text-transform: uppercase;"
+        )
+        vbox.addWidget(lbl)
+        return card, val
+
+    def set_data(self, entries, tag_counts, deleted_tags=None):
+        """Set data and auto-run analysis."""
+        self._entries = entries
+        self._tag_counts = tag_counts
+        self._deleted_tags = deleted_tags or set()
+        if entries and tag_counts:
+            self._run_analysis()
+
+    def _run_analysis(self):
+        if not self._entries:
+            self.detail_text.setPlainText("No dataset loaded. Scan a dataset first.")
+            return
+
+        self.btn_analyze.setEnabled(False)
+        self.status_badge.setText("Analyzing...")
+
+        self._worker = _SpecificityWorker(
+            self._entries,
+            self._tag_counts,
+            self._deleted_tags,
+            self.threshold_spin.value(),
+            parent=self,
+        )
+        self._worker.finished.connect(self._on_analysis_done)
+        self._worker.start()
+
+    def _on_analysis_done(self, result):
+        self._analysis = result
+        self.btn_analyze.setEnabled(True)
+        self.status_badge.setText("Done")
+
+        stats = result.get("stats", {})
+        self.hierarchies_val.setText(str(stats.get("hierarchies_found", 0)))
+        self.specific_val.setText(str(stats.get("tags_with_parents", 0)))
+        self.depth_val.setText(f"{stats.get('avg_depth', 0):.1f}")
+        self.images_val.setText(str(stats.get("total_images", 0)))
+
+        n_hier = stats.get("hierarchies_found", 0)
+        if n_hier > 0:
+            self.hierarchies_val.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+        else:
+            self.hierarchies_val.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 18px; font-weight: 700; "
+                f"background: transparent;"
+            )
+
+        self._show_view("hierarchies")
+
+    def _show_view(self, view: str):
+        if not self._analysis:
+            return
+
+        self.table.setSortingEnabled(False)
+
+        if view == "hierarchies":
+            self._show_hierarchies_view()
+        elif view == "scores":
+            self._show_scores_view()
+        elif view == "focus":
+            self._show_focus_view()
+
+        self.table.setSortingEnabled(True)
+
+    def _show_hierarchies_view(self):
+        """Show discovered hierarchy chains: specific → generic."""
+        chains = self._analysis.get("hierarchy_chains", [])
+        scores = self._analysis.get("specificity_scores", {})
+
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Hierarchy Chain (specific \u2192 generic)", "Top Score", "Depth", "Details"]
+        )
+
+        self.table.setRowCount(len(chains))
+        accent_color = QColor(COLORS["accent"])
+        success_color = QColor(COLORS["success"])
+
+        for row, chain in enumerate(chains):
+            chain_str = " \u2192 ".join(chain)
+            item = QTableWidgetItem(chain_str)
+            item.setForeground(accent_color)
+            self.table.setItem(row, 0, item)
+
+            top_score = scores.get(chain[0], 0)
+            score_item = QTableWidgetItem()
+            score_item.setData(Qt.ItemDataRole.DisplayRole, round(top_score, 2))
+            self.table.setItem(row, 1, score_item)
+
+            depth_item = QTableWidgetItem()
+            depth_item.setData(Qt.ItemDataRole.DisplayRole, len(chain))
+            self.table.setItem(row, 2, depth_item)
+
+            btn = QPushButton("Inspect")
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['accent']}; "
+                f"color: {COLORS['bg']}; border: none; border-radius: 4px; "
+                f"padding: 3px 10px; font-weight: 600; font-size: 11px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
+            )
+            btn.clicked.connect(
+                lambda checked, c=chain: self._show_chain_detail(c)
+            )
+            self.table.setCellWidget(row, 3, btn)
+
+        if not chains:
+            self.detail_text.setPlainText(
+                "No tag hierarchies detected. This can happen when:\n"
+                "- Tags are very independent (no subset relationships)\n"
+                "- Try lowering the subset threshold (e.g. 0.70)\n"
+                "- Dataset may need more overlapping tags"
+            )
+        else:
+            self.detail_text.setPlainText(
+                f"Found {len(chains)} hierarchy chain(s).\n"
+                "Each chain shows tags from most specific (left) to most generic (right).\n"
+                "Click 'Inspect' to see image counts and overlap details."
+            )
+
+    def _show_scores_view(self):
+        """Show all tags ranked by specificity score."""
+        scores = self._analysis.get("specificity_scores", {})
+        sorted_tags = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+        # Limit display to top 500
+        display = sorted_tags[:500]
+
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Tag", "Specificity Score", "Images", "Has Parents"]
+        )
+
+        child_to_parents = self._analysis.get("child_to_parents", {})
+
+        self.table.setRowCount(len(display))
+        success_color = QColor(COLORS["success"])
+
+        for row, (tag, score) in enumerate(display):
+            self.table.setItem(row, 0, QTableWidgetItem(tag))
+
+            score_item = QTableWidgetItem()
+            score_item.setData(Qt.ItemDataRole.DisplayRole, round(score, 3))
+            self.table.setItem(row, 1, score_item)
+
+            count = self._tag_counts.get(tag, 0)
+            count_item = QTableWidgetItem()
+            count_item.setData(Qt.ItemDataRole.DisplayRole, count)
+            self.table.setItem(row, 2, count_item)
+
+            has_parents = tag in child_to_parents
+            parent_item = QTableWidgetItem("Yes" if has_parents else "")
+            if has_parents:
+                parent_item.setForeground(success_color)
+            self.table.setItem(row, 3, parent_item)
+
+        self.detail_text.setPlainText(
+            f"Showing top {len(display)} tags by specificity score.\n"
+            "Higher score = more specific tag. Tags marked 'Yes' in 'Has Parents' "
+            "are confirmed to be subsets of broader tags."
+        )
+
+    def _show_focus_view(self):
+        """Show each image's most specific (focus) tag."""
+        focus_tags = self._analysis.get("image_focus_tags", [])
+        display = focus_tags[:500]
+
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Image", "Focus Tag", "Score", "Go To"]
+        )
+
+        self.table.setRowCount(len(display))
+        accent_color = QColor(COLORS["accent"])
+
+        for row, (idx, tag, score) in enumerate(display):
+            name = "?"
+            if idx < len(self._entries):
+                name = str(self._entries[idx].image_path.name)
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+
+            tag_item = QTableWidgetItem(tag)
+            tag_item.setForeground(accent_color)
+            self.table.setItem(row, 1, tag_item)
+
+            score_item = QTableWidgetItem()
+            score_item.setData(Qt.ItemDataRole.DisplayRole, round(score, 3))
+            self.table.setItem(row, 2, score_item)
+
+            btn = QPushButton("Go")
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['accent']}; "
+                f"color: {COLORS['bg']}; border: none; border-radius: 4px; "
+                f"padding: 3px 10px; font-weight: 600; font-size: 11px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
+            )
+            btn.clicked.connect(
+                lambda checked, i=idx: self.navigate_to_image.emit(i)
+            )
+            self.table.setCellWidget(row, 3, btn)
+
+        self.detail_text.setPlainText(
+            f"Showing focus tags for top {len(display)} images.\n"
+            "The 'Focus Tag' is the most specific tag on each image — "
+            "what the model should learn to associate most strongly."
+        )
+
+    def _show_chain_detail(self, chain: list[str]):
+        """Show detailed info about a specific hierarchy chain."""
+        scores = self._analysis.get("specificity_scores", {})
+        child_to_parents = self._analysis.get("child_to_parents", {})
+
+        lines = [
+            "Hierarchy Chain Detail",
+            "=" * 40,
+            "",
+        ]
+
+        for i, tag in enumerate(chain):
+            indent = "  " * i
+            arrow = "\u2514\u2500 " if i > 0 else ""
+            score = scores.get(tag, 0)
+            count = self._tag_counts.get(tag, 0)
+            role = "FOCUS (most specific)" if i == 0 else ("GENERIC" if i == len(chain) - 1 else "MID-LEVEL")
+            lines.append(f"{indent}{arrow}{tag}")
+            lines.append(f"{indent}   Score: {score:.3f} | Images: {count} | Role: {role}")
+
+            if tag in child_to_parents:
+                parents = child_to_parents[tag]
+                parents_str = ", ".join(parents[:5])
+                if len(parents) > 5:
+                    parents_str += f" (+{len(parents) - 5} more)"
+                lines.append(f"{indent}   Parents: {parents_str}")
+            lines.append("")
+
+        lines.append(
+            "The model should learn to associate the FOCUS tag most strongly "
+            "with images in this chain. Generic tags provide context but "
+            "shouldn't dominate training attention."
+        )
 
         self.detail_text.setPlainText("\n".join(lines))
