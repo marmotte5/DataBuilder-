@@ -488,6 +488,19 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _start_training(self):
         """Validate and start training."""
+        # Pre-check: verify torch can be imported
+        try:
+            import torch  # noqa: F401
+        except OSError:
+            self._log(
+                "ERROR: PyTorch DLL failed to load. Run update.bat to fix, "
+                "or install Visual C++ Redistributable (x64) and reboot."
+            )
+            return
+        except ImportError:
+            self._log("ERROR: PyTorch is not installed. Run install.bat first.")
+            return
+
         model_path = self.model_path_input.text().strip()
         output_dir = self.output_dir_input.text().strip()
 

@@ -556,6 +556,21 @@ class GenerateTab(QWidget):
             self.status_label.setText("Enter a model path or HuggingFace ID.")
             return
 
+        # Pre-check: verify torch can be imported before starting the worker
+        try:
+            import torch  # noqa: F401
+        except OSError:
+            self.status_label.setText(
+                "PyTorch DLL failed to load. Run update.bat to fix, "
+                "or install Visual C++ Redistributable (x64) and reboot."
+            )
+            return
+        except ImportError:
+            self.status_label.setText(
+                "PyTorch is not installed. Run install.bat first."
+            )
+            return
+
         from dataset_sorter.generate_worker import GenerateWorker
 
         # Create worker if needed
