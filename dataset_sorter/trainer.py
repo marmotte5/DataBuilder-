@@ -111,6 +111,7 @@ class TrainingState:
     """Mutable training state passed to callbacks."""
     global_step: int = 0
     epoch: int = 0
+    epoch_step: int = 0    # Batch index within current epoch (for resume)
     loss: float = 0.0
     lr: float = 0.0
     running: bool = True
@@ -654,9 +655,20 @@ class Trainer:
                     f"Epoch {epoch + 1}/{config.epochs}",
                 )
 
+            # Determine how many batches to skip (resume within epoch)
+            _skip_batches = self.state.epoch_step if epoch == self.state.epoch else 0
+
             for step, batch in enumerate(dataloader):
                 if not self.state.running:
                     break
+
+                # Skip batches already seen before checkpoint
+                if step < _skip_batches:
+                    continue
+                _skip_batches = 0  # Only skip once
+
+                # Track position within epoch for checkpoint resume
+                self.state.epoch_step = step
 
                 # ── Pause gate ──
                 self._handle_pause(progress_fn)
@@ -1009,6 +1021,7 @@ class Trainer:
         state_dict = {
             "global_step": self.state.global_step,
             "epoch": self.state.epoch,
+            "epoch_step": self.state.epoch_step,
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
         }
@@ -1037,16 +1050,21 @@ class Trainer:
         self.state.phase = "training"
 
     def _cleanup_old_checkpoints(self):
-        """Keep only the last N step checkpoints."""
+        """Keep only the last N checkpoints (step, epoch, and manual).
+
+        The 'final' checkpoint is always preserved.
+        """
         keep = self.config.save_last_n_checkpoints
         if keep <= 0:
             return
         ckpt_dir = self.output_dir / "checkpoints"
         if not ckpt_dir.exists():
             return
+        # Collect all checkpoint dirs except 'final' (always kept)
         dirs = sorted(
-            [d for d in ckpt_dir.iterdir() if d.is_dir() and d.name.startswith("step_")],
-            key=lambda d: d.name,
+            [d for d in ckpt_dir.iterdir()
+             if d.is_dir() and d.name != "final"],
+            key=lambda d: d.stat().st_mtime,
         )
         while len(dirs) > keep:
             shutil.rmtree(str(dirs.pop(0)), ignore_errors=True)
@@ -1305,6 +1323,15 @@ class Trainer:
         except OSError as e:
             log.warning(f"Could not write backup config.json: {e}")
 
+        # Save loss history (for Smart Resume disaster recovery)
+        loss_history_src = self.output_dir / "loss_history.json"
+        if loss_history_src.exists():
+            try:
+                import shutil as _shutil
+                _shutil.copy2(str(loss_history_src), str(backup_dir / "loss_history.json"))
+            except OSError as e:
+                log.warning(f"Could not backup loss_history.json: {e}")
+
         log.info(f"Backup saved to {backup_dir}")
         self.state.phase = "training"
 
@@ -1318,6 +1345,7 @@ class Trainer:
         state = torch.load(str(state_path), map_location="cpu", weights_only=True)
         self.state.global_step = state["global_step"]
         self.state.epoch = state["epoch"]
+        self.state.epoch_step = state.get("epoch_step", 0)
 
         if self.optimizer is not None and "optimizer" in state:
             try:
@@ -1359,10 +1387,52 @@ class Trainer:
                 except Exception as e:
                     log.warning(f"Could not restore LoRA weights: {e}")
         else:
-            # Full finetune — pipeline.save_pretrained was used to save
-            # Weights are already loaded via load_model(), so only needed
-            # if checkpoint contains updated weights
-            pass
+            # Full finetune — reload updated weights from checkpoint.
+            # pipeline.save_pretrained saves the full model structure;
+            # we need to load the checkpoint weights, not the original base.
+            unet_dir = checkpoint_dir / "unet"
+            transformer_dir = checkpoint_dir / "transformer"
+            model_dir = unet_dir if unet_dir.exists() else (
+                transformer_dir if transformer_dir.exists() else None
+            )
+            if model_dir is not None and self.backend.unet is not None:
+                try:
+                    from safetensors.torch import load_file
+                    weight_files = list(model_dir.glob("*.safetensors"))
+                    if weight_files:
+                        state = {}
+                        for wf in weight_files:
+                            state.update(load_file(str(wf)))
+                        missing, unexpected = self.backend.unet.load_state_dict(
+                            state, strict=False,
+                        )
+                        if missing:
+                            log.warning(f"Full finetune resume: {len(missing)} missing keys")
+                        if unexpected:
+                            log.debug(f"Full finetune resume: {len(unexpected)} unexpected keys")
+                        log.info(f"Restored full finetune weights from {model_dir}")
+                    else:
+                        log.warning(f"No .safetensors files in {model_dir}; "
+                                    f"using base model weights")
+                except Exception as e:
+                    log.warning(f"Could not restore full finetune weights: {e}")
+            elif checkpoint_dir.exists() and self.backend.pipeline is not None:
+                # Try loading full pipeline from checkpoint root
+                try:
+                    from diffusers import DiffusionPipeline
+                    pipe = DiffusionPipeline.from_pretrained(
+                        str(checkpoint_dir), torch_dtype=self.dtype,
+                        trust_remote_code=True,
+                    )
+                    unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
+                    if unet is not None:
+                        self.backend.unet.load_state_dict(
+                            unet.state_dict(), strict=False,
+                        )
+                        log.info("Restored full finetune weights from pipeline checkpoint")
+                    del pipe
+                except Exception as e:
+                    log.warning(f"Could not restore full finetune pipeline: {e}")
 
         # Restore EMA state
         ema_path = checkpoint_dir / "ema_weights.pt"

@@ -95,6 +95,12 @@ def estimate_vram(config) -> dict:
         te_gb = 0.0  # Offloaded after caching
     elif not config.train_text_encoder:
         te_gb *= 0.5  # Inference only, no gradients
+    # Apply quantization savings
+    te_quant = getattr(config, 'quantize_text_encoder', 'none')
+    if te_gb > 0 and te_quant == "int8":
+        te_gb *= 0.5
+    elif te_gb > 0 and te_quant == "int4":
+        te_gb *= 0.25
     breakdown["Text encoder"] = round(te_gb, 1)
 
     # 4. LoRA adapter weights
@@ -181,6 +187,9 @@ def estimate_vram(config) -> dict:
             suggestions.append(f"Reduce batch size from {config.batch_size} to 1")
         if not config.fp8_base_model and not is_lora:
             suggestions.append("Enable 'fp8 Base Model' to halve model weight memory")
+        te_quant_s = getattr(config, 'quantize_text_encoder', 'none')
+        if te_quant_s == "none" and not config.cache_text_encoder:
+            suggestions.append("Set 'TE Quantization' to INT8 or INT4 to reduce text encoder VRAM")
         if config.use_ema and not config.ema_cpu_offload:
             suggestions.append("Enable 'EMA CPU Offload' to move EMA weights to RAM")
         if not is_lora:

@@ -127,6 +127,17 @@ class RecoTab(QWidget):
         )
         row3.addWidget(self.fp8_check)
 
+        self.te_quant_combo = QComboBox()
+        self.te_quant_combo.addItem("TE: Full precision", "none")
+        self.te_quant_combo.addItem("TE: INT8 (save VRAM)", "int8")
+        self.te_quant_combo.addItem("TE: INT4 (max save)", "int4")
+        self.te_quant_combo.setToolTip(
+            "Quantize the frozen text encoder to save GPU memory.\n"
+            "Biggest impact on Z-Image (Qwen3) and Flux (T5-XXL).\n"
+            "Requires bitsandbytes library."
+        )
+        row3.addWidget(self.te_quant_combo)
+
         row3.addStretch()
         layout.addLayout(row3)
 

@@ -99,6 +99,7 @@ class TrainingConfig:
     torch_compile: bool = False     # torch.compile() JIT
     cudnn_benchmark: bool = True    # cuDNN auto-tuner
     fp8_base_model: bool = False    # Load base model in fp8 (saves ~50% VRAM)
+    quantize_text_encoder: str = "none"  # none, int8, int4 — quantize frozen TE via bitsandbytes
 
     # ── Dataset & Tags ─────────────────────────────────────────────────
     tag_shuffle: bool = True        # Shuffle tags in captions each epoch

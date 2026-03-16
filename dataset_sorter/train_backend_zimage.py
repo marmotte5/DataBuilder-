@@ -58,6 +58,37 @@ class ZImageBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "flow"
 
+    def _get_te_load_kwargs(self) -> dict:
+        """Build kwargs for quantized text encoder loading via bitsandbytes.
+
+        Returns extra from_pretrained kwargs when quantize_text_encoder is
+        'int8' or 'int4'. Saves 50-75% TE VRAM for the frozen Qwen3 encoder
+        with zero quality impact (no gradients flow through it).
+        """
+        quant = self.config.quantize_text_encoder
+        if quant == "int8":
+            try:
+                import bitsandbytes  # noqa: F401
+                log.info("Z-Image TE: loading Qwen3 in INT8 (saves ~50%% TE VRAM)")
+                return {"load_in_8bit": True, "device_map": "auto"}
+            except ImportError:
+                log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
+        elif quant == "int4":
+            try:
+                import bitsandbytes  # noqa: F401
+                from transformers import BitsAndBytesConfig
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=self.dtype,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+                log.info("Z-Image TE: loading Qwen3 in INT4/NF4 (saves ~75%% TE VRAM)")
+                return {"quantization_config": bnb_config, "device_map": "auto"}
+            except ImportError:
+                log.warning("bitsandbytes not installed; skipping INT4 TE quantization")
+        return {}
+
     def load_model(self, model_path: str):
         """Load all Z-Image model components from *model_path*.
 
@@ -72,8 +103,14 @@ class ZImageBackend(TrainBackendBase):
         # Handle single-file .safetensors / .ckpt models
         is_single_file = model_path.endswith((".safetensors", ".ckpt"))
 
-        # Try loading as a diffusers pipeline first
+        # Check if quantized TE loading is requested — forces manual path
+        te_kwargs = self._get_te_load_kwargs()
+        use_quantized_te = bool(te_kwargs)
+
+        # Try loading as a diffusers pipeline first (unless quantized TE requested)
         try:
+            if use_quantized_te:
+                raise RuntimeError("Skip pipeline path for quantized TE loading")
             from diffusers import DiffusionPipeline
             if is_single_file:
                 pipe = DiffusionPipeline.from_single_file(
@@ -103,6 +140,7 @@ class ZImageBackend(TrainBackendBase):
             self.text_encoder = AutoModelForCausalLM.from_pretrained(
                 model_path, subfolder="text_encoder",
                 torch_dtype=self.dtype, trust_remote_code=True,
+                **te_kwargs,
             )
             self.vae = AutoencoderKL.from_pretrained(
                 model_path, subfolder="vae",

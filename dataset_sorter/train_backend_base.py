@@ -272,6 +272,38 @@ class TrainBackendBase(ABC):
             except Exception:
                 pass
 
+        # 9. FP8 base model: cast frozen (non-LoRA) weights to float8_e4m3fn
+        #    Halves model weight VRAM on Hopper/Ada GPUs (RTX 4090, H100, etc.)
+        #    Only applies to frozen base weights, not trainable LoRA parameters.
+        if config.fp8_base_model and self.unet is not None:
+            self._apply_fp8_base_model()
+
+    def _apply_fp8_base_model(self):
+        """Cast frozen (non-trainable) base model weights to FP8 (float8_e4m3fn).
+
+        Saves ~50% model weight VRAM. Only casts parameters that do NOT
+        require grad (i.e. frozen base weights), preserving full precision
+        for trainable LoRA adapters. Falls back to float16 on hardware that
+        doesn't support float8.
+        """
+        try:
+            fp8_dtype = torch.float8_e4m3fn
+        except AttributeError:
+            log.warning("fp8_base_model: torch.float8_e4m3fn not available "
+                        "(requires PyTorch 2.1+). Falling back to float16.")
+            fp8_dtype = torch.float16
+
+        converted = 0
+        for name, param in self.unet.named_parameters():
+            if not param.requires_grad and param.is_floating_point():
+                param.data = param.data.to(fp8_dtype)
+                converted += 1
+
+        if converted > 0:
+            log.info(f"fp8_base_model: cast {converted} frozen parameters to {fp8_dtype}")
+        else:
+            log.warning("fp8_base_model: no frozen parameters found to convert")
+
     def setup_lora(self) -> nn.Module:
         """Inject LoRA layers and return the wrapped model.
 
@@ -344,6 +376,36 @@ class TrainBackendBase(ABC):
         self.unet.to(self.device, dtype=self.dtype)
         self.unet.train()
         self.unet.requires_grad_(True)
+
+    def _get_te_quantization_kwargs(self) -> dict:
+        """Return from_pretrained kwargs for quantized text encoder loading.
+
+        Supports int8 and int4 (NF4) via bitsandbytes. Subclasses can call
+        this when loading text encoders to reduce TE VRAM by 50-75%.
+        """
+        quant = self.config.quantize_text_encoder
+        if quant == "int8":
+            try:
+                import bitsandbytes  # noqa: F401
+                log.info("Loading text encoder in INT8 (saves ~50%% TE VRAM)")
+                return {"load_in_8bit": True, "device_map": "auto"}
+            except ImportError:
+                log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
+        elif quant == "int4":
+            try:
+                import bitsandbytes  # noqa: F401
+                from transformers import BitsAndBytesConfig
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=self.dtype,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+                log.info("Loading text encoder in INT4/NF4 (saves ~75%% TE VRAM)")
+                return {"quantization_config": bnb_config, "device_map": "auto"}
+            except ImportError:
+                log.warning("bitsandbytes not installed; skipping INT4 TE quantization")
+        return {}
 
     def freeze_text_encoders(self):
         """Freeze text encoders and move off GPU if caching."""

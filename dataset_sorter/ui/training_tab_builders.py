@@ -719,6 +719,20 @@ class TrainingTabBuildersMixin:
         self.fp8_check.setToolTip("Load base model weights in fp8 precision. Halves model VRAM but may reduce quality slightly.")
         g3l.addWidget(self.fp8_check)
 
+        te_quant_row = QHBoxLayout()
+        te_quant_row.addWidget(QLabel("TE Quantization"))
+        self.te_quant_combo = QComboBox()
+        self.te_quant_combo.addItem("None", "none")
+        self.te_quant_combo.addItem("INT8 (saves ~50% TE VRAM)", "int8")
+        self.te_quant_combo.addItem("INT4/NF4 (saves ~75% TE VRAM)", "int4")
+        self.te_quant_combo.setToolTip(
+            "Quantize frozen text encoders via bitsandbytes.\n"
+            "Biggest impact on models with large TEs (Z-Image/Qwen3, Flux/T5-XXL).\n"
+            "Zero quality impact since TE is frozen (no gradients)."
+        )
+        te_quant_row.addWidget(self.te_quant_combo, 1)
+        g3l.addLayout(te_quant_row)
+
         self.cudnn_check = QCheckBox("cuDNN Benchmark")
         self.cudnn_check.setChecked(True)
         self.cudnn_check.setToolTip("Enable cuDNN autotuner. Faster training after first few steps. Disable for reproducibility.")

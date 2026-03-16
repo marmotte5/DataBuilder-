@@ -123,6 +123,7 @@ class TrainingConfigIOMixin:
         config.gradient_checkpointing = self.grad_ckpt_check.isChecked()
         config.fused_backward_pass = self.fused_backward_check.isChecked()
         config.fp8_base_model = self.fp8_check.isChecked()
+        config.quantize_text_encoder = self.te_quant_combo.currentData() or "none"
         config.cudnn_benchmark = self.cudnn_check.isChecked()
         config.mixed_precision = self.precision_combo.currentText()
 
@@ -297,6 +298,10 @@ class TrainingConfigIOMixin:
         self.grad_ckpt_check.setChecked(config.gradient_checkpointing)
         self.fused_backward_check.setChecked(config.fused_backward_pass)
         self.fp8_check.setChecked(config.fp8_base_model)
+        for i in range(self.te_quant_combo.count()):
+            if self.te_quant_combo.itemData(i) == config.quantize_text_encoder:
+                self.te_quant_combo.setCurrentIndex(i)
+                break
         self.cudnn_check.setChecked(config.cudnn_benchmark)
         pidx = ["bf16", "fp16", "fp32"].index(config.mixed_precision) if config.mixed_precision in ["bf16", "fp16", "fp32"] else 0
         self.precision_combo.setCurrentIndex(pidx)
