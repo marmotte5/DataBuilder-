@@ -537,6 +537,99 @@ class TrainingTabBuildersMixin:
         g_ts_ema.setLayout(g_ts_ema_l)
         layout.addWidget(g_ts_ema)
 
+        # Concept Probing & Adaptive Tag Weighting
+        g_probe = self._group("Concept Probing & Adaptive Tag Weighting")
+        g_probe_l = QGridLayout()
+
+        # --- Concept Probing ---
+        self.concept_probe_check = QCheckBox("Enable Concept Probing")
+        self.concept_probe_check.setToolTip(
+            "Before training, generate test images to detect which concepts the base model "
+            "doesn't know. Unknown concepts automatically get higher loss weight."
+        )
+        g_probe_l.addWidget(self.concept_probe_check, 0, 0, 1, 2)
+
+        g_probe_l.addWidget(QLabel("Probe Steps"), 1, 0)
+        self.concept_probe_steps_spin = QSpinBox()
+        self.concept_probe_steps_spin.setRange(5, 50)
+        self.concept_probe_steps_spin.setValue(15)
+        self.concept_probe_steps_spin.setToolTip("Inference steps per probe image (fewer = faster, less accurate)")
+        g_probe_l.addWidget(self.concept_probe_steps_spin, 1, 1)
+
+        g_probe_l.addWidget(QLabel("Probe Images"), 2, 0)
+        self.concept_probe_images_spin = QSpinBox()
+        self.concept_probe_images_spin.setRange(1, 10)
+        self.concept_probe_images_spin.setValue(2)
+        self.concept_probe_images_spin.setToolTip("Images to generate per concept for probing")
+        g_probe_l.addWidget(self.concept_probe_images_spin, 2, 1)
+
+        g_probe_l.addWidget(QLabel("Known Threshold"), 3, 0)
+        self.concept_probe_threshold_spin = QDoubleSpinBox()
+        self.concept_probe_threshold_spin.setRange(0.0, 1.0)
+        self.concept_probe_threshold_spin.setSingleStep(0.05)
+        self.concept_probe_threshold_spin.setValue(0.25)
+        self.concept_probe_threshold_spin.setToolTip("CLIP similarity below this = concept is unknown to the model")
+        g_probe_l.addWidget(self.concept_probe_threshold_spin, 3, 1)
+
+        # --- Adaptive Tag Weighting ---
+        self.adaptive_tag_check = QCheckBox("Enable Adaptive Tag Weighting")
+        self.adaptive_tag_check.setToolTip(
+            "Dynamically adjust per-tag loss weights during training based on per-tag loss EMA. "
+            "Tags the model struggles with get higher weight automatically."
+        )
+        g_probe_l.addWidget(self.adaptive_tag_check, 4, 0, 1, 2)
+
+        g_probe_l.addWidget(QLabel("Warmup Steps"), 5, 0)
+        self.adaptive_tag_warmup_spin = QSpinBox()
+        self.adaptive_tag_warmup_spin.setRange(0, 500)
+        self.adaptive_tag_warmup_spin.setValue(50)
+        self.adaptive_tag_warmup_spin.setToolTip("Steps before adaptive weighting kicks in (collect loss statistics first)")
+        g_probe_l.addWidget(self.adaptive_tag_warmup_spin, 5, 1)
+
+        g_probe_l.addWidget(QLabel("Adjustment Rate"), 6, 0)
+        self.adaptive_tag_rate_spin = QDoubleSpinBox()
+        self.adaptive_tag_rate_spin.setRange(0.0, 1.0)
+        self.adaptive_tag_rate_spin.setSingleStep(0.1)
+        self.adaptive_tag_rate_spin.setValue(0.5)
+        self.adaptive_tag_rate_spin.setToolTip("How aggressively to adjust weights (0=off, 1=aggressive)")
+        g_probe_l.addWidget(self.adaptive_tag_rate_spin, 6, 1)
+
+        g_probe_l.addWidget(QLabel("Max Tag Weight"), 7, 0)
+        self.adaptive_tag_max_spin = QDoubleSpinBox()
+        self.adaptive_tag_max_spin.setRange(1.0, 20.0)
+        self.adaptive_tag_max_spin.setSingleStep(0.5)
+        self.adaptive_tag_max_spin.setValue(5.0)
+        self.adaptive_tag_max_spin.setToolTip("Maximum weight a single tag can receive")
+        g_probe_l.addWidget(self.adaptive_tag_max_spin, 7, 1)
+
+        # --- Attention Rebalancing ---
+        self.attention_rebalance_check = QCheckBox("Enable Attention Rebalancing")
+        self.attention_rebalance_check.setToolTip(
+            "Monitor cross-attention maps and boost tokens the model ignores. "
+            "E.g. 'blue tire' gets boosted if attention focuses only on 'red car'. "
+            "Requires attention debug capture (auto-enabled)."
+        )
+        g_probe_l.addWidget(self.attention_rebalance_check, 8, 0, 1, 2)
+
+        g_probe_l.addWidget(QLabel("Ignore Threshold"), 9, 0)
+        self.attention_rebalance_threshold_spin = QDoubleSpinBox()
+        self.attention_rebalance_threshold_spin.setRange(0.01, 0.5)
+        self.attention_rebalance_threshold_spin.setSingleStep(0.05)
+        self.attention_rebalance_threshold_spin.setValue(0.15)
+        self.attention_rebalance_threshold_spin.setToolTip("Attention fraction below this = 'ignored' token (gets boosted)")
+        g_probe_l.addWidget(self.attention_rebalance_threshold_spin, 9, 1)
+
+        g_probe_l.addWidget(QLabel("Max Boost"), 10, 0)
+        self.attention_rebalance_boost_spin = QDoubleSpinBox()
+        self.attention_rebalance_boost_spin.setRange(1.0, 10.0)
+        self.attention_rebalance_boost_spin.setSingleStep(0.5)
+        self.attention_rebalance_boost_spin.setValue(2.0)
+        self.attention_rebalance_boost_spin.setToolTip("Maximum boost multiplier for ignored tokens")
+        g_probe_l.addWidget(self.attention_rebalance_boost_spin, 10, 1)
+
+        g_probe.setLayout(g_probe_l)
+        layout.addWidget(g_probe)
+
         # Memory & Compute Optimizations (2025-2026)
         g_mem = self._group("Advanced Optimizations (2025-2026)")
         g_mem_l = QVBoxLayout()

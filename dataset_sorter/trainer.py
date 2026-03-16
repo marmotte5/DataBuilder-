@@ -192,6 +192,10 @@ class Trainer:
         self._curriculum_sampler = None
         # Timestep EMA
         self._timestep_ema = None
+        # Concept probing & adaptive weighting
+        self._concept_probe_result = None
+        self._adaptive_tag_weighter = None
+        self._attention_rebalancer = None
 
     def setup(
         self,
@@ -432,6 +436,72 @@ class Trainer:
             )
             log.info(f"Per-timestep EMA sampling enabled ({config.timestep_ema_num_buckets} buckets)")
 
+        # ── 16. Concept probing (analyze base model knowledge gaps) ──
+        if config.concept_probe_enabled and self.backend.pipeline is not None:
+            from dataset_sorter.concept_probing import ConceptProber
+            if progress_fn:
+                progress_fn(5, 6, "Probing base model knowledge...")
+            prober = ConceptProber(
+                device=self.device,
+                num_images_per_concept=config.concept_probe_images,
+                num_inference_steps=config.concept_probe_steps,
+                knowledge_threshold=config.concept_probe_threshold,
+                max_weight=config.adaptive_tag_max_weight,
+            )
+            # Extract unique concept tags from captions
+            concept_tags = set()
+            for cap in captions:
+                for tag in cap.split(","):
+                    tag = tag.strip()
+                    if tag:
+                        concept_tags.add(tag)
+            self._concept_probe_result = prober.probe_concepts(
+                list(concept_tags), self.backend.pipeline,
+                tokenizer=self.backend.tokenizer,
+                text_encoder=self.backend.text_encoder,
+                progress_fn=lambda c, t, m: progress_fn(c, t, m) if progress_fn else None,
+            )
+            log.info(
+                f"Concept probing: {len(self._concept_probe_result.unknown_concepts)} unknown, "
+                f"{len(self._concept_probe_result.known_concepts)} known concepts"
+            )
+
+        # ── 17. Adaptive tag weighting setup ──
+        if config.adaptive_tag_weighting:
+            from dataset_sorter.concept_probing import AdaptiveTagWeighter
+            initial_weights = {}
+            if self._concept_probe_result is not None:
+                initial_weights = self._concept_probe_result.suggested_weights
+            self._adaptive_tag_weighter = AdaptiveTagWeighter(
+                initial_weights=initial_weights,
+                warmup_steps=config.adaptive_tag_warmup,
+                adjustment_rate=config.adaptive_tag_rate,
+                max_weight=config.adaptive_tag_max_weight,
+            )
+            log.info(
+                f"Adaptive tag weighting enabled "
+                f"(warmup={config.adaptive_tag_warmup}, rate={config.adaptive_tag_rate})"
+            )
+
+        # ── 18. Attention-guided rebalancing setup ──
+        if config.attention_rebalancing:
+            # Requires attention debug to be enabled for attention maps
+            if not config.attention_debug_enabled:
+                config.attention_debug_enabled = True
+                from dataset_sorter.attention_map_debugger import AttentionMapDebugger
+                if self._attention_debugger is None:
+                    self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
+                    self._attention_debugger.attach(self.backend.unet)
+                log.info("Auto-enabled attention debug for attention-guided rebalancing")
+
+            from dataset_sorter.concept_probing import AttentionGuidedRebalancer
+            self._attention_rebalancer = AttentionGuidedRebalancer(
+                tokenizer=self.backend.tokenizer,
+                attention_threshold=config.attention_rebalance_threshold,
+                boost_factor=config.attention_rebalance_boost,
+            )
+            log.info("Attention-guided rebalancing enabled")
+
         if progress_fn:
             progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
@@ -660,6 +730,27 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
 
+                    # Log adaptive weighter stats periodically
+                    if (self._adaptive_tag_weighter is not None and
+                            self.state.global_step % 100 == 0):
+                        stats = self._adaptive_tag_weighter.get_stats()
+                        if stats.get("active"):
+                            hardest = stats.get("hardest_tags", [])[:3]
+                            log.info(
+                                f"Adaptive weights: {stats['tracked_tags']} tags, "
+                                f"weight range [{stats['weight_min']:.2f}, {stats['weight_max']:.2f}], "
+                                f"hardest: {hardest}"
+                            )
+
+                    if (self._attention_rebalancer is not None and
+                            self.state.global_step % 100 == 0):
+                        attn_stats = self._attention_rebalancer.get_stats()
+                        if attn_stats.get("boosted_tokens", 0) > 0:
+                            log.info(
+                                f"Attention rebalancer: {attn_stats['boosted_tokens']} "
+                                f"ignored tokens boosted"
+                            )
+
                     # Record loss history for Smart Resume (evict oldest if over cap)
                     self._loss_history.append((self.state.global_step, self.state.loss))
                     self._lr_history.append((self.state.global_step, self.state.lr))
@@ -828,12 +919,43 @@ class Trainer:
         if self._timestep_ema is not None:
             self.backend._timestep_ema_sampler = self._timestep_ema
 
+        # ── Adaptive tag weighting: apply per-caption weights before loss ──
+        if self._adaptive_tag_weighter is not None and "caption" in batch:
+            captions_for_weight = batch["caption"]
+            if isinstance(captions_for_weight, str):
+                captions_for_weight = [captions_for_weight]
+            # Compute effective per-sample weight from adaptive tag weights
+            sample_weights = torch.tensor(
+                [self._adaptive_tag_weighter.get_caption_weight(c) for c in captions_for_weight],
+                device=self.device, dtype=self.dtype,
+            )
+            self.backend._adaptive_sample_weights = sample_weights
+
+        # ── Attention rebalancing: apply attention-based boosts ──
+        if self._attention_rebalancer is not None and self._attention_debugger is not None:
+            attn_maps = self._attention_debugger.get_attention_maps()
+            if attn_maps and "caption" in batch:
+                captions_for_attn = batch["caption"]
+                if isinstance(captions_for_attn, str):
+                    captions_for_attn = [captions_for_attn]
+                for cap in captions_for_attn:
+                    self._attention_rebalancer.update_from_attention_maps(attn_maps, cap)
+
         # ── Delegate to backend training step (handles model-specific logic) ──
         # Note: autocast is applied inside each backend's training_step/flow_training_step.
         # Removed redundant outer autocast that caused double nesting and confused
         # precision semantics (loss .float() casts ran under outer autocast).
         bsz = latents.shape[0]
         loss = self.backend.training_step(latents, te_out, bsz)
+
+        # ── Apply adaptive sample weights to loss ──
+        if hasattr(self.backend, '_adaptive_sample_weights') and self.backend._adaptive_sample_weights is not None:
+            weights = self.backend._adaptive_sample_weights
+            if loss.dim() == 0:
+                loss = loss * weights.mean()
+            elif loss.shape[0] == weights.shape[0]:
+                loss = (loss * weights).mean()
+            self.backend._adaptive_sample_weights = None
 
         # ── Curriculum learning: update per-image loss tracking ──
         if self._curriculum_sampler is not None and "index" in batch:
@@ -847,6 +969,18 @@ class Trainer:
             self._curriculum_sampler.update_loss(
                 indices, [loss_val] * len(indices),
             )
+
+        # ── Adaptive tag weighting: decompose and update per-tag losses ──
+        if self._adaptive_tag_weighter is not None and "caption" in batch:
+            captions_for_decomp = batch["caption"]
+            if isinstance(captions_for_decomp, str):
+                captions_for_decomp = [captions_for_decomp]
+            from dataset_sorter.concept_probing import decompose_loss_by_tag
+            per_tag = decompose_loss_by_tag(
+                captions_for_decomp,
+                [loss.detach().item()] * len(captions_for_decomp),
+            )
+            self._adaptive_tag_weighter.update(per_tag)
 
         return loss
 

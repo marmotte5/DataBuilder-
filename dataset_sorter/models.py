@@ -207,6 +207,19 @@ class TrainingConfig:
     attention_debug_every_n_steps: int = 100   # Generate debug maps every N steps
     attention_debug_top_k: int = 5             # Number of top tokens to visualize
 
+    # ── Concept Probing & Adaptive Weighting ─────────────────────────
+    concept_probe_enabled: bool = False         # Probe base model knowledge before training
+    concept_probe_steps: int = 15              # Inference steps for probing (fewer = faster)
+    concept_probe_images: int = 2              # Images per concept for probing
+    concept_probe_threshold: float = 0.25      # Score below = unknown concept
+    adaptive_tag_weighting: bool = False        # Dynamic per-tag loss weighting during training
+    adaptive_tag_warmup: int = 50              # Steps before adaptive weighting kicks in
+    adaptive_tag_rate: float = 0.5             # Adjustment aggressiveness (0=off, 1=aggressive)
+    adaptive_tag_max_weight: float = 5.0       # Maximum tag weight
+    attention_rebalancing: bool = False         # Boost tokens the model ignores (needs attention_debug)
+    attention_rebalance_threshold: float = 0.15  # Attention fraction below this = "ignored"
+    attention_rebalance_boost: float = 2.0     # Max boost for ignored tokens
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 
