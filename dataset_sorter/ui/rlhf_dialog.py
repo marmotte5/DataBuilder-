@@ -25,7 +25,11 @@ log = logging.getLogger(__name__)
 
 
 def pil_to_pixmap(pil_image, max_size: int = 350) -> QPixmap:
-    """Convert a PIL Image to QPixmap, scaled to fit."""
+    """Convert a PIL Image to a QPixmap scaled to fit within max_size x max_size.
+
+    Uses .copy() to detach Qt pixel data from the Python buffer,
+    preventing use-after-free if the bytes object is garbage-collected.
+    """
     img = pil_image.convert("RGB")
     data = img.tobytes("raw", "RGB")
     qimg = QImage(
@@ -48,6 +52,7 @@ class ClickableImageLabel(QLabel):
     clicked = pyqtSignal()
 
     def __init__(self, parent=None):
+        """Initialize the clickable image label with default unselected styling."""
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -55,6 +60,7 @@ class ClickableImageLabel(QLabel):
         self._update_style()
 
     def _update_style(self):
+        """Apply selected (green border) or default (hover-accent) styling."""
         if self._selected:
             self.setStyleSheet(
                 f"QLabel {{ border: 3px solid {COLORS['success']}; "
@@ -71,10 +77,12 @@ class ClickableImageLabel(QLabel):
 
     @property
     def selected(self) -> bool:
+        """Whether this image label is currently in the selected state."""
         return self._selected
 
     @selected.setter
     def selected(self, value: bool):
+        """Set the selection state and update the visual styling accordingly."""
         self._selected = value
         self._update_style()
 

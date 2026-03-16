@@ -30,10 +30,12 @@ class OverridePanel(QWidget):
     load_config = pyqtSignal()
 
     def __init__(self, parent=None):
+        """Initialize the override panel and build its UI components."""
         super().__init__(parent)
         self._build_ui()
 
     def _build_ui(self):
+        """Construct the scrollable layout with override, deletion, editor, bucket, config, and stats cards."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -194,16 +196,19 @@ class OverridePanel(QWidget):
         outer.addWidget(scroll, 1)
 
     def _card(self):
+        """Create and return a styled card widget used as a UI section container."""
         w = QWidget()
         w.setStyleSheet(CARD_STYLE)
         return w
 
     def _subheader(self, t):
+        """Create a styled sub-header label with the given text."""
         l = QLabel(t)
         l.setStyleSheet(SECTION_SUBHEADER_STYLE)
         return l
 
     def _muted(self, t):
+        """Create a small, muted-style label for section dividers (e.g. RENAME, MERGE)."""
         l = QLabel(t)
         l.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 10px; "
@@ -213,6 +218,7 @@ class OverridePanel(QWidget):
         return l
 
     def _stat(self, val, label):
+        """Create a small stat widget displaying a numeric value above a descriptive label."""
         w = QWidget()
         w.setStyleSheet("background: transparent;")
         ly = QVBoxLayout(w)
@@ -231,12 +237,15 @@ class OverridePanel(QWidget):
         return w
 
     def set_selected_info(self, text):
+        """Update the label showing information about the currently selected tag."""
         self.selected_tag_label.setText(text)
 
     def set_editor_info(self, text):
+        """Update the informational label in the tag editor section."""
         self.editor_info_label.setText(text)
 
     def update_deleted_tags_label(self, deleted_tags):
+        """Refresh the deleted-tags label with a summary of currently deleted tags."""
         if not deleted_tags:
             self.deleted_tags_label.setText("No deleted tags")
             return
@@ -248,6 +257,7 @@ class OverridePanel(QWidget):
         self.deleted_tags_label.setText(text)
 
     def update_stats(self, n_images, n_txt, n_tags):
+        """Update the statistics card with current image, text file, and unique tag counts."""
         self.stat_images._value_label.setText(str(n_images))
         self.stat_txt._value_label.setText(str(n_txt))
         self.stat_tags._value_label.setText(str(n_tags))

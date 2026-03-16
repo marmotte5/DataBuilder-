@@ -63,7 +63,11 @@ class KolorsBackend(TrainBackendBase):
         log.info(f"Loaded Kolors model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
-        """Kolors uses SDXL UNet — same LoRA targets."""
+        """Return the UNet attention and feed-forward layer names targeted by LoRA.
+
+        Kolors shares SDXL's UNet, so the same attention projections
+        (Q/K/V/out) and feed-forward layers are targeted.
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_in", "proj_out",
@@ -71,7 +75,12 @@ class KolorsBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with ChatGLM-6B."""
+        """Tokenize and encode captions through ChatGLM-6B.
+
+        Returns (encoder_hidden_states, pooled) where pooled is produced by
+        projecting the first token embedding to 1280-dim to match SDXL UNet expectations,
+        since ChatGLM lacks a native pooled output.
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=256,
@@ -100,10 +109,17 @@ class KolorsBackend(TrainBackendBase):
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
-        """SDXL-style conditioning with time_ids.
+        """Build the SDXL-style added conditioning dict (text_embeds + time_ids).
 
-        When image_hw is provided (from aspect ratio bucketing), use actual
-        batch dimensions instead of the static config.resolution.
+        Args:
+            batch_size: Number of samples in the batch.
+            pooled: Pooled text embeddings from encode_text_batch.
+            te_out: Unused; kept for interface compatibility.
+            image_hw: If provided, uses actual (H, W) from aspect-ratio bucketing
+                      instead of the default square resolution.
+
+        Returns:
+            Dict with 'text_embeds' and 'time_ids', or None if pooled is None.
         """
         if pooled is None:
             return None

@@ -18,7 +18,12 @@ class TrainingConfigIOMixin:
     """Mixin providing build_config / apply_config / save / load for TrainingTab."""
 
     def build_config(self) -> TrainingConfig:
-        """Build TrainingConfig from all UI controls."""
+        """Collect values from every UI widget and return a populated TrainingConfig.
+
+        Reads model, network, optimizer, dataset, advanced, checkpointing,
+        sampling, and RLHF settings from their respective spin boxes, combo
+        boxes, and check boxes.
+        """
         config = TrainingConfig()
 
         # Model
@@ -168,7 +173,11 @@ class TrainingConfigIOMixin:
         return config
 
     def apply_config(self, config: TrainingConfig):
-        """Apply a TrainingConfig to all UI controls."""
+        """Populate every UI widget from the given TrainingConfig.
+
+        Sets combo box indices, spin box values, and check box states to
+        match the supplied config. Unknown combo values are silently skipped.
+        """
         # Model
         try:
             idx = MODEL_TYPE_KEYS.index(config.model_type)
@@ -346,7 +355,11 @@ class TrainingConfigIOMixin:
                 break
 
     def _save_training_config(self):
-        """Save current training configuration to a JSON file."""
+        """Open a Save dialog and write the current training config to a JSON file.
+
+        Builds the config from UI controls, serialises it via dataclasses.asdict,
+        and writes pretty-printed JSON. Logs success or failure to the training log.
+        """
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Training Config", "training_config.json", "JSON (*.json)",
         )
@@ -364,7 +377,12 @@ class TrainingConfigIOMixin:
             self._log(f"ERROR saving config: {e}")
 
     def _load_training_config(self):
-        """Load training configuration from a JSON file."""
+        """Open a Load dialog and restore training config from a JSON file.
+
+        Parses the JSON into a TrainingConfig, coercing value types to match
+        dataclass field types. Null values and type mismatches are skipped to
+        preserve safe defaults. Applies the result to all UI widgets.
+        """
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Training Config", "", "JSON (*.json)",
         )

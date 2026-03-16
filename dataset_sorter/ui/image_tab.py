@@ -30,6 +30,10 @@ class _PixmapCache:
         self._max_size = max_size
 
     def get(self, path: str, width: int, height: int) -> QPixmap:
+        """Return a scaled QPixmap from cache, loading from disk on miss.
+
+        Evicts the least-recently-used entry when the cache exceeds max_size.
+        """
         key = f"{path}:{width}x{height}"
         if key in self._cache:
             self._cache.move_to_end(key)
@@ -48,6 +52,7 @@ class _PixmapCache:
         return pixmap
 
     def clear(self):
+        """Remove all entries from the cache."""
         self._cache.clear()
 
 
@@ -59,6 +64,7 @@ class ImageTab(QWidget):
     IMG_H = 380
 
     def __init__(self, parent=None):
+        """Initialize the image browser tab with navigation, display, and bucket override controls."""
         super().__init__(parent)
         self._current_index = 0
         self._entries: list[ImageEntry] = []
@@ -146,6 +152,7 @@ class ImageTab(QWidget):
         layout.addLayout(ov_row)
 
     def set_data(self, entries, deleted_tags, manual_overrides):
+        """Load a new set of image entries, clearing the pixmap cache and resetting navigation."""
         self._entries = entries
         self._deleted_tags = deleted_tags
         self._manual_overrides = manual_overrides
@@ -157,6 +164,7 @@ class ImageTab(QWidget):
         self._show_current()
 
     def _show_current(self):
+        """Display the current image, its path, bucket, and tags with deletion/override annotations."""
         if not self._entries:
             self.index_label.setText("0 / 0")
             self.img_display.clear()
@@ -189,16 +197,19 @@ class ImageTab(QWidget):
         self.tags_text.setPlainText(", ".join(parts))
 
     def _go_prev(self):
+        """Navigate to the previous image, if one exists."""
         if self._current_index > 0:
             self._current_index -= 1
             self._show_current()
 
     def _go_next(self):
+        """Navigate to the next image, if one exists."""
         if self._current_index < len(self._entries) - 1:
             self._current_index += 1
             self._show_current()
 
     def _on_jump(self):
+        """Handle the jump spinner: navigate directly to the entered image number."""
         val = self.jump_spinner.value()
         new_idx = max(0, min(val - 1, len(self._entries) - 1))
         if new_idx != self._current_index:
@@ -206,13 +217,16 @@ class ImageTab(QWidget):
             self._show_current()
 
     def _on_force(self):
+        """Emit force_bucket signal to override the current image's bucket assignment."""
         val = self.override_spinner.value()
         if val > 0 and self._entries:
             self.force_bucket.emit(self._current_index, val)
 
     def _on_reset(self):
+        """Emit reset_bucket signal to remove the current image's bucket override."""
         if self._entries:
             self.reset_bucket.emit(self._current_index)
 
     def refresh(self):
+        """Redraw the current image and its metadata."""
         self._show_current()

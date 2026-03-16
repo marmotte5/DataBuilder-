@@ -135,6 +135,10 @@ def toggle_theme() -> str:
 
 
 def get_stylesheet() -> str:
+    """Return the full Qt stylesheet for the application using current theme colors.
+
+    Covers all major widgets: inputs, buttons, tables, tabs, scrollbars, and more.
+    """
     c = COLORS
     return f"""
     QMainWindow, QWidget {{
@@ -318,6 +322,7 @@ def _style_const(template: str) -> str:
 # --- Reusable style functions (re-evaluated on theme change) ---
 
 def card_style() -> str:
+    """Return CSS style string for card containers with background, border, and rounded corners."""
     return (
         f"background-color: {COLORS['bg_alt']}; "
         f"border: 1px solid {COLORS['border']}; "
@@ -325,12 +330,14 @@ def card_style() -> str:
     )
 
 def section_header_style() -> str:
+    """Return CSS style string for primary section header labels (bold, larger font)."""
     return (
         f"color: {COLORS['header']}; font-size: 14px; font-weight: 700; "
         f"padding: 6px 0 2px 0; background: transparent; letter-spacing: 0.3px;"
     )
 
 def section_subheader_style() -> str:
+    """Return CSS style string for secondary section headers (smaller, uppercase, muted)."""
     return (
         f"color: {COLORS['text_secondary']}; font-size: 12px; font-weight: 600; "
         f"padding: 2px 0; background: transparent; text-transform: uppercase; "
@@ -338,6 +345,7 @@ def section_subheader_style() -> str:
     )
 
 def accent_button_style() -> str:
+    """Return Qt stylesheet for primary action buttons with accent color and hover/press states."""
     return (
         f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "
         f"border: none; border-radius: 8px; padding: 9px 22px; font-weight: 600; }} "
@@ -346,6 +354,7 @@ def accent_button_style() -> str:
     )
 
 def success_button_style() -> str:
+    """Return Qt stylesheet for success/confirmation buttons with green color and hover state."""
     return (
         f"QPushButton {{ background-color: {COLORS['success']}; color: {COLORS['bg']}; "
         f"border: none; border-radius: 8px; padding: 9px 22px; font-weight: 700; }} "
@@ -353,6 +362,7 @@ def success_button_style() -> str:
     )
 
 def danger_button_style() -> str:
+    """Return Qt stylesheet for destructive action buttons with red outline and hover state."""
     return (
         f"QPushButton {{ background-color: transparent; color: {COLORS['danger']}; "
         f"border: 1px solid {COLORS['danger']}; border-radius: 8px; "
@@ -361,6 +371,7 @@ def danger_button_style() -> str:
     )
 
 def security_banner_style() -> str:
+    """Return CSS style string for security/status banners with green background and border."""
     return (
         f"background-color: {COLORS['success_bg']}; color: {COLORS['success']}; "
         f"border: 1px solid #1a4a35; border-radius: 10px; "
@@ -368,23 +379,27 @@ def security_banner_style() -> str:
     )
 
 def muted_label_style() -> str:
+    """Return CSS style string for de-emphasized labels with muted color and small font."""
     return (
         f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
     )
 
 def stat_value_style() -> str:
+    """Return CSS style string for large statistic values displayed in accent color."""
     return (
         f"color: {COLORS['accent']}; font-size: 22px; font-weight: 700; "
         f"background: transparent;"
     )
 
 def stat_label_style() -> str:
+    """Return CSS style string for statistic labels (tiny, uppercase, muted)."""
     return (
         f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600; "
         f"background: transparent; text-transform: uppercase; letter-spacing: 0.5px;"
     )
 
 def tag_badge_style() -> str:
+    """Return CSS style string for tag/badge chips with rounded pill shape and accent tint."""
     return (
         f"background-color: {COLORS['accent_subtle']}; color: {COLORS['accent_hover']}; "
         f"border-radius: 10px; padding: 3px 12px; "
@@ -392,6 +407,7 @@ def tag_badge_style() -> str:
     )
 
 def nav_button_style() -> str:
+    """Return Qt stylesheet for navigation buttons with border, hover highlight, and disabled state."""
     return (
         f"QPushButton {{ background-color: {COLORS['surface']}; color: {COLORS['text']}; "
         f"border: 1px solid {COLORS['border']}; border-radius: 8px; "

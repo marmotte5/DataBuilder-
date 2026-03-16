@@ -28,6 +28,9 @@ class TrainingTabBuildersMixin:
     """Mixin providing _build_*_tab methods for TrainingTab."""
 
     def _build_model_tab(self):
+        """Build the Model tab with model type, resolution, VRAM tier,
+        and network/LoRA configuration controls.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -179,6 +182,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_optimizer_tab(self):
+        """Build the Optimizer tab with optimizer selection, learning rate,
+        scheduler, warmup, and gradient accumulation settings.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -315,6 +321,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_dataset_tab(self):
+        """Build the Dataset tab with VAE latent caching, text encoder caching,
+        bucketing, and data augmentation options.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -441,6 +450,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_advanced_tab(self):
+        """Build the Advanced tab with noise parameters, precision, attention mode,
+        checkpoint saving, and miscellaneous training options.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -771,6 +783,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_sampling_tab(self):
+        """Build the Sampling tab with sample generation interval, sampler,
+        CFG scale, dimensions, and prompt configuration.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -876,6 +891,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_controlnet_tab(self):
+        """Build the ControlNet tab with enable toggle, conditioning type,
+        control scale, and conditioning image directory settings.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -935,6 +953,9 @@ class TrainingTabBuildersMixin:
         return scroll
 
     def _build_dpo_tab(self):
+        """Build the DPO tab with enable toggle, beta (KL penalty),
+        loss type, and preference data directory settings.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)

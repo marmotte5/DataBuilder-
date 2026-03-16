@@ -56,6 +56,10 @@ class SanaBackend(TrainBackendBase):
         log.info(f"Loaded Sana model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
+        """Return the Linear DiT layer names targeted for LoRA adaptation.
+
+        Targets attention projections (Q/K/V/out) and linear layers in the DiT blocks.
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_in", "proj_out",
@@ -63,6 +67,10 @@ class SanaBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Tokenize and encode captions through the Gemma-2B text encoder.
+
+        Returns a 1-tuple of encoder hidden states (no pooled output for Sana).
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=300,
@@ -77,6 +85,11 @@ class SanaBackend(TrainBackendBase):
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
+        """Build the additional conditioning dict containing target resolution.
+
+        Sana conditions on image resolution so the model can handle variable sizes.
+        Falls back to the configured default resolution when image_hw is not provided.
+        """
         if image_hw is not None:
             h, w = image_hw
         else:
@@ -88,6 +101,10 @@ class SanaBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
+        """Compute a single flow-matching training step and return the loss.
+
+        Uses raw integer timesteps (no normalization) as expected by Sana.
+        """
         return self.flow_training_step(
             latents, te_out, batch_size, normalize_timestep=False,
         )

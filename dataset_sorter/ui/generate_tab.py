@@ -98,6 +98,7 @@ class LoRAEntry(QWidget):
     removed = pyqtSignal(object)  # self
 
     def __init__(self, parent=None):
+        """Initialize a LoRA entry row with path field, weight slider, and remove button."""
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 2)
@@ -132,6 +133,7 @@ class LoRAEntry(QWidget):
         layout.addWidget(btn_remove)
 
     def _browse(self):
+        """Open a file dialog to select a LoRA model file."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select LoRA file", "",
             "Model files (*.safetensors *.ckpt *.pt *.bin);;All files (*)"
@@ -140,6 +142,7 @@ class LoRAEntry(QWidget):
             self.path_edit.setText(path)
 
     def get_data(self) -> dict:
+        """Return a dict with the adapter's path, weight, and derived name."""
         return {
             "path": self.path_edit.text().strip(),
             "weight": self.weight_spin.value(),
@@ -151,6 +154,7 @@ class GenerateTab(QWidget):
     """Full image generation / model testing tab."""
 
     def __init__(self, parent=None):
+        """Initialize the generate tab with empty gallery and build the UI."""
         super().__init__(parent)
         self._worker = None
         self._generated_images: list = []  # [(PIL.Image, info_str)]
@@ -162,6 +166,7 @@ class GenerateTab(QWidget):
     # ── UI Construction ─────────────────────────────────────────────────
 
     def _build_ui(self):
+        """Construct the full UI: left panel (controls) and right panel (gallery)."""
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(10)
@@ -511,6 +516,7 @@ class GenerateTab(QWidget):
         root.addWidget(splitter)
 
     def _connect_signals(self):
+        """Wire up load, unload, generate, and stop button signals."""
         self.btn_load.clicked.connect(self._on_load_model)
         self.btn_unload.clicked.connect(self._on_unload_model)
         self.btn_generate.clicked.connect(self._on_generate)
@@ -519,15 +525,18 @@ class GenerateTab(QWidget):
     # ── LoRA management ─────────────────────────────────────────────────
 
     def _add_lora_entry(self):
+        """Create and append a new LoRA adapter row to the adapter list."""
         entry = LoRAEntry()
         entry.removed.connect(self._remove_lora_entry)
         self.lora_container.addWidget(entry)
 
     def _remove_lora_entry(self, entry: LoRAEntry):
+        """Remove a LoRA adapter row from the list and destroy its widget."""
         self.lora_container.removeWidget(entry)
         entry.deleteLater()
 
     def _get_lora_adapters(self) -> list[dict]:
+        """Collect all non-empty LoRA adapter entries as a list of dicts."""
         adapters = []
         for i in range(self.lora_container.count()):
             widget = self.lora_container.itemAt(i).widget()
@@ -540,6 +549,7 @@ class GenerateTab(QWidget):
     # ── Model loading ───────────────────────────────────────────────────
 
     def _browse_model(self):
+        """Open a file-or-folder dialog to select a base model path."""
         # Try file first, then folder
         path, _ = QFileDialog.getOpenFileName(
             self, "Select model file", "",
@@ -551,6 +561,7 @@ class GenerateTab(QWidget):
             self.model_path_edit.setText(path)
 
     def _on_load_model(self):
+        """Validate inputs and launch the background model-loading worker."""
         model_path = self.model_path_edit.text().strip()
         if not model_path:
             self.status_label.setText("Enter a model path or HuggingFace ID.")
@@ -599,6 +610,7 @@ class GenerateTab(QWidget):
         )
 
     def _on_model_loaded(self, message: str):
+        """Handle successful model load: update status and enable generation."""
         self.status_label.setText(message)
         self.model_status.setText(message)
         self.btn_load.setEnabled(True)
@@ -607,6 +619,7 @@ class GenerateTab(QWidget):
         self.progress_bar.setVisible(False)
 
     def _on_unload_model(self):
+        """Unload the current model, free GPU memory, and reset UI state."""
         if self._worker:
             self._worker.unload_model()
             # Clear the worker reference so a fresh one is created on next load.
@@ -620,6 +633,7 @@ class GenerateTab(QWidget):
     # ── Generation ──────────────────────────────────────────────────────
 
     def _on_generate(self):
+        """Gather all parameters from the UI and start batch image generation."""
         if self._worker is None or not self._worker.is_loaded:
             self.status_label.setText("Load a model first.")
             return
@@ -673,11 +687,13 @@ class GenerateTab(QWidget):
         self._worker.generate()
 
     def _on_stop(self):
+        """Request the generation worker to stop after the current image."""
         if self._worker:
             self._worker.stop()
         self.btn_stop.setEnabled(False)
 
     def _on_image_generated(self, pil_image, index: int, info: str):
+        """Add a newly generated image to the gallery, evicting old ones if over capacity."""
         self._generated_images.append((pil_image, info))
         # Evict oldest images AND their thumbnails when gallery exceeds cap
         while len(self._generated_images) > self._max_gallery_images:
@@ -692,11 +708,13 @@ class GenerateTab(QWidget):
         self._update_nav()
 
     def _on_progress(self, current: int, total: int, message: str):
+        """Update the progress bar and status label during generation."""
         self.progress_bar.setMaximum(max(total, 1))
         self.progress_bar.setValue(current)
         self.status_label.setText(message)
 
     def _on_error(self, message: str):
+        """Display an error message and re-enable controls after a failure."""
         self.status_label.setText(f"Error: {message}")
         self.btn_load.setEnabled(True)
         self.btn_generate.setEnabled(self._worker is not None and self._worker.is_loaded)
@@ -704,6 +722,7 @@ class GenerateTab(QWidget):
         self.progress_bar.setVisible(False)
 
     def _on_finished(self, success: bool, message: str):
+        """Handle generation completion: update status and re-enable controls."""
         self.status_label.setText(message)
         self.btn_generate.setEnabled(self._worker is not None and self._worker.is_loaded)
         self.btn_stop.setEnabled(False)
@@ -713,6 +732,7 @@ class GenerateTab(QWidget):
     # ── Gallery ─────────────────────────────────────────────────────────
 
     def _display_current_image(self):
+        """Render the currently selected gallery image in the main preview area."""
         if not self._generated_images:
             return
         idx = self._current_gallery_idx
@@ -726,6 +746,7 @@ class GenerateTab(QWidget):
         self.image_info.setText(info)
 
     def _update_nav(self):
+        """Refresh gallery navigation label and prev/next/save button states."""
         n = len(self._generated_images)
         self.gallery_label.setText(f"{self._current_gallery_idx + 1} / {n}" if n else "0 / 0")
         self.btn_prev.setEnabled(self._current_gallery_idx > 0)
@@ -734,12 +755,14 @@ class GenerateTab(QWidget):
         self.btn_save_all.setEnabled(n > 0)
 
     def _prev_image(self):
+        """Navigate to the previous image in the gallery."""
         if self._current_gallery_idx > 0:
             self._current_gallery_idx -= 1
             self._display_current_image()
             self._update_nav()
 
     def _next_image(self):
+        """Navigate to the next image in the gallery."""
         if self._current_gallery_idx < len(self._generated_images) - 1:
             self._current_gallery_idx += 1
             self._display_current_image()
@@ -772,12 +795,14 @@ class GenerateTab(QWidget):
                 return
 
     def _goto_image(self, index: int):
+        """Jump to a specific image index in the gallery and refresh the display."""
         if 0 <= index < len(self._generated_images):
             self._current_gallery_idx = index
             self._display_current_image()
             self._update_nav()
 
     def _clear_thumbnails(self):
+        """Remove all thumbnail widgets from the thumbnail strip."""
         while self.thumb_layout.count():
             child = self.thumb_layout.takeAt(0)
             w = child.widget()
@@ -788,6 +813,7 @@ class GenerateTab(QWidget):
     # ── img2img / inpainting helpers ────────────────────────────────────
 
     def _browse_init_image(self):
+        """Open a file dialog to select an init image for img2img generation."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select init image", "",
             "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)"
@@ -797,6 +823,7 @@ class GenerateTab(QWidget):
             self._show_init_preview(path)
 
     def _browse_mask_image(self):
+        """Open a file dialog to select a mask image for inpainting."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select mask image", "",
             "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)"
@@ -805,13 +832,16 @@ class GenerateTab(QWidget):
             self.mask_image_path.setText(path)
 
     def _clear_init_image(self):
+        """Clear the init image path and preview, reverting to txt2img mode."""
         self.init_image_path.clear()
         self.init_preview.clear()
 
     def _clear_mask_image(self):
+        """Clear the mask image path, reverting to img2img (no inpainting)."""
         self.mask_image_path.clear()
 
     def _show_init_preview(self, path: str):
+        """Load and display a small preview thumbnail of the init image."""
         try:
             with PILImage.open(path) as _img:
                 img = _img.convert("RGB")
@@ -875,6 +905,7 @@ class GenerateTab(QWidget):
             pil_img.save(path)
 
     def _save_current_image(self):
+        """Prompt the user for a save path and save the currently displayed image."""
         if not self._generated_images:
             return
         pil_img, info = self._generated_images[self._current_gallery_idx]
@@ -890,6 +921,7 @@ class GenerateTab(QWidget):
             self.status_label.setText(f"Saved: {path}")
 
     def _save_all_images(self):
+        """Prompt for an output folder and save all gallery images as PNGs."""
         if not self._generated_images:
             return
         folder = QFileDialog.getExistingDirectory(self, "Select output folder")

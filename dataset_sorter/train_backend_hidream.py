@@ -40,13 +40,23 @@ class HiDreamBackend(TrainBackendBase):
     prediction_type = "flow"
 
     def __init__(self, config, device, dtype):
+        """Initialize HiDream backend with slots for all four text encoders.
+
+        Extends the base class by adding tokenizer_4 and text_encoder_4
+        attributes for the Llama encoder (the 4th encoder beyond the
+        base class's support for up to 3).
+        """
         super().__init__(config, device, dtype)
         # HiDream has a 4th text encoder (Llama)
         self.tokenizer_4 = None
         self.text_encoder_4 = None
 
     def load_model(self, model_path: str):
-        """Load HiDream model with 4 text encoders."""
+        """Load the HiDream pipeline and assign all 4 text encoders, VAE, and transformer.
+
+        Extracts CLIP-L, CLIP-G, T5-XXL, and Llama components from the pipeline,
+        freezes the VAE, and moves it to the target device.
+        """
         from diffusers import DiffusionPipeline
 
         pipe = DiffusionPipeline.from_pretrained(
@@ -82,7 +92,16 @@ class HiDreamBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with 4 text encoders: CLIP-L + CLIP-G + T5 + Llama."""
+        """Encode captions through all four text encoders and combine the results.
+
+        Each available encoder (CLIP-L, CLIP-G, T5-XXL, Llama) produces hidden
+        states that are padded to a common feature dimension and concatenated.
+        Pooled embeddings from the CLIP encoders are concatenated separately.
+
+        Returns:
+            (encoder_hidden_states, pooled) where pooled may be None if no
+            CLIP encoders are available.
+        """
         all_hidden = []
         pooled_list = []
 
@@ -162,14 +181,22 @@ class HiDreamBackend(TrainBackendBase):
         )
 
     def freeze_text_encoders(self):
-        """Freeze all 4 text encoders."""
+        """Set all four text encoders to eval mode and disable gradients.
+
+        Extends the base class (which handles encoders 1-3) by also
+        freezing the 4th encoder (Llama).
+        """
         super().freeze_text_encoders()
         if self.text_encoder_4 is not None:
             self.text_encoder_4.eval()
             self.text_encoder_4.requires_grad_(False)
 
     def offload_text_encoders(self):
-        """Offload all 4 text encoders to CPU."""
+        """Move all four text encoders to CPU to free GPU VRAM.
+
+        Extends the base class by also offloading the Llama encoder,
+        then flushes the GPU memory cache.
+        """
         super().offload_text_encoders()
         if self.text_encoder_4 is not None:
             self.text_encoder_4.cpu()
@@ -177,7 +204,11 @@ class HiDreamBackend(TrainBackendBase):
         empty_cache()
 
     def cleanup(self):
-        """Free all resources including 4th encoder."""
+        """Delete the Llama encoder and tokenizer, then delegate to base cleanup.
+
+        Ensures the 4th encoder's memory is released before the base class
+        cleans up encoders 1-3 and the remaining pipeline components.
+        """
         if self.text_encoder_4 is not None:
             del self.text_encoder_4
             self.text_encoder_4 = None

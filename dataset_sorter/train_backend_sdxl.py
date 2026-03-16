@@ -29,7 +29,11 @@ class SDXLBackend(TrainBackendBase):
 
     def __init__(self, config: TrainingConfig, device: torch.device, dtype: torch.dtype):
         super().__init__(config, device, dtype)
-        # Pre-cached time_ids tensor (allocated once, reused every step)
+        # Pre-cached time_ids tensor for the default (square) resolution.
+        # SDXL's UNet expects a 6-element vector per sample:
+        #   [orig_height, orig_width, crop_top, crop_left, target_height, target_width].
+        # Allocating once here avoids a per-step GPU allocation; for non-square
+        # buckets the cache in _time_ids_cache is used instead.
         self._cached_time_ids: Optional[torch.Tensor] = None
 
     def load_model(self, model_path: str):

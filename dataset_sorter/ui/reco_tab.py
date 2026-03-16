@@ -22,7 +22,10 @@ from dataset_sorter.ui.theme import (
 
 
 class RecoTab(QWidget):
+    """Tab for configuring and displaying recommended training parameters."""
+
     def __init__(self, parent=None):
+        """Initialize the recommendations tab with model, VRAM, network, and optimizer controls."""
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -145,6 +148,7 @@ class RecoTab(QWidget):
         self._last_config = None
 
     def _field_label(self, text):
+        """Create a styled label used as a field descriptor next to combo boxes."""
         lbl = QLabel(text)
         lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 12px; "
@@ -153,25 +157,31 @@ class RecoTab(QWidget):
         return lbl
 
     def _muted(self, text):
+        """Create a muted-style label for secondary or de-emphasized text."""
         lbl = QLabel(text)
         lbl.setStyleSheet(MUTED_LABEL_STYLE)
         return lbl
 
     def get_model_type(self):
+        """Return the currently selected model type key (e.g. 'sdxl_lora')."""
         idx = self.model_combo.currentIndex()
         return MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
 
     def get_vram(self):
+        """Return the selected VRAM tier in GB as an integer."""
         idx = self.vram_combo.currentIndex()
         return VRAM_TIERS[idx] if 0 <= idx < len(VRAM_TIERS) else 24
 
     def get_network_type(self):
+        """Return the selected network type key (e.g. 'lora', 'loha'), defaulting to 'lora'."""
         return self.network_combo.currentData() or "lora"
 
     def get_optimizer(self):
+        """Return the selected optimizer key, defaulting to 'Adafactor'."""
         return self.optimizer_combo.currentData() or "Adafactor"
 
     def _on_model_changed(self, index):
+        """Disable the network combo box when a full-finetune model is selected."""
         model_key = MODEL_TYPE_KEYS[index] if 0 <= index < len(MODEL_TYPE_KEYS) else ""
         is_full = model_key.endswith("_full")
         self.network_combo.setEnabled(not is_full)
@@ -181,6 +191,7 @@ class RecoTab(QWidget):
             self.network_combo.setToolTip("")
 
     def set_output(self, text):
+        """Display the given text in the read-only output area."""
         self.text_output.setPlainText(text)
 
     def set_last_config(self, config):
@@ -188,6 +199,7 @@ class RecoTab(QWidget):
         self._last_config = config
 
     def _export_toml(self):
+        """Prompt the user to save the current config as a OneTrainer TOML file."""
         if self._last_config is None:
             return
         from dataset_sorter.recommender import export_onetrainer_toml
@@ -203,6 +215,7 @@ class RecoTab(QWidget):
             QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")
 
     def _export_json(self):
+        """Prompt the user to save the current config as a kohya_ss JSON file."""
         if self._last_config is None:
             return
         from dataset_sorter.recommender import export_kohya_json

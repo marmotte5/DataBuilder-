@@ -32,10 +32,12 @@ _QWEN3_MAX_LENGTH = 512
 
 
 def _apply_chat_template(tokenizer, caption: str) -> str:
-    """Format caption through Qwen3 chat template.
+    """Format a raw caption string through the Qwen3 chat template.
 
-    This must be applied identically in both encode_text_batch (live)
-    and the TE caching path to ensure embeddings match.
+    Wraps the caption as a user message and applies the tokenizer's chat
+    template with thinking enabled. This must be applied identically in
+    both encode_text_batch (live) and the TE caching path to ensure
+    embeddings match. Falls back to the raw caption if templating fails.
     """
     messages = [{"role": "user", "content": caption}]
     try:
@@ -57,13 +59,15 @@ class ZImageBackend(TrainBackendBase):
     prediction_type = "flow"
 
     def load_model(self, model_path: str):
-        """Load Z-Image model components.
+        """Load all Z-Image model components from *model_path*.
 
-        Z-Image uses a custom pipeline structure:
-        - Qwen3ForCausalLM text encoder
-        - AutoencoderKL VAE with shift_factor
-        - ZImageTransformer2DModel
-        - FlowMatchEulerDiscreteScheduler
+        Attempts to load via DiffusionPipeline first (supports both
+        single-file .safetensors/.ckpt and pretrained directories).
+        Falls back to manual per-subfolder loading when the pipeline
+        approach fails. Sets self.tokenizer, text_encoder, unet, vae,
+        and noise_scheduler. The VAE is frozen and moved to device
+        immediately; its shift_factor and scaling_factor are cached
+        for use in prepare_latents().
         """
         # Handle single-file .safetensors / .ckpt models
         is_single_file = model_path.endswith((".safetensors", ".ckpt"))
@@ -144,7 +148,12 @@ class ZImageBackend(TrainBackendBase):
         log.info(f"Loaded Z-Image model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
-        """Z-Image transformer target modules for LoRA."""
+        """Return the list of attention/MLP module names to target with LoRA.
+
+        Covers the joint-attention projections (to_q/k/v/out), MLP
+        projections, and adaptive-norm linear layers specific to the
+        ZImageTransformer2DModel architecture.
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_mlp", "proj_out",
@@ -153,11 +162,13 @@ class ZImageBackend(TrainBackendBase):
         ]
 
     def _format_caption(self, caption: str) -> str:
-        """Apply Qwen3 chat template to a caption.
+        """Apply the Qwen3 chat template to a single caption string.
 
-        Exposed as a method so the TE caching path in train_dataset.py
-        can call backend._format_caption() to ensure identical
-        preprocessing between cached and live encoding.
+        Public entry point wrapping the module-level _apply_chat_template().
+        Exposed as an instance method so that external callers (e.g. the
+        TE caching path in train_dataset.py) can call
+        backend._format_caption() and get identical preprocessing to
+        what encode_text_batch() uses internally.
         """
         return _apply_chat_template(self.tokenizer, caption)
 
@@ -192,7 +203,12 @@ class ZImageBackend(TrainBackendBase):
         return (encoder_hidden,)
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Encode pixel values with Z-Image's custom VAE scaling."""
+        """Encode pixel values into latent space using the frozen VAE.
+
+        Applies Z-Image's custom latent scaling: (latents - shift_factor) * scaling_factor.
+        The shift_factor centres the latent distribution, while the scaling_factor
+        normalises its variance. Uses channels_last memory format for performance.
+        """
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
@@ -204,10 +220,14 @@ class ZImageBackend(TrainBackendBase):
         return latents
 
     def _get_timestep_shift(self, latents: torch.Tensor) -> float:
-        """Compute dynamic timestep shift based on image dimensions.
+        """Compute a resolution-dependent timestep shift factor.
 
-        Z-Image uses resolution-dependent timestep shifting similar to
-        Flux but with its own formula based on patch sizes.
+        Higher-resolution images (more patches) are shifted closer to
+        max_shift, biasing the noise schedule toward higher noise levels
+        where large images benefit from more denoising steps. The shift
+        is linearly interpolated between base_shift (0.5) and max_shift
+        (1.15) based on the ratio of actual patches to 4096 (the count
+        at 1024x1024 with patch_size=2).
         """
         h, w = latents.shape[-2:]
         # Patch size is typically 2 for the latent space

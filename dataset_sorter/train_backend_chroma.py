@@ -54,6 +54,11 @@ class ChromaBackend(TrainBackendBase):
         log.info(f"Loaded Chroma model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
+        """Return the ChromaTransformer layer names targeted for LoRA adaptation.
+
+        Targets attention projections (Q/K/V/out), MLP layers, and normalization
+        layers in the MMDiT blocks.
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_mlp", "proj_out",
@@ -61,6 +66,10 @@ class ChromaBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Tokenize and encode captions through the T5-XXL text encoder.
+
+        Returns a 1-tuple of encoder hidden states (no CLIP/pooled output for Chroma).
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=512,
@@ -76,4 +85,8 @@ class ChromaBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
+        """Compute a single flow-matching training step and return the loss.
+
+        Uses default timestep normalization (unlike AuraFlow/Sana).
+        """
         return self.flow_training_step(latents, te_out, batch_size)

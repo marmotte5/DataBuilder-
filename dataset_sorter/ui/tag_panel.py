@@ -23,6 +23,7 @@ class TagTableModel(QAbstractTableModel):
     """
 
     def __init__(self, parent=None):
+        """Initialise empty internal data lists and pre-compute highlight colours."""
         super().__init__(parent)
         self._tags: list[str] = []
         self._counts: list[int] = []
@@ -34,6 +35,11 @@ class TagTableModel(QAbstractTableModel):
         self._override_color = QColor(COLORS["warning"])
 
     def set_data(self, tag_counts, tag_auto_buckets, manual_overrides, deleted_tags):
+        """Replace all model data with new tag information and reset the view.
+
+        Sorts tags alphabetically and rebuilds every internal list
+        (counts, buckets, overrides, deleted flags) in one atomic reset.
+        """
         self.beginResetModel()
         tags_sorted = sorted(tag_counts.keys())
         self._tags = tags_sorted
@@ -47,12 +53,24 @@ class TagTableModel(QAbstractTableModel):
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
+        """Return the number of tags currently loaded in the model."""
         return len(self._tags)
 
     def columnCount(self, parent=QModelIndex()):
+        """Return the fixed column count: Tag, Count, Bucket, Override, Del."""
         return 5
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        """Return cell data for the given index and Qt item-data role.
+
+        Qt queries each cell multiple times with different roles:
+        - DisplayRole: visible text. Columns map to 0=Tag, 1=Count,
+          2=Bucket, 3=Override, 4=Deleted flag.
+        - ForegroundRole: text colour (red for deleted, orange for overrides).
+        - TextAlignmentRole: right-align counts, centre remaining numeric cols.
+        - UserRole: raw numeric values used by the sort proxy so that
+          numeric columns sort by value rather than by string.
+        """
         if not index.isValid():
             return None
         row = index.row()
@@ -96,11 +114,13 @@ class TagTableModel(QAbstractTableModel):
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        """Return column header labels (Tag, Count, Bucket, Override, Del.)."""
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return _COLUMNS[section]
         return None
 
     def tag_at_row(self, row: int) -> str:
+        """Return the tag name at the given source-model row, or empty string if out of bounds."""
         if 0 <= row < len(self._tags):
             return self._tags[row]
         return ""
@@ -110,11 +130,19 @@ class TagSortFilterProxy(QSortFilterProxyModel):
     """Proxy for filtering + correct numeric sorting."""
 
     def __init__(self, parent=None):
+        """Initialise the proxy with case-insensitive filtering on the Tag column."""
         super().__init__(parent)
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(0)
 
     def lessThan(self, left, right):
+        """Compare two indexes for sorting, using numeric comparison for value columns.
+
+        Columns 1 (Count), 2 (Bucket), and 3 (Override) are compared via
+        their UserRole integer values so that e.g. 9 < 10 (not "9" > "10"
+        as would happen with default string comparison). All other columns
+        fall back to the default string-based Qt sort.
+        """
         col = left.column()
         if col in (1, 2, 3):
             lv = self.sourceModel().data(left, Qt.ItemDataRole.UserRole)
@@ -134,6 +162,7 @@ class TagPanel(QWidget):
     tag_selection_changed = pyqtSignal(list)
 
     def __init__(self, parent=None):
+        """Initialise the tag panel, set up the 150 ms filter debounce timer, and build the UI."""
         super().__init__(parent)
         self._debounce_timer = QTimer()
         self._debounce_timer.setSingleShot(True)
@@ -142,6 +171,7 @@ class TagPanel(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Construct the panel layout: header with badge, search input, and the tag table view."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 4, 0)
         layout.setSpacing(10)
@@ -183,6 +213,10 @@ class TagPanel(QWidget):
         layout.addWidget(self.table, 1)
 
     def connect_selection(self):
+        """Wire up the table's selectionChanged signal, disconnecting any prior connection first.
+
+        Safe to call repeatedly (e.g. after each scan) without stacking duplicate handlers.
+        """
         sel = self.table.selectionModel()
         if sel:
             # Disconnect any existing connection to prevent duplicate firings
@@ -194,9 +228,11 @@ class TagPanel(QWidget):
             sel.selectionChanged.connect(self._on_selection)
 
     def _on_selection(self):
+        """Emit the tag_selection_changed signal with the current list of selected tag names."""
         self.tag_selection_changed.emit(self.get_selected_tags())
 
     def get_selected_tags(self) -> list[str]:
+        """Return the tag names for all currently selected rows, mapping proxy indexes back to source."""
         tags = []
         sel = self.table.selectionModel()
         if not sel:
@@ -209,6 +245,13 @@ class TagPanel(QWidget):
         return tags
 
     def populate(self, tag_counts, tag_auto_buckets, manual_overrides, deleted_tags):
+        """Load new tag data into the model, suppressing spurious selection signals.
+
+        Signals are blocked on the current selection model before the reset.
+        Because beginResetModel/endResetModel can cause Qt to replace the
+        selection model entirely, the new model (if different) is also blocked
+        and reconnected to _on_selection before signals are re-enabled.
+        """
         sel = self.table.selectionModel()
         if sel:
             sel.blockSignals(True)
@@ -225,6 +268,14 @@ class TagPanel(QWidget):
         self.tag_count_badge.setText(f"{self._model.rowCount()} tags")
 
     def restore_selection(self, tag_names: list[str]):
+        """Re-select previously selected tags by name after a model reset.
+
+        Uses clearSelection() first, then accumulates selections with
+        Select|Rows instead of ClearAndSelect. ClearAndSelect would wipe
+        all prior selections on each iteration, leaving only the last tag
+        selected. Select|Rows adds each matching row to the selection
+        without disturbing previously selected rows.
+        """
         if not tag_names:
             return
         tag_set = set(tag_names)
@@ -246,8 +297,10 @@ class TagPanel(QWidget):
         sel.blockSignals(False)
 
     def _on_filter_text_changed(self, text: str):
+        """Restart the debounce timer whenever the filter text changes."""
         self._debounce_timer.start()
 
     def _apply_filter(self):
+        """Apply the current search text to the proxy filter after the debounce delay."""
         text = self.filter_input.text()
         self._proxy.setFilterFixedString(text)

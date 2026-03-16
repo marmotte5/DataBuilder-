@@ -42,6 +42,7 @@ class DatasetTab(QWidget):
     apply_importance_cleaning = pyqtSignal(set, list)  # (delete_tags, caption_conversions)
 
     def __init__(self, parent=None):
+        """Initialize the dataset tab with empty state and build the sub-tab UI."""
         super().__init__(parent)
         self._entries: list[ImageEntry] = []
         self._tag_counts = Counter()
@@ -49,6 +50,7 @@ class DatasetTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Construct the tabbed layout with all dataset analysis sub-sections."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(0)
@@ -102,10 +104,10 @@ class DatasetTab(QWidget):
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
                   deleted_tags: set | None = None,
                   tag_to_entries: dict[str, list[int]] | None = None):
-        """Update all sections with current dataset data.
+        """Refresh all sub-tabs (captions, tokens, histogram, spell-check, etc.) with the given dataset.
 
-        When deleted_tags is provided, captions, histograms, and spell-check
-        operate only on active (non-deleted) tags -- matching what gets exported.
+        Filters out deleted_tags so every section only sees active tags,
+        matching the tags that will actually be exported during training.
         """
         self._entries = entries
         self._tag_counts = tag_counts
@@ -146,4 +148,5 @@ class DatasetTab(QWidget):
         self.importance_section.set_data(entries, tag_counts, _del)
 
     def get_augmentation_state(self) -> dict:
+        """Return the current augmentation configuration as a dictionary."""
         return self.augmentation_section.get_state()

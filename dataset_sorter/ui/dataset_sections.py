@@ -46,12 +46,18 @@ class HistogramWidget(QWidget):
         self.setMinimumHeight(100)
 
     def set_data(self, data: list[tuple[str, int]]):
+        """Replace the bar chart data (capped at 30 bars) and trigger a repaint."""
         self._data = data[:30]  # Cap at 30 bars
         self._max_value = max((v for _, v in self._data), default=1)
         self.setMinimumHeight(max(100, len(self._data) * 22 + 20))
         self.update()
 
     def paintEvent(self, event):
+        """Paint horizontal bar chart with labels on the left, bars in the middle, and counts on the right.
+
+        Each bar's width is proportional to its value relative to the max value.
+        Labels are truncated to 20 characters and bars use the theme accent color.
+        """
         if not self._data:
             return
 
@@ -117,6 +123,7 @@ class CaptionPreviewSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the caption preview UI: shuffle/dropout controls, navigation, and text areas."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -210,11 +217,13 @@ class CaptionPreviewSection(QWidget):
         layout.addWidget(self.variants_text)
 
     def set_captions(self, captions: list[str]):
+        """Load a list of caption strings and reset navigation to the first caption."""
         self._captions = captions
         self._current_idx = 0
         self._update_nav()
 
     def _update_nav(self):
+        """Update the caption index label and display the current caption's original text."""
         total = len(self._captions)
         if total == 0:
             self.caption_idx_label.setText("No captions loaded")
@@ -225,18 +234,21 @@ class CaptionPreviewSection(QWidget):
         self.original_text.setPlainText(self._captions[self._current_idx])
 
     def _prev_caption(self):
+        """Navigate to the previous caption and regenerate the preview."""
         if self._current_idx > 0:
             self._current_idx -= 1
             self._update_nav()
             self._generate_preview()
 
     def _next_caption(self):
+        """Navigate to the next caption and regenerate the preview."""
         if self._current_idx < len(self._captions) - 1:
             self._current_idx += 1
             self._update_nav()
             self._generate_preview()
 
     def _generate_preview(self):
+        """Generate shuffled caption variants for the current caption using augmentation settings."""
         if not self._captions:
             return
         caption = self._captions[self._current_idx]
@@ -266,6 +278,7 @@ class TokenCountSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the token analysis UI: model selector, stat cards, and sortable token table."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -324,6 +337,11 @@ class TokenCountSection(QWidget):
         layout.addWidget(self.token_table, 1)
 
     def _stat_card(self, label: str):
+        """Create a styled stat card widget.
+
+        Returns a (card_widget, value_label) tuple so the caller can
+        update the value label text later.
+        """
         card = QWidget()
         card.setStyleSheet(CARD_STYLE)
         vbox = QVBoxLayout(card)
@@ -346,18 +364,29 @@ class TokenCountSection(QWidget):
         return card, val
 
     def _get_token_limit(self) -> int:
+        """Return the token limit for the selected model type.
+
+        Index 0 = SD 1.5/SDXL/Pony (77 tokens), index 1 = Flux/T5-based (512),
+        index 2 = Kolors/AuraFlow (256). Falls back to 77 if index is invalid.
+        """
         idx = self.model_combo.currentIndex()
         limits = [77, 512, 256]
         return limits[idx] if 0 <= idx < len(limits) else 77
 
     def _on_model_changed(self):
+        """Re-run token analysis when the user selects a different model type."""
         if self._entries:
             self._analyze()
 
     def set_entries(self, entries: list[ImageEntry]):
+        """Store the image entries for later token analysis."""
         self._entries = entries
 
     def _analyze(self):
+        """Compute token stats, update stat cards, and populate the token count table.
+
+        Rows are sorted by token count descending; over-limit rows are highlighted in red.
+        """
         if not self._entries:
             return
         captions = [", ".join(e.tags) for e in self._entries]
@@ -420,6 +449,7 @@ class TagHistogramSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the histogram UI: stat cards, view toggle buttons, and scrollable bar chart."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -467,6 +497,11 @@ class TagHistogramSection(QWidget):
         layout.addWidget(scroll, 1)
 
     def _stat_card(self, label: str):
+        """Create a styled stat card widget.
+
+        Returns a (card_widget, value_label) tuple so the caller can
+        update the value label text later.
+        """
         card = QWidget()
         card.setStyleSheet(CARD_STYLE)
         vbox = QVBoxLayout(card)
@@ -489,10 +524,17 @@ class TagHistogramSection(QWidget):
         return card, val
 
     def set_tag_counts(self, tag_counts: Counter):
+        """Store tag frequency counts and refresh the histogram display."""
         self._tag_counts = tag_counts
         self._refresh()
 
     def _refresh(self):
+        """Recompute histogram stats and update the stat cards.
+
+        Expects histogram keys: 'total_unique', 'total_occurrences',
+        'mean_frequency', 'median_frequency', 'top_tags', 'bottom_tags',
+        'bins', and 'counts'. Defaults to the top-tags view.
+        """
         hist = compute_tag_frequency_histogram(self._tag_counts)
         self.stat_unique[1].setText(str(hist["total_unique"]))
         self.stat_total[1].setText(str(hist["total_occurrences"]))
@@ -503,6 +545,7 @@ class TagHistogramSection(QWidget):
         self._show_view("top")
 
     def _show_view(self, view: str):
+        """Switch the histogram between 'top' (most common), 'bottom' (rarest), or 'dist' (bin distribution)."""
         hist = compute_tag_frequency_histogram(self._tag_counts)
         if view == "top":
             self.histogram.set_data(hist["top_tags"])
@@ -549,6 +592,7 @@ class SpellCheckSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the spell-check UI: action button, results table, and semantic groups panel."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -604,9 +648,11 @@ class SpellCheckSection(QWidget):
         layout.addWidget(self.semantic_text)
 
     def set_tag_counts(self, tag_counts: Counter):
+        """Store tag counts for spell-checking."""
         self._tag_counts = tag_counts
 
     def _run_check(self):
+        """Launch the spell-check worker thread; disables the button until complete."""
         if not self._tag_counts:
             return
 
@@ -619,6 +665,7 @@ class SpellCheckSection(QWidget):
         self._worker.start()
 
     def _on_check_done(self, suggestions: list, groups: dict):
+        """Handle spell-check results: populate the suggestions table and semantic groups text."""
         self.btn_check.setEnabled(True)
         self.btn_check.setText("Run Spell Check")
 
@@ -673,6 +720,7 @@ class AugmentationSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the augmentation UI: scrollable list of augmentation cards and bottom control bar."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -726,6 +774,7 @@ class AugmentationSection(QWidget):
         self._update_active_count()
 
     def _build_aug_card(self, aug: dict) -> QGroupBox:
+        """Build a single augmentation card with enable checkbox, description, and parameter spinboxes."""
         key = aug["key"]
         group = QGroupBox()
         group.setStyleSheet(
@@ -796,20 +845,32 @@ class AugmentationSection(QWidget):
         return group
 
     def _toggle_aug(self, key: str, enabled: bool):
+        """Toggle an augmentation on/off and emit the updated config."""
         self._state[key]["enabled"] = enabled
         self._update_active_count()
         self.config_changed.emit(self._state)
 
     def _update_param(self, key: str, param_key: str, value):
+        """Update a specific parameter for an augmentation and emit the config.
+
+        'key' is the augmentation identifier (e.g. 'flip_horizontal'),
+        'param_key' is the parameter name within that augmentation (e.g. 'probability').
+        """
         if "params" in self._state[key]:
             self._state[key]["params"][param_key] = value
         self.config_changed.emit(self._state)
 
     def _update_active_count(self):
+        """Recount enabled augmentations and update the 'N active' badge."""
         count = sum(1 for v in self._state.values() if v["enabled"])
         self.active_badge.setText(f"{count} active")
 
     def _reset_defaults(self):
+        """Reset all augmentation settings to their defaults.
+
+        Signals are blocked on each widget while restoring values to prevent
+        redundant config_changed emissions during the batch update.
+        """
         self._state = get_default_augmentation_state()
         for key, widgets in self._param_widgets.items():
             cb = widgets.get("checkbox")
@@ -828,6 +889,7 @@ class AugmentationSection(QWidget):
         self.config_changed.emit(self._state)
 
     def _disable_all(self):
+        """Disable every augmentation, blocking signals to avoid per-toggle emissions."""
         for key in self._state:
             self._state[key]["enabled"] = False
             cb = self._param_widgets.get(key, {}).get("checkbox")
@@ -839,6 +901,7 @@ class AugmentationSection(QWidget):
         self.config_changed.emit(self._state)
 
     def get_state(self) -> dict:
+        """Return the current augmentation configuration state dictionary."""
         return self._state
 
 

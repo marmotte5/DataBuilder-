@@ -37,10 +37,12 @@ class AnalysisWorker(QThread):
     error = pyqtSignal(str)
 
     def __init__(self, pipeline: AutoPipeline, parent=None):
+        """Initialize the worker with the pipeline to analyze."""
         super().__init__(parent)
         self._pipeline = pipeline
 
     def run(self):
+        """Execute the analysis and emit finished or error signal."""
         try:
             result = self._pipeline.analyze()
             self.finished.emit(result)
@@ -68,6 +70,7 @@ class AutoPipelineDialog(QDialog):
         deleted_tags: set[str],
         parent=None,
     ):
+        """Initialize the pipeline dialog with dataset state and build the UI."""
         super().__init__(parent)
         self.setWindowTitle("One-Click Pipeline — Auto Clean & Train")
         self.setMinimumSize(800, 700)
@@ -87,6 +90,7 @@ class AutoPipelineDialog(QDialog):
         self._start_analysis()
 
     def _build_ui(self):
+        """Construct the full dialog layout: config, cleaning options, analysis report, and buttons."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
@@ -259,11 +263,13 @@ class AutoPipelineDialog(QDialog):
     # ── Helpers ────────────────────────────────────────────────────────
 
     def _muted(self, text: str) -> QLabel:
+        """Create a styled label with muted/secondary appearance for form field labels."""
         lbl = QLabel(text)
         lbl.setStyleSheet(MUTED_LABEL_STYLE)
         return lbl
 
     def _browse_model(self):
+        """Open a file dialog to select a base model (.safetensors or .ckpt)."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Base Model", "",
             "Safetensors (*.safetensors);;Checkpoint (*.ckpt);;All (*)",
@@ -272,6 +278,7 @@ class AutoPipelineDialog(QDialog):
             self.model_path_input.setText(path)
 
     def _browse_output(self):
+        """Open a directory dialog to select the training output folder."""
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if path:
             self.output_dir_input.setText(path)
@@ -287,6 +294,7 @@ class AutoPipelineDialog(QDialog):
         self._worker.start()
 
     def _on_analysis_done(self, analysis: PipelineAnalysis):
+        """Handle successful analysis: store results, display summary, and enable action buttons."""
         self._analysis = analysis
         self.analysis_progress.setVisible(False)
         self.analysis_output.setText(analysis.summary())
@@ -294,6 +302,7 @@ class AutoPipelineDialog(QDialog):
         self.btn_launch.setEnabled(True)
 
     def _on_analysis_error(self, error_msg: str):
+        """Handle analysis failure: show error message but still allow manual launch."""
         self.analysis_progress.setVisible(False)
         self.analysis_output.setText(f"Analysis failed: {error_msg}")
         # Still allow manual launch
@@ -303,18 +312,21 @@ class AutoPipelineDialog(QDialog):
     # ── Actions ───────────────────────────────────────────────────────
 
     def _get_model_type_key(self) -> str:
+        """Return the model type key (e.g. 'sdxl_lora') for the currently selected model."""
         idx = self.model_combo.currentIndex()
         if 0 <= idx < len(MODEL_TYPE_KEYS):
             return MODEL_TYPE_KEYS[idx]
         return "sdxl_lora"
 
     def _get_vram(self) -> int:
+        """Return the selected VRAM tier in GB, defaulting to 24 if invalid."""
         idx = self.vram_combo.currentIndex()
         if 0 <= idx < len(VRAM_TIERS):
             return VRAM_TIERS[idx]
         return 24
 
     def _get_optimizer(self) -> str:
+        """Return the selected optimizer name, defaulting to 'Adafactor'."""
         return self.optimizer_combo.currentData() or "Adafactor"
 
     def _apply_cleaning(self) -> dict:

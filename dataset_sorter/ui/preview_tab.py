@@ -16,6 +16,7 @@ class PreviewTab(QWidget):
     THUMB_H = 200
 
     def __init__(self, parent=None):
+        """Initialize the preview tab with an info label and scrollable thumbnail grid."""
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -40,6 +41,11 @@ class PreviewTab(QWidget):
         layout.addWidget(self.scroll, 1)
 
     def update_preview(self, tag: str, entry_indices: list[int], entries: list[ImageEntry]):
+        """Populate the thumbnail grid with images for the given tag.
+
+        Dynamically adjusts column count based on the number of images shown
+        (up to MAX_THUMBNAILS). Stale or out-of-bounds indices are filtered out.
+        """
         self._clear()
         count = len(entry_indices)
         self.info_label.setText(f"Tag: {tag}  —  {count} image(s)")
@@ -83,10 +89,12 @@ class PreviewTab(QWidget):
             self.grid.addWidget(wrapper, i // cols, i % cols)
 
     def clear(self):
+        """Clear the thumbnail grid and reset the info label to default text."""
         self._clear()
         self.info_label.setText("Select a tag to view images.")
 
     def _clear(self):
+        """Remove and delete all widgets from the thumbnail grid."""
         while self.grid.count():
             child = self.grid.takeAt(0)
             w = child.widget()

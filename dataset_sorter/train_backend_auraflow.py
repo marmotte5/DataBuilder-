@@ -53,6 +53,10 @@ class AuraFlowBackend(TrainBackendBase):
         log.info(f"Loaded AuraFlow model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
+        """Return the transformer layer names targeted for LoRA adaptation.
+
+        Targets attention projections (Q/K/V/out) and MLP layers in the MMDiT blocks.
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_mlp", "proj_out",
@@ -60,6 +64,10 @@ class AuraFlowBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Tokenize and encode captions through the T5 text encoder.
+
+        Returns a 1-tuple of encoder hidden states (no pooled output for AuraFlow).
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=256,
@@ -75,6 +83,10 @@ class AuraFlowBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
+        """Compute a single flow-matching training step and return the loss.
+
+        Uses raw integer timesteps (no normalization) as expected by AuraFlow.
+        """
         # AuraFlow passes raw integer timesteps
         return self.flow_training_step(
             latents, te_out, batch_size, normalize_timestep=False,

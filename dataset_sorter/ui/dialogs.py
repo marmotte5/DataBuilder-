@@ -13,6 +13,7 @@ class DryRunDialog(QDialog):
     """Shows export summary before execution."""
 
     def __init__(self, bucket_summary, total_images, hidden_empty, parent=None):
+        """Build the dry-run dialog showing a table of bucket assignments and image counts."""
         super().__init__(parent)
         self.setWindowTitle("Export Summary")
         self.setMinimumSize(580, 480)
@@ -68,5 +69,6 @@ class DryRunDialog(QDialog):
         layout.addLayout(btns)
 
     def _accept(self):
+        """Mark the export as accepted and close the dialog."""
         self.accepted_export = True
         self.accept()

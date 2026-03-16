@@ -58,16 +58,19 @@ class DragDropLineEdit(QLineEdit):
     """QLineEdit that accepts directory drops."""
 
     def __init__(self, *args, **kwargs):
+        """Initialize the line edit and enable drag-and-drop acceptance."""
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
+        """Accept drag events that contain file/folder URLs."""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dropEvent(self, event: QDropEvent):
+        """Set the line edit text to the dropped directory path."""
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
@@ -93,6 +96,7 @@ class MainWindow(QMainWindow):
     _MAX_UNDO = 50
 
     def __init__(self):
+        """Initialize the main window, build UI, wire signals, and restore previous session state."""
         super().__init__()
         self.setWindowTitle("Dataset Sorter")
         self.setMinimumSize(1400, 900)
@@ -128,6 +132,7 @@ class MainWindow(QMainWindow):
         )
 
     def _build_ui(self):
+        """Construct all widgets: top path bar, scan controls, security banner, splitter panels, and bottom bar."""
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -268,6 +273,7 @@ class MainWindow(QMainWindow):
         root.addLayout(bottom)
 
     def _label(self, text):
+        """Create a styled muted label for form field headings."""
         lbl = QLabel(text)
         lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 500; "
@@ -276,6 +282,7 @@ class MainWindow(QMainWindow):
         return lbl
 
     def _connect_signals(self):
+        """Wire all child-panel signals to their MainWindow handler slots."""
         p = self.override_panel
         p.apply_override.connect(self._apply_override)
         p.reset_override.connect(self._reset_override)
@@ -417,6 +424,7 @@ class MainWindow(QMainWindow):
     # -- Drag and drop on main window --
 
     def dragEnterEvent(self, event: QDragEnterEvent):
+        """Accept drag events containing URLs so directories can be dropped onto the window."""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
@@ -440,6 +448,7 @@ class MainWindow(QMainWindow):
     # -- Cancel --
 
     def _cancel_operation(self):
+        """Cancel the currently running scan or export worker, if any."""
         if self._scan_worker and self._scan_worker.isRunning():
             self._scan_worker.cancel()
             self.statusBar().showMessage("Cancelling scan...")
@@ -450,16 +459,19 @@ class MainWindow(QMainWindow):
     # -- Browsing & Scan --
 
     def _browse_source(self):
+        """Open a directory picker and set the chosen path as the source directory."""
         path = QFileDialog.getExistingDirectory(self, "Select source directory")
         if path:
             self.source_input.setText(path)
 
     def _browse_output(self):
+        """Open a directory picker and set the chosen path as the output directory."""
         path = QFileDialog.getExistingDirectory(self, "Select output directory")
         if path:
             self.output_input.setText(path)
 
     def _start_scan(self):
+        """Validate the source directory and launch a background ScanWorker to discover images and tags."""
         source = self.source_input.text().strip()
         if not source or not Path(source).is_dir():
             self.statusBar().showMessage("Error: invalid source directory.")
@@ -497,16 +509,20 @@ class MainWindow(QMainWindow):
         self._scan_worker.start()
 
     def _on_scan_progress(self, current, total):
+        """Update the progress bar with the scan's current/total counts."""
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
     def _on_worker_status(self, msg):
+        """Display a status message from a background worker in the status bar."""
         self.statusBar().showMessage(msg)
 
     def _on_scan_errors(self, count):
+        """Notify the user about errors encountered during the scan."""
         self.statusBar().showMessage(f"Scan had {count} error(s) — check logs for details.")
 
     def _on_scan_finished(self, entries):
+        """Process scan results: filter invalid entries, rebuild indexes, assign buckets, and refresh UI."""
         # Filter out None entries that can result from cancelled futures (M5 fix)
         entries = [e for e in entries if e is not None]
         self.entries = entries
@@ -541,6 +557,7 @@ class MainWindow(QMainWindow):
     # -- Tag index & buckets --
 
     def _rebuild_tag_index(self):
+        """Rebuild tag_counts and tag_to_entries indexes from scratch by scanning all entries."""
         self.tag_counts = Counter()
         self.tag_to_entries = defaultdict(list)
         for idx, entry in enumerate(self.entries):
@@ -549,6 +566,13 @@ class MainWindow(QMainWindow):
                 self.tag_to_entries[tag].append(idx)
 
     def _compute_auto_buckets(self):
+        """Assign each tag to a bucket using percentile-based frequency ranking.
+
+        Divides tag occurrence counts into MAX_BUCKETS equal percentile bands.
+        Rare tags (low percentile) get high bucket numbers, frequent tags get
+        low bucket numbers. When all tags have equal counts, everything goes
+        to bucket 1.
+        """
         self.tag_auto_buckets = {}
         if not self.tag_counts:
             return
@@ -570,6 +594,7 @@ class MainWindow(QMainWindow):
             self.tag_auto_buckets[tag] = bucket
 
     def _assign_entries_to_buckets(self):
+        """Assign every entry to a bucket based on its tags' bucket values."""
         for entry in self.entries:
             self._assign_single_entry_bucket(entry)
 
@@ -594,6 +619,7 @@ class MainWindow(QMainWindow):
     # -- UI refresh --
 
     def _refresh_all_ui(self):
+        """Repopulate all panels with current state, preserving the active tag selection."""
         # Save current tag selection
         selected_tags = self.tag_panel.get_selected_tags() if self._selection_connected else []
 
@@ -652,6 +678,7 @@ class MainWindow(QMainWindow):
         self._refresh_all_ui()
 
     def _undo(self):
+        """Revert the last tag operation by restoring the previous snapshot from the undo stack."""
         if not self._undo_stack:
             self.statusBar().showMessage("Nothing to undo.")
             return
@@ -662,6 +689,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Undo: {snap.description}")
 
     def _redo(self):
+        """Re-apply a previously undone tag operation from the redo stack."""
         if not self._redo_stack:
             self.statusBar().showMessage("Nothing to redo.")
             return
@@ -671,6 +699,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Redo: {snap.description}")
 
     def _after_tag_edit(self):
+        """Recalculate indexes, auto-buckets, and bucket assignments after any tag modification."""
         self._rebuild_tag_index()
         self._compute_auto_buckets()
         self._assign_entries_to_buckets()
@@ -679,6 +708,7 @@ class MainWindow(QMainWindow):
     # -- Tag selection --
 
     def _on_tag_selection(self, tags):
+        """Update the override panel info and preview when the tag selection changes."""
         if not tags:
             self.override_panel.set_selected_info("No tag selected")
             self.preview_tab.clear()
@@ -696,6 +726,12 @@ class MainWindow(QMainWindow):
     # -- Overrides --
 
     def _apply_override(self, value):
+        """Set a manual bucket override for all selected tags.
+
+        A value of 0 removes the override, restoring auto-bucket behavior.
+        Any other value (1..MAX_BUCKETS) forces the tag into that bucket,
+        which propagates to all entries containing the tag.
+        """
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             self.statusBar().showMessage("No tag selected.")
@@ -713,6 +749,7 @@ class MainWindow(QMainWindow):
         self._refresh_all_ui()
 
     def _reset_override(self):
+        """Remove manual bucket overrides for all selected tags, reverting to auto-bucket."""
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
@@ -726,6 +763,7 @@ class MainWindow(QMainWindow):
     # -- Tag deletion --
 
     def _delete_selected_tags(self):
+        """Soft-delete all selected tags so they are excluded from bucket assignment and export."""
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
@@ -736,6 +774,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(tags)} tag(s) marked for deletion.")
 
     def _restore_selected_tags(self):
+        """Un-delete the selected tags, making them active again for bucket assignment."""
         tags = self.tag_panel.get_selected_tags()
         if not tags:
             return
@@ -747,6 +786,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(tags)} tag(s) restored.")
 
     def _restore_all_tags(self):
+        """Un-delete every soft-deleted tag at once."""
         n = len(self.deleted_tags)
         self._push_undo(f"Restore all {n} tags")
         self.deleted_tags.clear()
@@ -757,6 +797,14 @@ class MainWindow(QMainWindow):
     # -- Tag editing --
 
     def _rename_tag(self, new_name):
+        """Rename all selected tags to new_name across every entry.
+
+        If an entry already contains new_name, the old tag is removed instead
+        of creating a duplicate. Manual overrides are transferred to the new
+        name (unless it already has one). Deleted status carries over: if the
+        old tag was soft-deleted, the new name is also marked deleted so the
+        user's intent to exclude the tag is preserved.
+        """
         if not new_name:
             self.override_panel.set_editor_info("Enter a new name.")
             return
@@ -790,6 +838,15 @@ class MainWindow(QMainWindow):
         self.override_panel.set_editor_info(f"Renamed ({count} changes).")
 
     def _merge_tags(self, target):
+        """Merge all selected tags into a single target tag.
+
+        Each non-target tag is replaced with the target in every entry. If an
+        entry already contains the target, the duplicate source tag is simply
+        removed. The first source tag's manual override is transferred to the
+        target (if the target has no override yet); remaining overrides are
+        discarded. Source tags are removed from the deleted set since they no
+        longer exist.
+        """
         if not target:
             self.override_panel.set_editor_info("Enter a target tag.")
             return
@@ -818,6 +875,13 @@ class MainWindow(QMainWindow):
         self.override_panel.set_editor_info(f"Merged to \"{target}\" ({count} changes).")
 
     def _search_replace_tags(self, search, replace):
+        """Perform substring search-and-replace across all tags in every entry.
+
+        Each tag containing the search string has that substring replaced.
+        Duplicate tags within a single entry are collapsed (only the first
+        occurrence is kept). Manual overrides and deleted-tag names are also
+        updated to reflect the new tag text, preventing stale references.
+        """
         if not search:
             self.override_panel.set_editor_info("Enter search text.")
             return
@@ -855,6 +919,7 @@ class MainWindow(QMainWindow):
     # -- Bucket names --
 
     def _apply_bucket_name_all(self, name):
+        """Set the same sanitized folder name for all buckets."""
         if not name:
             return
         s = sanitize_folder_name(name)
@@ -865,6 +930,7 @@ class MainWindow(QMainWindow):
     # -- Config --
 
     def _save_config(self):
+        """Save manual overrides, bucket names, deleted tags, and directory paths to a JSON file."""
         path, _ = QFileDialog.getSaveFileName(self, "Save Configuration", CONFIG_FILE, "JSON (*.json)")
         if not path:
             return
@@ -882,6 +948,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {e}")
 
     def _load_config(self):
+        """Load configuration from a JSON file, fully replacing current state.
+
+        Loads manual_overrides (validated to 1..MAX_BUCKETS), bucket_names
+        (sanitized), deleted_tags, and source/output directory paths. Invalid
+        entries are silently skipped. If a dataset is already loaded, buckets
+        are reassigned with the new config.
+        """
         path, _ = QFileDialog.getOpenFileName(self, "Load Configuration", "", "JSON (*.json)")
         if not path:
             return
@@ -935,6 +1008,7 @@ class MainWindow(QMainWindow):
     # -- Recommendations --
 
     def _update_recommendations(self):
+        """Recalculate training recommendations based on current dataset statistics and display them."""
         if not self.entries:
             self.reco_tab.set_output("Scan a dataset to get recommendations.")
             return
@@ -998,6 +1072,7 @@ class MainWindow(QMainWindow):
     # -- Image tab --
 
     def _force_image_bucket(self, index, bucket):
+        """Force a specific image into a given bucket, bypassing tag-based assignment."""
         if 0 <= index < len(self.entries):
             entry = self.entries[index]
             entry.forced_bucket = bucket
@@ -1006,6 +1081,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Image forced to bucket {bucket}.")
 
     def _reset_image_bucket(self, index):
+        """Remove the forced bucket for an image and recalculate its assignment from tags."""
         if 0 <= index < len(self.entries):
             entry = self.entries[index]
             entry.forced_bucket = None
@@ -1141,6 +1217,7 @@ class MainWindow(QMainWindow):
     # -- Dry run & Export --
 
     def _dry_run(self):
+        """Show a summary dialog of how images would be distributed across buckets without exporting."""
         if not self.entries:
             self.statusBar().showMessage("No data. Run a scan first.")
             return
@@ -1163,6 +1240,7 @@ class MainWindow(QMainWindow):
             self._do_export()
 
     def _start_export(self):
+        """Validate paths and initiate the export process."""
         if not self.entries:
             self.statusBar().showMessage("No data. Run a scan first.")
             return
@@ -1173,6 +1251,7 @@ class MainWindow(QMainWindow):
         self._do_export()
 
     def _do_export(self):
+        """Check disk space, then launch the background ExportWorker to copy images into bucket folders."""
         # Disk space check before export
         from dataset_sorter.disk_space import check_disk_space_for_export
         output_dir = self.output_input.text().strip()
@@ -1215,10 +1294,12 @@ class MainWindow(QMainWindow):
         self._export_worker.start()
 
     def _on_export_progress(self, current, total):
+        """Update the progress bar with export progress."""
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
     def _on_export_finished(self, copied, errors):
+        """Handle export completion: report results or display security/permission errors."""
         self.progress_bar.setVisible(False)
         self._set_controls_enabled(True)
         if errors == -1:
@@ -1234,6 +1315,7 @@ class MainWindow(QMainWindow):
 
 
 def run():
+    """Launch the Dataset Sorter application."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(get_stylesheet())

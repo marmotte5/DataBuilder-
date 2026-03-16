@@ -53,6 +53,7 @@ class PixArtBackend(TrainBackendBase):
         log.info(f"Loaded PixArt model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
+        """Return PixArt DiT attention module names targeted for LoRA fine-tuning."""
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_in", "proj_out",
@@ -61,6 +62,7 @@ class PixArtBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Tokenize and encode captions using T5-XXL, returning hidden states."""
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=300,
@@ -75,6 +77,7 @@ class PixArtBackend(TrainBackendBase):
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
+        """Build resolution and aspect-ratio conditioning tensors for PixArt."""
         if image_hw is not None:
             h, w = image_hw
             ar = h / max(w, 1)

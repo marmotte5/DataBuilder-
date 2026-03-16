@@ -49,6 +49,7 @@ class StableCascadeBackend(TrainBackendBase):
         log.info(f"Loaded Stable Cascade model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
+        """Return Cascade prior attention module names targeted for LoRA fine-tuning."""
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_in", "proj_out",

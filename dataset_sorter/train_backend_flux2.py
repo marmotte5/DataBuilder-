@@ -60,7 +60,11 @@ class Flux2Backend(TrainBackendBase):
         log.info(f"Loaded Flux 2 model from {model_path}")
 
     def _get_lora_target_modules(self) -> list[str]:
-        """Flux 2 transformer target modules for LoRA."""
+        """Return transformer layer names targeted by LoRA for Flux 2.
+
+        Includes attention projections (Q/K/V/out), MLP projections,
+        and the AdaLN-modulation linear layers (norm1, norm1_context).
+        """
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "proj_mlp", "proj_out",
@@ -68,7 +72,19 @@ class Flux2Backend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with LLM text encoder, extracting multi-layer hidden states."""
+        """Encode captions using the LLM text encoder (Mistral-3 or Qwen-3).
+
+        Extracts hidden states from multiple intermediate layers (defined by
+        _hidden_state_layers) and concatenates them along the sequence dimension
+        to form a rich multi-scale text representation.
+
+        Returns:
+            Single-element tuple (encoder_hidden_states,) with no pooled output.
+
+        Raises:
+            RuntimeError: If the encoder/tokenizer is not loaded or none of
+                the requested hidden-state layers are available.
+        """
         if self.tokenizer is None or self.text_encoder is None:
             raise RuntimeError(
                 "Flux 2 text encoder or tokenizer not loaded. "
@@ -113,4 +129,9 @@ class Flux2Backend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
+        """Compute a single flow-matching training loss on the given latent batch.
+
+        Delegates to the base class flow_training_step without added conditioning
+        kwargs (Flux 2 does not use SDXL-style time_ids or pooled embeddings).
+        """
         return self.flow_training_step(latents, te_out, batch_size)

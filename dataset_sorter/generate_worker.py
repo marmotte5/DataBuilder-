@@ -63,7 +63,12 @@ FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
 
 def _detect_model_type(model_path: str) -> str:
-    """Try to auto-detect model type from path name."""
+    """Auto-detect model type by searching for known keywords in the path name.
+
+    Checks keywords in a specific order so that 'flux2' matches before 'flux',
+    'sd35' before 'sd3', etc. Returns 'sdxl' as a safe default because SDXL
+    pipelines are the most common and broadly compatible.
+    """
     p = model_path.lower()
     for key in ["flux2", "flux", "sdxl", "sd35", "sd3", "pony", "sd15",
                 "sd2", "pixart", "sana", "kolors", "cascade", "hunyuan",
@@ -74,7 +79,11 @@ def _detect_model_type(model_path: str) -> str:
 
 
 def _load_scheduler(pipe, scheduler_name: str):
-    """Replace pipeline scheduler with the requested one."""
+    """Replace the pipeline's scheduler using SCHEDULER_MAP lookup.
+
+    Applies Karras sigmas when the scheduler name contains 'karras'.
+    Falls back to EulerAncestralDiscreteScheduler for unknown names.
+    """
     import diffusers
 
     cls_name = SCHEDULER_MAP.get(scheduler_name, "EulerAncestralDiscreteScheduler")
@@ -94,7 +103,12 @@ def _load_scheduler(pipe, scheduler_name: str):
 
 
 class GenerateWorker(QThread):
-    """Background worker for model loading and image generation."""
+    """Background QThread worker that loads diffusers pipelines and generates images.
+
+    Operates in two modes set via load_model() or generate(): 'load' detects
+    hardware, instantiates the pipeline, and applies LoRA adapters; 'generate'
+    produces images using the loaded pipeline with the configured parameters.
+    """
 
     # Signals
     model_loaded = pyqtSignal(str)           # success message
@@ -104,6 +118,7 @@ class GenerateWorker(QThread):
     finished_generating = pyqtSignal(bool, str)  # success, message
 
     def __init__(self, parent=None):
+        """Initialize worker with default generation parameters and no loaded model."""
         super().__init__(parent)
         self._lock = threading.Lock()  # Guards pipe and shared state
         self.pipe = None
@@ -143,7 +158,11 @@ class GenerateWorker(QThread):
         lora_adapters: list[dict] = None,
         dtype: str = "bf16",
     ):
-        """Configure and start model loading (runs in thread)."""
+        """Configure model parameters and start the loading thread.
+
+        If model_type is 'auto', the type is detected from the path name.
+        Emits error if the worker is already busy.
+        """
         if self.isRunning():
             self.error.emit("Worker is busy. Wait for the current operation to finish.")
             return
@@ -168,7 +187,7 @@ class GenerateWorker(QThread):
         self._stop_requested = True
 
     def unload_model(self):
-        """Free GPU memory."""
+        """Delete the pipeline and free GPU/MPS memory via garbage collection and cache clearing."""
         with self._lock:
             if self.pipe is not None:
                 del self.pipe
@@ -185,11 +204,17 @@ class GenerateWorker(QThread):
 
     @property
     def is_loaded(self) -> bool:
+        """Return True if a pipeline is currently loaded and ready for generation."""
         return self.pipe is not None
 
     # ── Thread entry point ──────────────────────────────────────────────
 
     def run(self):
+        """Thread entry point: dispatches to _do_load() or _do_generate() based on mode.
+
+        Catches OSError for PyTorch DLL issues and general exceptions. On load
+        failures the model is unloaded; on generation failures the model is kept.
+        """
         try:
             if self._mode == "load":
                 self._do_load()
@@ -220,6 +245,16 @@ class GenerateWorker(QThread):
     # ── Model loading ───────────────────────────────────────────────────
 
     def _do_load(self):
+        """Load a diffusers pipeline in four phases.
+
+        Phase 1: Detect device (CUDA > MPS > CPU) and resolve dtype, falling
+        back from bf16 to fp16 if the GPU lacks bf16 support.
+        Phase 2: Instantiate the pipeline via _load_pipeline().
+        Phase 3: Apply memory optimizations -- enable_model_cpu_offload on GPUs
+        with <16 GB VRAM (must be called *instead of* pipe.to(device) to work),
+        plus VAE slicing and tiling for lower memory usage.
+        Phase 4: Load any LoRA adapters and emit the model_loaded signal.
+        """
         import torch
 
         self.progress.emit(0, 100, "Loading model...")
@@ -299,7 +334,12 @@ class GenerateWorker(QThread):
         )
 
     def _load_pipeline(self, model_path: str, model_type: str, dtype):
-        """Load the correct diffusers pipeline for the model type."""
+        """Load the correct diffusers pipeline for the given model type and path.
+
+        Handles three cases: single-file checkpoints (.safetensors/.ckpt),
+        custom trust_remote_code models (via _load_single_file_custom), and
+        standard diffusers-format directories (via from_pretrained).
+        """
         import torch
         import diffusers
 
@@ -359,8 +399,11 @@ class GenerateWorker(QThread):
     def _load_single_file_custom(self, model_path: str, model_type: str, dtype, kwargs: dict):
         """Load a single-file checkpoint for custom trust_remote_code models.
 
-        Strategy: load the base pipeline from HuggingFace, then replace the
-        transformer/unet weights with the fine-tuned weights from the file.
+        Uses BASE_REPOS to map model types (zimage, flux2, chroma, hidream) to
+        their HuggingFace base repositories. Loads the full base pipeline from
+        the repo, then swaps the transformer/unet weights with the fine-tuned
+        weights from the .safetensors file. Key prefixes (e.g. 'transformer.')
+        are auto-stripped before loading the state dict.
         """
         import torch
         import diffusers
@@ -433,7 +476,12 @@ class GenerateWorker(QThread):
         return pipe
 
     def _load_single_file_fallback(self, model_path: str, dtype, kwargs: dict):
-        """Try standard pipeline classes for single-file loading."""
+        """Try standard pipeline classes for single-file loading as a last resort.
+
+        Attempts from_single_file in order: SD3 -> SDXL -> SD1.5, stopping at
+        the first one that succeeds. This order tries the newest architectures
+        first, since older pipelines may silently load incompatible weights.
+        """
         import diffusers
 
         for fallback_name in (
@@ -455,7 +503,14 @@ class GenerateWorker(QThread):
         return None
 
     def _load_loras(self, pipe, adapters: list[dict]):
-        """Load one or more LoRA/DoRA adapters into the pipeline."""
+        """Load one or more LoRA/DoRA adapters into the pipeline.
+
+        Each adapter gets a unique name ('adapter_0', 'adapter_1', etc. or a
+        user-provided name) used for identification in set_adapters(). For
+        single-file LoRAs, the parent directory is passed as the load path with
+        weight_name set to the filename. When multiple adapters are loaded,
+        set_adapters() is called to apply per-adapter weight scaling.
+        """
         adapter_names = []
         adapter_weights = []
 
@@ -501,7 +556,13 @@ class GenerateWorker(QThread):
     # ── Image generation ────────────────────────────────────────────────
 
     def _build_png_metadata(self, seed: int) -> PngInfo:
-        """Build PNG text chunks with generation parameters (A1111-compatible)."""
+        """Build PNG tEXt metadata chunks in Automatic1111's format.
+
+        Writes a 'parameters' chunk with the prompt, negative prompt, and
+        settings on separate lines, matching the format that Civitai and
+        A1111's PNG Info tab can parse. Also stores individual fields (seed,
+        steps, etc.) as separate chunks for programmatic access.
+        """
         pnginfo = PngInfo()
 
         # Build parameters string (compatible with A1111 / civitai metadata readers)
@@ -547,7 +608,14 @@ class GenerateWorker(QThread):
         return pnginfo
 
     def _get_pipeline_for_mode(self):
-        """Get the right pipeline for txt2img / img2img / inpainting."""
+        """Select the appropriate pipeline variant for the current generation mode.
+
+        If both init_image and mask_image are set, creates an inpaint pipeline
+        (supported for SD1.5/SD2/SDXL/Pony). If only init_image is set, creates
+        an img2img pipeline (supported for SD1.5-Flux). Both are constructed
+        from the loaded pipeline's components. Falls back to the base txt2img
+        pipeline if the specialized variant is unavailable or fails to init.
+        """
         import diffusers
 
         model_type = self._model_type
@@ -592,6 +660,17 @@ class GenerateWorker(QThread):
         return self.pipe
 
     def _do_generate(self):
+        """Run the image generation loop.
+
+        Phase 1: Snapshot all generation parameters so UI changes during a
+        batch don't cause inconsistencies.
+        Phase 2: Configure the scheduler and select the pipeline variant.
+        Phase 3: Loop over num_images, generating one image per iteration.
+        Each image gets its own seed: if seed is -1 a random seed is chosen,
+        otherwise seed+i is used for reproducible batches. Uses CPU generator
+        on MPS devices due to PyTorch/MPS compatibility issues. Embeds A1111-
+        format metadata into each output PNG.
+        """
         import torch
 
         with self._lock:

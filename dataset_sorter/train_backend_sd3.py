@@ -109,6 +109,9 @@ class SD3Backend(TrainBackendBase):
         clip_hidden = torch.cat([clip_l_hidden, clip_g_hidden], dim=-1)
 
         if t5_hidden is not None:
+            # _pad_and_cat is inherited from TrainBackendBase; it pads tensors
+            # along the sequence dimension to equal length before concatenating,
+            # which is necessary because CLIP and T5 produce different seq lengths.
             encoder_hidden = self._pad_and_cat([clip_hidden, t5_hidden])
         else:
             encoder_hidden = clip_hidden

@@ -35,24 +35,29 @@ class LossChartWidget(QWidget):
     """Mini QPainter line chart for training loss history."""
 
     def __init__(self, parent=None):
+        """Initialize the loss chart with an empty data series."""
         super().__init__(parent)
         self._points: list[tuple[int, float]] = []
         self.setMinimumHeight(120)
         self.setMaximumHeight(180)
 
     def set_data(self, points: list[tuple[int, float]]):
+        """Replace the entire data series with the given (step, loss) points."""
         self._points = points
         self.update()
 
     def append_point(self, step: int, loss: float):
+        """Append a single (step, loss) data point and refresh the chart."""
         self._points.append((step, loss))
         self.update()
 
     def clear_data(self):
+        """Remove all data points and refresh the chart."""
         self._points.clear()
         self.update()
 
     def paintEvent(self, event):
+        """Draw the loss curve with axes, grid lines, and labels."""
         if len(self._points) < 2:
             return
         painter = QPainter(self)
@@ -162,12 +167,14 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     request_recommendations = pyqtSignal()
 
     def __init__(self, parent=None):
+        """Initialize the training tab with default state and build the UI."""
         super().__init__(parent)
         self._training_worker = None
         self._loss_history: list[tuple[int, float]] = []
         self._build_ui()
 
     def _build_ui(self):
+        """Construct the full training tab layout: paths, presets, config tabs, log, and controls."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
@@ -433,11 +440,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     # ── Helpers ────────────────────────────────────────────────────────
 
     def _browse_to_line_edit(self, line_edit: QLineEdit):
+        """Open a directory picker dialog and write the selected path into the given QLineEdit."""
         path = QFileDialog.getExistingDirectory(self, "Select Directory")
         if path:
             line_edit.setText(path)
 
     def _on_preset_changed(self, index):
+        """Update the preset description label when the user selects a different preset."""
         key = self.preset_combo.currentData()
         if key and key in TRAINING_PRESETS:
             self.preset_desc_label.setText(TRAINING_PRESETS[key].get("description", ""))
@@ -445,6 +454,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self.preset_desc_label.setText("")
 
     def _apply_preset(self):
+        """Apply the currently selected training preset to all config fields."""
         key = self.preset_combo.currentData()
         if not key:
             return
@@ -454,15 +464,18 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"Applied preset: {TRAINING_PRESETS[key]['label']}")
 
     def _group(self, title: str) -> QGroupBox:
+        """Create a QGroupBox with the given title for use in config sections."""
         g = QGroupBox(title)
         return g
 
     def _muted(self, text):
+        """Create a QLabel styled with the muted/secondary text appearance."""
         lbl = QLabel(text)
         lbl.setStyleSheet(MUTED_LABEL_STYLE)
         return lbl
 
     def _browse_model(self):
+        """Open a file picker for selecting a base model (.safetensors or .ckpt)."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Base Model",
             "", "Safetensors (*.safetensors);;Checkpoint (*.ckpt);;All (*)",
@@ -471,11 +484,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self.model_path_input.setText(path)
 
     def _browse_output(self):
+        """Open a directory picker for selecting the training output directory."""
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if path:
             self.output_dir_input.setText(path)
 
     def _log(self, msg: str):
+        """Append a message to the training log and auto-scroll to the bottom."""
         self.log_output.append(msg)
         sb = self.log_output.verticalScrollBar()
         sb.setValue(sb.maximum())
@@ -652,42 +667,50 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.train_progress.setVisible(training)
 
     def _stop_training(self):
+        """Signal the training worker to stop and shut down the VRAM monitor."""
         if self._training_worker:
             self._log("Stopping training...")
             self._training_worker.stop()
             self._stop_vram_monitor()
 
     def _pause_training(self):
+        """Pause training at the next step boundary."""
         if self._training_worker:
             self._log("Pausing training...")
             self._training_worker.pause()
 
     def _resume_training(self):
+        """Resume a previously paused training run."""
         if self._training_worker:
             self._log("Resuming training...")
             self._training_worker.resume()
 
     def _save_now(self):
+        """Request an immediate checkpoint save from the training worker."""
         if self._training_worker:
             self._log("Requesting immediate save...")
             self._training_worker.request_save()
 
     def _sample_now(self):
+        """Request immediate sample image generation from the training worker."""
         if self._training_worker:
             self._log("Requesting immediate sample generation...")
             self._training_worker.request_sample()
 
     def _backup_now(self):
+        """Request a full timestamped project backup from the training worker."""
         if self._training_worker:
             self._log("Requesting project backup...")
             self._training_worker.request_backup()
 
     def _on_progress(self, current, total, message):
+        """Handle progress signal: update the progress bar and status label."""
         self.train_progress.setMaximum(max(total, 1))
         self.train_progress.setValue(current)
         self.status_label.setText(message)
 
     def _on_loss(self, step, loss, lr):
+        """Handle loss signal: update the loss label, chart, and periodic log entries."""
         import math
         if not math.isfinite(loss):
             self._log(f"WARNING: Non-finite loss at step {step}: {loss}")
@@ -701,6 +724,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log(f"[Step {step:6d}] loss={loss:.6f}  lr={lr:.2e}")
 
     def _on_sample(self, images, step):
+        """Handle sample signal: save generated images to disk and display the first one."""
         self._log(f"Samples generated at step {step}")
         # Save samples to disk
         output_text = self.output_dir_input.text().strip()
@@ -728,6 +752,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self.sample_label.setPixmap(pixmap)
 
     def _on_phase(self, phase):
+        """Log a training phase transition (e.g. caching, training, saving)."""
         self._log(f"Phase: {phase}")
 
     def _on_paused_changed(self, is_paused):
@@ -763,6 +788,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         )
 
     def _on_error(self, error_msg):
+        """Log an error message received from the training worker."""
         self._log(f"ERROR: {error_msg}")
 
     # ── Smart Resume ─────────────────────────────────────────────────
@@ -931,6 +957,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._vram_monitor = None
 
     def _on_finished(self, success, message):
+        """Handle training completion: stop VRAM monitor, reset UI, and log final status."""
         self._stop_vram_monitor()
         self._set_training_ui(False)
         self.status_label.setText(message)
