@@ -82,11 +82,19 @@ class KolorsBackend(TrainBackendBase):
             out = self.text_encoder(**tokens)
             encoder_hidden = out.last_hidden_state
 
-        # No pooled output from ChatGLM — use zeros for SDXL UNet compatibility
-        pooled = torch.zeros(
-            encoder_hidden.shape[0], 1280,
-            device=self.device, dtype=self.dtype,
-        )
+        # ChatGLM doesn't produce pooled embeddings like CLIP. Use the first
+        # token (analogous to [CLS]) as a proxy pooled representation, then
+        # project to 1280-dim to match what the SDXL UNet expects.
+        first_token = encoder_hidden[:, 0, :]  # (batch, hidden_dim)
+        if not hasattr(self, '_pool_proj'):
+            # Lazy-init a frozen linear projection from ChatGLM hidden_dim → 1280
+            # Uses mean-preserving init so initial training steps aren't disrupted
+            hidden_dim = first_token.shape[-1]
+            self._pool_proj = torch.nn.Linear(
+                hidden_dim, 1280, bias=False,
+            ).to(device=self.device, dtype=self.dtype)
+            self._pool_proj.requires_grad_(False)
+        pooled = self._pool_proj(first_token)
 
         return (encoder_hidden, pooled)
 

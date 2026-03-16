@@ -102,8 +102,11 @@ class Flux2Backend(TrainBackendBase):
                 # Concatenate along sequence dimension
                 encoder_hidden = torch.cat(selected, dim=1)
             else:
-                # Fallback to last hidden state
-                encoder_hidden = hidden_states[-1]
+                raise RuntimeError(
+                    f"Flux 2 encoder has {len(hidden_states)} layers but none of "
+                    f"the requested layers {self._hidden_state_layers} are available. "
+                    f"The model may be incompatible or corrupted."
+                )
 
         return (encoder_hidden,)
 

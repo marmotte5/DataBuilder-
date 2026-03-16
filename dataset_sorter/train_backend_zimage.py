@@ -65,13 +65,22 @@ class ZImageBackend(TrainBackendBase):
         - ZImageTransformer2DModel
         - FlowMatchEulerDiscreteScheduler
         """
+        # Handle single-file .safetensors / .ckpt models
+        is_single_file = model_path.endswith((".safetensors", ".ckpt"))
+
         # Try loading as a diffusers pipeline first
         try:
             from diffusers import DiffusionPipeline
-            pipe = DiffusionPipeline.from_pretrained(
-                model_path, torch_dtype=self.dtype,
-                trust_remote_code=True,
-            )
+            if is_single_file:
+                pipe = DiffusionPipeline.from_single_file(
+                    model_path, torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
+            else:
+                pipe = DiffusionPipeline.from_pretrained(
+                    model_path, torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
             self.pipeline = pipe
             self.tokenizer = pipe.tokenizer
             self.text_encoder = pipe.text_encoder

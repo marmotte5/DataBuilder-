@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 
 from dataset_sorter.train_backend_base import TrainBackendBase
+from dataset_sorter.utils import autocast_device_type
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +144,6 @@ class HunyuanDiTBackend(TrainBackendBase):
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
         """Hunyuan DiT training step — uses keyword args for transformer forward."""
-        from dataset_sorter.train_backend_base import autocast_device_type
         config = self.config
 
         noise = torch.randn_like(latents)
