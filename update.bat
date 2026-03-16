@@ -4,9 +4,8 @@ setlocal enabledelayedexpansion
 :: ============================================================================
 :: DataBuilder - Updater (Windows)
 ::
-:: Reinstalls / upgrades PyTorch and all dependencies inside the existing venv.
-:: Run this when you get DLL errors, want a newer PyTorch, or after a
-:: driver update.
+:: Diagnoses and fixes PyTorch / DLL issues, then reinstalls dependencies.
+:: Run this when you get c10.dll or other DLL errors.
 ::
 :: Requires: venv/ created by install.bat
 :: ============================================================================
@@ -16,13 +15,91 @@ color 0B
 
 echo.
 echo  =============================================================
-echo     DataBuilder - Updater
-echo     Reinstall / Upgrade Dependencies
+echo     DataBuilder - Updater ^& Diagnostic
+echo     Fix DLL errors, reinstall PyTorch
 echo  =============================================================
 echo.
 
-:: ── Check venv ──────────────────────────────────────────────────────
+:: ── Step 0: Diagnostics ─────────────────────────────────────────────
 
+echo [0/6] Running diagnostics...
+echo.
+
+:: Check Python source (Microsoft Store Python causes DLL issues)
+for /f "tokens=*" %%p in ('where python 2^>nul') do (
+    set "PYTHON_PATH=%%p"
+    goto :found_python
+)
+echo ERROR: Python not found in PATH.
+pause
+exit /b 1
+
+:found_python
+echo   Python path:  %PYTHON_PATH%
+echo %PYTHON_PATH% | findstr /i "WindowsApps" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo.
+    echo   *** WARNING: You are using Microsoft Store Python! ***
+    echo   Microsoft Store Python sandboxes DLL loading and causes c10.dll errors.
+    echo   Please uninstall it and install Python from https://www.python.org/downloads/
+    echo   Make sure to check "Add Python to PATH" during installation.
+    echo.
+    pause
+    exit /b 1
+)
+
+for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
+echo   Python ver:   %PYVER%
+
+:: Check VC++ Redistributable
+set "VCREDIST_FOUND=0"
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" /v Version >nul 2>&1
+if %errorlevel% equ 0 set "VCREDIST_FOUND=1"
+reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" >nul 2>&1
+if %errorlevel% equ 0 set "VCREDIST_FOUND=1"
+
+if "%VCREDIST_FOUND%"=="0" (
+    echo   VC++ Redist:  NOT FOUND
+    echo.
+    echo   *** Visual C++ Redistributable is MISSING! ***
+    echo   This is the most common cause of c10.dll errors.
+    echo   Downloading and installing now...
+    echo.
+    curl -L -o "%TEMP%\vc_redist.x64.exe" "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    if exist "%TEMP%\vc_redist.x64.exe" (
+        echo   Running VC++ Redistributable installer...
+        "%TEMP%\vc_redist.x64.exe" /install /passive /norestart
+        echo   VC++ Redistributable installed.
+        del "%TEMP%\vc_redist.x64.exe" >nul 2>&1
+    ) else (
+        echo   Download failed. Please install manually:
+        echo   https://aka.ms/vs/17/release/vc_redist.x64.exe
+    )
+) else (
+    echo   VC++ Redist:  Installed
+)
+
+:: Check NVIDIA driver
+nvidia-smi >nul 2>&1
+if %errorlevel% equ 0 (
+    for /f "tokens=9" %%v in ('nvidia-smi --query-gpu^=driver_version --format^=csv^,noheader 2^>nul') do (
+        echo   NVIDIA driver: %%v
+    )
+    for /f "tokens=*" %%g in ('nvidia-smi --query-gpu^=name --format^=csv^,noheader 2^>nul') do (
+        echo   GPU:           %%g
+    )
+    for /f "tokens=*" %%m in ('nvidia-smi --query-gpu^=memory.total --format^=csv^,noheader 2^>nul') do (
+        echo   VRAM:          %%m
+    )
+) else (
+    echo   NVIDIA driver: nvidia-smi not found (driver may be too old)
+)
+
+echo.
+
+:: ── Step 1: Activate venv ───────────────────────────────────────────
+
+echo [1/6] Activating virtual environment...
 if not exist "venv\Scripts\activate.bat" (
     echo ERROR: Virtual environment not found.
     echo        Run install.bat first to create it.
@@ -36,19 +113,27 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+echo        venv activated.
 
-:: ── Upgrade pip ─────────────────────────────────────────────────────
+:: ── Step 2: Upgrade pip ─────────────────────────────────────────────
 
-echo [1/5] Upgrading pip...
+echo.
+echo [2/6] Upgrading pip...
 python -m pip install --upgrade pip setuptools wheel >nul 2>&1
 echo        pip upgraded.
 
-:: ── Reinstall PyTorch ───────────────────────────────────────────────
+:: ── Step 3: Reinstall PyTorch ───────────────────────────────────────
 
 echo.
-echo [2/5] Reinstalling PyTorch with CUDA 12.8...
+echo [3/6] Reinstalling PyTorch with CUDA 12.8...
 echo        Uninstalling old version first...
 pip uninstall -y torch torchvision torchaudio >nul 2>&1
+
+:: Also clean up any leftover torch files that can cause stale DLL issues
+if exist "venv\Lib\site-packages\torch" (
+    echo        Cleaning leftover torch files...
+    rmdir /s /q "venv\Lib\site-packages\torch" >nul 2>&1
+)
 
 echo        Installing fresh PyTorch (this may take a few minutes)...
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
@@ -63,19 +148,19 @@ if %errorlevel% neq 0 (
     )
 )
 
-:: ── Upgrade core dependencies ───────────────────────────────────────
+:: ── Step 4: Upgrade core dependencies ───────────────────────────────
 
 echo.
-echo [3/5] Upgrading core dependencies...
+echo [4/6] Upgrading core dependencies...
 pip install --upgrade PyQt6>=6.5 numpy>=1.24 Pillow>=10.0
 if %errorlevel% neq 0 (
     echo WARNING: Some core dependencies failed to upgrade.
 )
 
-:: ── Upgrade training dependencies ───────────────────────────────────
+:: ── Step 5: Upgrade training dependencies ───────────────────────────
 
 echo.
-echo [4/5] Upgrading training dependencies...
+echo [5/6] Upgrading training dependencies...
 pip install --upgrade diffusers>=0.28 transformers>=4.38 accelerate>=0.27 safetensors>=0.4 peft>=0.10
 if %errorlevel% neq 0 (
     echo WARNING: Some training dependencies failed to upgrade.
@@ -83,27 +168,34 @@ if %errorlevel% neq 0 (
 
 :: Optional optimizers
 echo.
-echo [4b/5] Upgrading optional optimizers...
+echo [5b/6] Upgrading optional optimizers...
 pip install --upgrade bitsandbytes >nul 2>&1 && echo        bitsandbytes - OK || echo        bitsandbytes - skipped
 pip install --upgrade prodigyopt >nul 2>&1 && echo        prodigyopt - OK || echo        prodigyopt - skipped
 pip install --upgrade lion-pytorch >nul 2>&1 && echo        lion-pytorch - OK || echo        lion-pytorch - skipped
 pip install --upgrade dadaptation >nul 2>&1 && echo        dadaptation - OK || echo        dadaptation - skipped
 
-:: ── Verify installation ─────────────────────────────────────────────
+:: ── Step 6: Verify PyTorch ──────────────────────────────────────────
 
 echo.
-echo [5/5] Verifying installation...
+echo [6/6] Verifying PyTorch...
 echo.
 
 python -c "import torch; print(f'  PyTorch:     {torch.__version__}'); print(f'  CUDA:        {torch.version.cuda if torch.cuda.is_available() else \"Not available\"}'); print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}'); print(f'  VRAM:        {round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)} GB' if torch.cuda.is_available() else ''); print(f'  bf16:        {torch.cuda.is_bf16_supported()}' if torch.cuda.is_available() else ''); print(f'  cuDNN:       {torch.backends.cudnn.version()}' if torch.backends.cudnn.is_available() else '')"
 
 if %errorlevel% neq 0 (
     echo.
-    echo WARNING: PyTorch verification failed. Try the following:
-    echo   1. Update your NVIDIA drivers from https://www.nvidia.com/drivers
-    echo   2. Install Visual C++ Redistributable from https://aka.ms/vs/17/release/vc_redist.x64.exe
-    echo   3. Re-run this updater
+    echo  *** PyTorch still fails to load! ***
     echo.
+    echo  Troubleshooting checklist:
+    echo    1. Make sure Python is from python.org (NOT Microsoft Store)
+    echo    2. Reboot your PC (needed after VC++ / driver installs)
+    echo    3. Temporarily disable antivirus and try again
+    echo    4. If on Python 3.13+, try Python 3.11 or 3.12 instead
+    echo    5. Try CPU-only:  pip install torch torchvision torchaudio
+    echo.
+) else (
+    echo.
+    echo  PyTorch loaded successfully!
 )
 
 python -c "import diffusers; print(f'  Diffusers:   {diffusers.__version__}')" 2>nul
@@ -114,11 +206,6 @@ python -c "import PyQt6.QtCore; print(f'  PyQt6:       {PyQt6.QtCore.PYQT_VERSIO
 echo.
 echo  =============================================================
 echo     Update complete!
-echo.
-echo     If you still get DLL errors, make sure to:
-echo       1. Update NVIDIA drivers
-echo       2. Install VC++ Redistributable (x64)
-echo       3. Reboot your PC after driver updates
 echo.
 echo     To run DataBuilder:  double-click run.bat
 echo  =============================================================
