@@ -276,13 +276,24 @@ def find_similar_tags(tag: str, all_tags: list[str], threshold: float = 0.8) -> 
     """Find tags similar to the given tag using sequence matching.
 
     Returns list of (similar_tag, similarity_score) sorted by score descending.
+    Uses length-based pruning to avoid expensive comparisons on obviously
+    dissimilar pairs.
     """
     results = []
     tag_lower = tag.lower().strip()
+    tag_len = len(tag_lower)
+    # Two strings of lengths a and b can have SequenceMatcher ratio at most
+    # 2*min(a,b)/(a+b).  Skip pairs where this upper bound < threshold.
     for other in all_tags:
         other_lower = other.lower().strip()
         if tag_lower == other_lower:
             continue
+        other_len = len(other_lower)
+        # Length-based upper-bound pruning
+        if tag_len and other_len:
+            max_possible = 2 * min(tag_len, other_len) / (tag_len + other_len)
+            if max_possible < threshold:
+                continue
         score = SequenceMatcher(None, tag_lower, other_lower).ratio()
         if score >= threshold:
             results.append((other, score))
@@ -290,7 +301,7 @@ def find_similar_tags(tag: str, all_tags: list[str], threshold: float = 0.8) -> 
     return results[:5]
 
 
-def spell_check_tags(tag_counts: Counter) -> list[dict]:
+def spell_check_tags(tag_counts: Counter, max_tags: int = 5000) -> list[dict]:
     """Check all tags for potential misspellings and suggest corrections.
 
     Returns list of dicts:
@@ -298,9 +309,21 @@ def spell_check_tags(tag_counts: Counter) -> list[dict]:
     - count: number of occurrences
     - suggestion: suggested correction (if any)
     - reason: "known_typo", "similar_to", or "semantic_group"
+
+    For very large datasets the similarity search is limited to the
+    *max_tags* most common tags to keep runtime reasonable.
     """
     suggestions = []
     all_tags = list(tag_counts.keys())
+
+    # Limit similarity pool to avoid O(n^2) blowup on huge datasets.
+    # Known-typo checks still run on ALL tags (O(n), cheap).
+    if len(all_tags) > max_tags:
+        similarity_pool = [
+            t for t, _ in tag_counts.most_common(max_tags)
+        ]
+    else:
+        similarity_pool = all_tags
 
     for tag in all_tags:
         tag_lower = tag.lower().strip()
@@ -318,17 +341,18 @@ def spell_check_tags(tag_counts: Counter) -> list[dict]:
                 continue
 
         # 2. Find very similar tags (possible duplicates / near-duplicates)
-        similar = find_similar_tags(tag, all_tags, threshold=0.85)
-        for sim_tag, score in similar:
-            # Only suggest if the other tag has more occurrences (merge into bigger)
-            if tag_counts[sim_tag] > tag_counts[tag]:
-                suggestions.append({
-                    "tag": tag,
-                    "count": tag_counts[tag],
-                    "suggestion": sim_tag,
-                    "reason": f"similar_to (score: {score:.0%})",
-                })
-                break
+        if tag in similarity_pool:
+            similar = find_similar_tags(tag, similarity_pool, threshold=0.85)
+            for sim_tag, score in similar:
+                # Only suggest if the other tag has more occurrences (merge into bigger)
+                if tag_counts[sim_tag] > tag_counts[tag]:
+                    suggestions.append({
+                        "tag": tag,
+                        "count": tag_counts[tag],
+                        "suggestion": sim_tag,
+                        "reason": f"similar_to (score: {score:.0%})",
+                    })
+                    break
 
     # Sort by count ascending (rare tags more likely to be typos)
     suggestions.sort(key=lambda s: s["count"])

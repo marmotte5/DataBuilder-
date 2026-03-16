@@ -521,6 +521,21 @@ class TagHistogramSection(QWidget):
             self.histogram.set_data(bin_data)
 
 
+class _SpellCheckWorker(QThread):
+    """Run spell-check in a background thread to avoid freezing the UI."""
+
+    finished = pyqtSignal(list, dict)  # (suggestions, semantic_groups)
+
+    def __init__(self, tag_counts: Counter, parent=None):
+        super().__init__(parent)
+        self._tag_counts = tag_counts
+
+    def run(self):
+        suggestions = spell_check_tags(self._tag_counts)
+        groups = get_semantic_groups(self._tag_counts)
+        self.finished.emit(suggestions, groups)
+
+
 class SpellCheckSection(QWidget):
     """Bulk tag spell-check and semantic suggestions."""
 
@@ -593,7 +608,18 @@ class SpellCheckSection(QWidget):
         if not self._tag_counts:
             return
 
-        suggestions = spell_check_tags(self._tag_counts)
+        self.btn_check.setEnabled(False)
+        self.btn_check.setText("Checking...")
+        self.result_badge.setText("")
+
+        self._worker = _SpellCheckWorker(self._tag_counts, self)
+        self._worker.finished.connect(self._on_check_done)
+        self._worker.start()
+
+    def _on_check_done(self, suggestions: list, groups: dict):
+        self.btn_check.setEnabled(True)
+        self.btn_check.setText("Run Spell Check")
+
         self.result_badge.setText(
             f"{len(suggestions)} suggestion(s)" if suggestions
             else "No issues found"
@@ -623,7 +649,6 @@ class SpellCheckSection(QWidget):
             self.table.setCellWidget(row, 4, btn)
 
         # Semantic groups
-        groups = get_semantic_groups(self._tag_counts)
         if groups:
             lines = []
             for group_name, tags in groups.items():
