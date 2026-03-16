@@ -323,11 +323,41 @@ class GenerateWorker(QThread):
             # Fallback: generic DiffusionPipeline
             pipe_cls = diffusers.DiffusionPipeline
 
+        # For single-file checkpoints (.safetensors, .ckpt) with models that
+        # don't have from_single_file (e.g. trust_remote_code / DiffusionPipeline),
+        # try StableDiffusionPipeline.from_single_file as a universal fallback,
+        # or point the user to use a diffusers-format folder instead.
         try:
-            if is_single_file and hasattr(pipe_cls, "from_single_file"):
-                # Remove safety_checker for single file loading
+            if is_single_file:
                 kwargs.pop("safety_checker", None)
-                pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                if hasattr(pipe_cls, "from_single_file"):
+                    pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                else:
+                    # Try common pipeline classes that support from_single_file
+                    loaded = False
+                    for fallback_name in (
+                        "StableDiffusion3Pipeline",
+                        "StableDiffusionXLPipeline",
+                        "StableDiffusionPipeline",
+                    ):
+                        fallback_cls = getattr(diffusers, fallback_name, None)
+                        if fallback_cls and hasattr(fallback_cls, "from_single_file"):
+                            try:
+                                pipe = fallback_cls.from_single_file(model_path, **kwargs)
+                                loaded = True
+                                break
+                            except Exception:
+                                continue
+                    if not loaded:
+                        self.error.emit(
+                            f"Cannot load single .safetensors file for {model_type}. "
+                            f"Please use a diffusers-format model folder instead, "
+                            f"or convert with: "
+                            f"python -c \"from diffusers import DiffusionPipeline; "
+                            f"p = DiffusionPipeline.from_single_file('{model_path}'); "
+                            f"p.save_pretrained('model_folder')\""
+                        )
+                        return None
             else:
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
         except TypeError:
