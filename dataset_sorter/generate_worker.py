@@ -195,6 +195,16 @@ class GenerateWorker(QThread):
                 self._do_load()
             elif self._mode == "generate":
                 self._do_generate()
+        except OSError as e:
+            if "c10" in str(e).lower() or "1114" in str(e):
+                self.error.emit(
+                    "PyTorch DLL failed to load (c10.dll). "
+                    "Run update.bat to reinstall PyTorch, or install "
+                    "Visual C++ Redistributable (x64) and update NVIDIA drivers."
+                )
+            else:
+                self.error.emit(f"{e}\n\n{traceback.format_exc()}")
+            self.finished_generating.emit(False, str(e))
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
