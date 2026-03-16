@@ -1611,6 +1611,11 @@ class TagSpecificitySection(QWidget):
         layout.addWidget(self.detail_text)
 
     def _stat_card(self, label: str):
+        """Create a styled stat card widget.
+
+        Returns a (card_widget, value_label) tuple so the caller can
+        update the value label text later.
+        """
         card = QWidget()
         card.setStyleSheet(CARD_STYLE)
         vbox = QVBoxLayout(card)
@@ -1641,6 +1646,7 @@ class TagSpecificitySection(QWidget):
             self._run_analysis()
 
     def _run_analysis(self):
+        """Launch tag specificity analysis on a worker thread."""
         if not self._entries:
             self.detail_text.setPlainText("No dataset loaded. Scan a dataset first.")
             return
