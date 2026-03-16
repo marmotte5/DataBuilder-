@@ -44,6 +44,7 @@ from dataset_sorter.ui.reco_tab import RecoTab
 from dataset_sorter.ui.image_tab import ImageTab
 from dataset_sorter.ui.training_tab import TrainingTab
 from dataset_sorter.ui.generate_tab import GenerateTab
+from dataset_sorter.ui.auto_pipeline_dialog import AutoPipelineDialog
 from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 
@@ -250,6 +251,15 @@ class MainWindow(QMainWindow):
         self.btn_dry = QPushButton("Dry Run (Summary)")
         self.btn_dry.clicked.connect(self._dry_run)
         bottom.addWidget(self.btn_dry)
+
+        self.btn_auto_pipeline = QPushButton("One-Click Pipeline")
+        self.btn_auto_pipeline.setToolTip(
+            "Auto clean tags, optimize weights, and launch training — all in one click"
+        )
+        self.btn_auto_pipeline.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_auto_pipeline.clicked.connect(self._open_auto_pipeline)
+        bottom.addWidget(self.btn_auto_pipeline)
+
         bottom.addStretch()
         self.btn_export = QPushButton("Export (copy only)")
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
@@ -1011,6 +1021,75 @@ class MainWindow(QMainWindow):
             if hasattr(parent, 'setCurrentWidget'):
                 parent.setCurrentWidget(self.image_tab)
             self.statusBar().showMessage(f"Navigated to image {index + 1}.")
+
+    # -- Auto Pipeline --
+
+    def _open_auto_pipeline(self):
+        """Open the one-click auto pipeline dialog."""
+        if not self.entries:
+            self.statusBar().showMessage("No dataset loaded. Scan a dataset first.")
+            QMessageBox.warning(
+                self, "No Dataset",
+                "Please scan a dataset first before using the One-Click Pipeline."
+            )
+            return
+
+        dlg = AutoPipelineDialog(
+            entries=self.entries,
+            tag_counts=self.tag_counts,
+            tag_to_entries=dict(self.tag_to_entries),
+            deleted_tags=self.deleted_tags,
+            parent=self,
+        )
+        dlg.cleaning_requested.connect(self._apply_pipeline_cleaning)
+        dlg.reorder_requested.connect(self._apply_pipeline_reorder)
+        dlg.training_requested.connect(self._apply_pipeline_training)
+        dlg.exec()
+
+    def _apply_pipeline_cleaning(self, new_deleted_tags: set, merge_pairs: list):
+        """Apply cleaning changes from the auto pipeline."""
+        self._push_undo("Auto Pipeline clean")
+
+        # Add newly deleted tags
+        self.deleted_tags.update(new_deleted_tags)
+
+        # Apply merges
+        for keep, remove in merge_pairs:
+            if remove in self.deleted_tags:
+                continue
+            for idx in list(self.tag_to_entries.get(remove, [])):
+                entry = self.entries[idx]
+                if keep in entry.tags:
+                    entry.tags = [t for t in entry.tags if t != remove]
+                else:
+                    entry.tags = [keep if t == remove else t for t in entry.tags]
+
+        self._after_tag_edit()
+        self.statusBar().showMessage(
+            f"Pipeline: {len(new_deleted_tags)} tags removed, "
+            f"{len(merge_pairs)} pairs merged."
+        )
+
+    def _apply_pipeline_reorder(self):
+        """Refresh UI after tag reorder from pipeline."""
+        self._rebuild_tag_index()
+        self._refresh_all_ui()
+
+    def _apply_pipeline_training(self, config, model_path: str, output_dir: str):
+        """Apply config and start training from pipeline."""
+        # Apply config to training tab
+        self.training_tab.apply_config(config)
+        self.training_tab.model_path_input.setText(model_path)
+        self.training_tab.output_dir_input.setText(output_dir)
+
+        # Switch to training tab
+        parent = self.training_tab.parent()
+        if hasattr(parent, 'setCurrentWidget'):
+            parent.setCurrentWidget(self.training_tab)
+
+        # Start training
+        self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
+        self.statusBar().showMessage("Pipeline: Training started!")
 
     # -- Dry run & Export --
 
