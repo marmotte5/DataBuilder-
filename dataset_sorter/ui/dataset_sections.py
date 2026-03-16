@@ -2056,6 +2056,11 @@ class TagImportanceSection(QWidget):
         layout.addWidget(self.detail_text)
 
     def _stat_card(self, label: str):
+        """Create a styled stat card widget.
+
+        Returns a (card_widget, value_label) tuple so the caller can
+        update the value label text later.
+        """
         card = QWidget()
         card.setStyleSheet(CARD_STYLE)
         vbox = QVBoxLayout(card)
@@ -2078,6 +2083,7 @@ class TagImportanceSection(QWidget):
         return card, val
 
     def set_data(self, entries, tag_counts, deleted_tags=None):
+        """Store dataset data and auto-run importance analysis if data is available."""
         self._entries = entries
         self._tag_counts = tag_counts
         self._deleted_tags = deleted_tags or set()
@@ -2085,6 +2091,7 @@ class TagImportanceSection(QWidget):
             self._run_analysis()
 
     def _run_analysis(self):
+        """Launch tag importance analysis on a worker thread."""
         if not self._entries:
             self.detail_text.setPlainText("No dataset loaded.")
             return
@@ -2099,6 +2106,7 @@ class TagImportanceSection(QWidget):
         self._worker.start()
 
     def _on_analysis_done(self, report):
+        """Handle importance results: update stat cards, enable action buttons, and show concept view."""
         self._report = report
         self.btn_analyze.setEnabled(True)
         self.btn_apply_buckets.setEnabled(True)
@@ -2145,6 +2153,7 @@ class TagImportanceSection(QWidget):
         self._show_view("concept")
 
     def _show_view(self, view: str):
+        """Switch the table between 'concept', 'all', 'captions', or 'noise' view."""
         if not self._report:
             return
         self.table.setSortingEnabled(False)
