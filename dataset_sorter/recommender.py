@@ -733,7 +733,7 @@ def _build_notes(
             notes.append("Apple Metal (MPS) detected. PyTorch 2.1+ recommended for best performance.")
         else:
             notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
-    except ImportError:
+    except (ImportError, OSError):
         notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
 
     return notes

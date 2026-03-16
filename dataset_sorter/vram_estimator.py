@@ -226,7 +226,7 @@ def detect_gpu_vram() -> int:
             except Exception:
                 pass
             return 16  # Conservative default for Apple Silicon
-    except ImportError:
+    except (ImportError, OSError):
         pass
     return 0
 
