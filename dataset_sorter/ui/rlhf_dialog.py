@@ -87,6 +87,7 @@ class ClickableImageLabel(QLabel):
         self._update_style()
 
     def mousePressEvent(self, event):
+        """Emit clicked signal on left-button press."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
@@ -98,6 +99,7 @@ class PreferencePairWidget(QWidget):
     preference_selected = pyqtSignal(int, str)  # pair_index, "a" or "b"
 
     def __init__(self, pair_index: int, prompt: str, image_a, image_b, parent=None):
+        """Build a side-by-side image pair widget with clickable A/B selection."""
         super().__init__(parent)
         self._pair_index = pair_index
         self._choice: Optional[str] = None
@@ -163,6 +165,7 @@ class PreferencePairWidget(QWidget):
         layout.addWidget(line)
 
     def _select(self, choice: str):
+        """Record the user's choice ('a' or 'b'), update styling, and emit signal."""
         self._choice = choice
         self._label_a.selected = (choice == "a")
         self._label_b.selected = (choice == "b")
@@ -170,6 +173,7 @@ class PreferencePairWidget(QWidget):
 
     @property
     def choice(self) -> Optional[str]:
+        """The user's preference for this pair: 'a', 'b', or None if unchosen."""
         return self._choice
 
 
@@ -187,6 +191,7 @@ class RLHFPreferenceDialog(QDialog):
         step: int = 0,
         parent=None,
     ):
+        """Initialize the RLHF dialog with candidate image pairs for preference selection."""
         super().__init__(parent)
         self.setWindowTitle(f"RLHF — Pick Your Preferences (Round {round_idx + 1})")
         self.setMinimumSize(800, 600)
@@ -200,6 +205,7 @@ class RLHFPreferenceDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self):
+        """Construct the dialog UI: header, scrollable pair list, and action buttons."""
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
@@ -269,6 +275,7 @@ class RLHFPreferenceDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _on_preference(self, pair_index: int, choice: str):
+        """Record a preference, update the progress label, and enable confirm when all pairs are selected."""
         self._selections[pair_index] = choice
         n = len(self._selections)
         total = len(self._candidates)
@@ -278,9 +285,10 @@ class RLHFPreferenceDialog(QDialog):
         self.btn_confirm.setEnabled(n == total)
 
     def get_selections(self) -> list[dict]:
-        """Return list of preference selections with image data.
+        """Return preference selections as a list of dicts for DPO training.
 
-        Each entry: {prompt, chosen_image, rejected_image, seed_chosen, seed_rejected}
+        Each dict contains: prompt, chosen_image (PIL), rejected_image (PIL),
+        seed_chosen, and seed_rejected, derived from the user's A/B picks.
         """
         results = []
         for idx, choice in self._selections.items():
@@ -314,6 +322,7 @@ class SmartResumeDialog(QDialog):
     """
 
     def __init__(self, report: str, parent=None):
+        """Initialize with a plain-text analysis report and approve/ignore buttons."""
         super().__init__(parent)
         self.setWindowTitle("Smart Resume — Analysis Report")
         self.setMinimumSize(500, 400)

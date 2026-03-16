@@ -937,6 +937,7 @@ class DuplicateSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the duplicate detection UI: sensitivity controls, action button, and results text area."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -988,9 +989,11 @@ class DuplicateSection(QWidget):
         layout.addWidget(self.results_text, 1)
 
     def set_entries(self, entries: list[ImageEntry]):
+        """Store the image entries for duplicate detection."""
         self._entries = entries
 
     def _run_detection(self):
+        """Launch duplicate detection on a worker thread using current sensitivity settings."""
         if not self._entries:
             self.results_text.setPlainText("No dataset loaded. Scan a dataset first.")
             return
@@ -1010,6 +1013,7 @@ class DuplicateSection(QWidget):
         self._worker.start()
 
     def _on_detection_done(self, duplicates, report):
+        """Display the duplicate detection report and re-enable the detect button."""
         self.results_text.setPlainText(report)
         self.result_badge.setText(f"{len(duplicates)} pair(s)")
         self.btn_detect.setEnabled(True)
@@ -1065,6 +1069,7 @@ class ConceptCoverageSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the concept coverage UI: score cards, view toggles, results table, and detail panel."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -1169,6 +1174,11 @@ class ConceptCoverageSection(QWidget):
         layout.addWidget(self.detail_text)
 
     def _stat_card(self, label: str):
+        """Create a styled stat card widget.
+
+        Returns a (card_widget, value_label) tuple so the caller can
+        update the value label text later.
+        """
         card = QWidget()
         card.setStyleSheet(CARD_STYLE)
         vbox = QVBoxLayout(card)
