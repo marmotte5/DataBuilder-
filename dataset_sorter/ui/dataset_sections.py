@@ -1665,6 +1665,7 @@ class TagSpecificitySection(QWidget):
         self._worker.start()
 
     def _on_analysis_done(self, result):
+        """Handle specificity results: update stat cards and show the hierarchies view."""
         self._analysis = result
         self.btn_analyze.setEnabled(True)
         self.status_badge.setText("Done")
@@ -1690,6 +1691,7 @@ class TagSpecificitySection(QWidget):
         self._show_view("hierarchies")
 
     def _show_view(self, view: str):
+        """Switch the table between 'hierarchies', 'scores', or 'focus' tags view."""
         if not self._analysis:
             return
 
@@ -1931,6 +1933,7 @@ class TagImportanceSection(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        """Build the importance UI: stat cards, action buttons, view toggles, table, and detail panel."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
