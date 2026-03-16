@@ -274,8 +274,9 @@ class CachedTrainDataset(Dataset):
 
             resolution_groups.setdefault((target_w, target_h), []).append((idx, pixel_values))
 
-        # Encode each resolution group in batches
-        vae_batch_size = 4
+        # Encode each resolution group in batches with dynamic batch sizing.
+        # Start with a larger batch and reduce on OOM for maximum throughput.
+        vae_batch_size = self._estimate_vae_batch_size(device)
         encoded_count = len(self) - len(to_encode)  # already cached
         for (_w, _h), group in resolution_groups.items():
             for batch_start in range(0, len(group), vae_batch_size):
@@ -284,9 +285,44 @@ class CachedTrainDataset(Dataset):
                     [pv for _, pv in batch_items], dim=0
                 ).to(device, dtype=dtype, memory_format=torch.channels_last)
 
-                with torch.no_grad():
-                    encoded = vae.encode(batch_tensor).latent_dist.sample()
-                    encoded = encoded * vae.config.scaling_factor
+                try:
+                    with torch.no_grad():
+                        encoded = vae.encode(batch_tensor).latent_dist.sample()
+                        encoded = encoded * vae.config.scaling_factor
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower() and vae_batch_size > 1:
+                        # OOM: reduce batch size and retry this batch one-by-one
+                        vae_batch_size = max(1, vae_batch_size // 2)
+                        log.warning(f"VAE OOM, reducing batch size to {vae_batch_size}")
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        # Re-encode items individually as fallback
+                        for idx_item, pv_item in batch_items:
+                            single = pv_item.to(device, dtype=dtype, memory_format=torch.channels_last)
+                            with torch.no_grad():
+                                enc = vae.encode(single).latent_dist.sample()
+                                enc = enc * vae.config.scaling_factor
+                            latent = enc[0].cpu()
+                            if torch.cuda.is_available():
+                                latent = latent.pin_memory()
+                            self._latent_cache[idx_item] = latent
+                            if to_disk and self.cache_dir:
+                                pending_saves.append(
+                                    (self._latent_disk_path(idx_item), compress_latent_fp16(latent))
+                                )
+                            for dup_idx in rep_to_dups.get(idx_item, []):
+                                self._latent_cache[dup_idx] = latent
+                                if to_disk and self.cache_dir:
+                                    pending_saves.append(
+                                        (self._latent_disk_path(dup_idx), compress_latent_fp16(latent))
+                                    )
+                                encoded_count += 1
+                            encoded_count += 1
+                            if progress_fn:
+                                progress_fn(encoded_count, len(self))
+                        continue
+                    else:
+                        raise
 
                 for bi, (idx, _) in enumerate(batch_items):
                     latent = encoded[bi].cpu()
@@ -513,6 +549,28 @@ class CachedTrainDataset(Dataset):
         self._te_cached = True
         self._tokens_cached = True
         log.info(f"Cached tokenized IDs for {len(unique_captions)} unique captions")
+
+    @staticmethod
+    def _estimate_vae_batch_size(device) -> int:
+        """Estimate optimal VAE batch size based on available VRAM.
+
+        Starts large and allows dynamic reduction on OOM. This maximizes
+        throughput by using as much VRAM as available for batched encoding.
+        """
+        try:
+            import torch
+            if device.type == "cuda" and torch.cuda.is_available():
+                free_gb = (
+                    torch.cuda.get_device_properties(0).total_memory
+                    - torch.cuda.memory_allocated()
+                ) / (1024 ** 3)
+                # Each image at 1024x1024 bf16 needs ~0.5 GB for VAE forward
+                # Use ~60% of free memory for batching, leave headroom
+                batch = max(1, int(free_gb * 0.6 / 0.5))
+                return min(batch, 16)  # Cap at 16 for memory safety
+        except (ImportError, RuntimeError):
+            pass
+        return 4  # Conservative default
 
     def _latent_disk_path(self, idx: int) -> Path:
         """Generate disk cache path for a latent."""

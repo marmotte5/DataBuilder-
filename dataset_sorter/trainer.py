@@ -198,6 +198,12 @@ class Trainer:
         self._adaptive_tag_weighter = None
         self._attention_rebalancer = None
 
+        # Adaptive VRAM monitoring (samples during training to prevent OOM)
+        self._vram_monitor = None
+        # Training history (learns from past runs)
+        self._training_history = None
+        self._training_start_time = 0.0
+
     def setup(
         self,
         model_path: str,
@@ -503,6 +509,31 @@ class Trainer:
             )
             log.info("Attention-guided rebalancing enabled")
 
+        # ── 19. Adaptive VRAM Monitor ──
+        if self.device.type == "cuda":
+            from dataset_sorter.vram_estimator import AdaptiveVRAMMonitor
+            total_vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            self._vram_monitor = AdaptiveVRAMMonitor(total_vram)
+            self._vram_monitor.sample()
+            log.info(f"VRAM monitor: {self._vram_monitor.get_report()}")
+
+        # ── 20. Training History (learn from past runs) ──
+        try:
+            from dataset_sorter.training_history import TrainingHistory
+            self._training_history = TrainingHistory()
+            run_count = self._training_history.get_run_count(config.model_type)
+            if run_count > 0:
+                lr_suggestion = self._training_history.get_lr_suggestion(
+                    config.model_type, config.optimizer
+                )
+                if lr_suggestion is not None:
+                    log.info(
+                        f"Training history: {run_count} past runs found. "
+                        f"Suggested LR: {lr_suggestion:.6f} (current: {config.learning_rate:.6f})"
+                    )
+        except Exception as e:
+            log.debug(f"Training history unavailable: {e}")
+
         if progress_fn:
             progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
@@ -533,9 +564,11 @@ class Trainer:
         sample_fn: Optional[SampleCallback] = None,
     ):
         """Main training loop with all speed optimizations."""
+        import time as _time
         config = self.config
         self.state.phase = "training"
         self.state.running = True
+        self._training_start_time = _time.time()
 
         # ── Optimized DataLoader ──
         # persistent_workers: keeps worker processes alive between epochs (saves startup)
@@ -742,6 +775,11 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
 
+                    # Sample VRAM usage periodically for adaptive monitoring
+                    if (self._vram_monitor is not None and
+                            self.state.global_step % 50 == 0):
+                        self._vram_monitor.sample()
+
                     # Log adaptive weighter stats periodically
                     if (self._adaptive_tag_weighter is not None and
                             self.state.global_step % 100 == 0):
@@ -830,6 +868,41 @@ class Trainer:
         self._save_checkpoint("final")
         if sample_fn:
             self._generate_samples(sample_fn)
+
+        # Log VRAM monitor report
+        if self._vram_monitor is not None:
+            log.info(self._vram_monitor.get_report())
+
+        # Log training run to history for future recommendations
+        if self._training_history is not None:
+            import time as _time
+            try:
+                from dataset_sorter.training_history import TrainingRunRecord
+                min_loss = min((l for _, l in self._loss_history), default=0.0)
+                record = TrainingRunRecord(
+                    model_type=config.model_type,
+                    optimizer=config.optimizer,
+                    network_type=config.network_type,
+                    lora_rank=config.lora_rank,
+                    learning_rate=config.learning_rate,
+                    batch_size=config.batch_size,
+                    resolution=config.resolution,
+                    epochs=config.epochs,
+                    total_steps=self.state.global_step,
+                    dataset_size=len(self.dataset),
+                    vram_gb=config.vram_gb,
+                    final_loss=self.state.loss,
+                    min_loss=min_loss,
+                    convergence_step=0,
+                    loss_curve=[l for _, l in self._loss_history[-200:]],
+                    diverged=False,
+                    oom_occurred=self._vram_monitor._oom_count > 0 if self._vram_monitor else False,
+                    peak_vram_gb=self._vram_monitor.peak_gb if self._vram_monitor else 0.0,
+                    training_time_s=_time.time() - self._training_start_time if self._training_start_time else 0,
+                )
+                self._training_history.log_run(record)
+            except Exception as e:
+                log.debug(f"Failed to log training history: {e}")
 
         self.state.phase = "done"
         if progress_fn:

@@ -16,6 +16,7 @@ Algorithm:
 Compatible with: SD 1.5, SDXL, Pony, Flux, SD3, Z-Image, PixArt, etc.
 """
 
+import json
 import logging
 import math
 import random
@@ -89,6 +90,63 @@ def assign_bucket(
     return best_bucket
 
 
+def _bucket_cache_path(cache_dir: Path) -> Path:
+    """Get the path for the pre-computed bucket assignments cache."""
+    return cache_dir / ".bucket_assignments.json"
+
+
+def _load_bucket_cache(
+    cache_dir: Path, image_paths: list[Path], buckets: list[tuple[int, int]]
+) -> Optional[list[tuple[int, int]]]:
+    """Load pre-computed bucket assignments if the dataset hasn't changed.
+
+    Returns None if the cache is stale or missing.
+    """
+    import json
+    cache_path = _bucket_cache_path(cache_dir)
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        # Validate cache freshness: same file count and bucket config
+        if (data.get("count") != len(image_paths)
+                or data.get("buckets") != [list(b) for b in buckets]):
+            return None
+        # Check directory mtime hasn't changed
+        dir_mtime = cache_dir.stat().st_mtime
+        if abs(dir_mtime - data.get("dir_mtime", 0)) > 1.0:
+            return None
+        assignments = [tuple(a) for a in data["assignments"]]
+        if len(assignments) == len(image_paths):
+            log.info(f"Loaded {len(assignments)} bucket assignments from cache")
+            return assignments
+    except (json.JSONDecodeError, KeyError, OSError, TypeError):
+        pass
+    return None
+
+
+def _save_bucket_cache(
+    cache_dir: Path,
+    image_paths: list[Path],
+    buckets: list[tuple[int, int]],
+    assignments: list[tuple[int, int]],
+):
+    """Save pre-computed bucket assignments to disk."""
+    import json
+    cache_path = _bucket_cache_path(cache_dir)
+    try:
+        dir_mtime = cache_dir.stat().st_mtime
+        data = {
+            "count": len(image_paths),
+            "buckets": [list(b) for b in buckets],
+            "dir_mtime": dir_mtime,
+            "assignments": [list(a) for a in assignments],
+        }
+        cache_path.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def assign_all_buckets(
     image_paths: list[Path],
     buckets: list[tuple[int, int]],
@@ -97,6 +155,7 @@ def assign_all_buckets(
     """Assign each image to a bucket based on its native dimensions.
 
     Speed optimizations:
+    - Pre-computed bucket assignment cache (skip entirely on repeat runs)
     - Parallel image header reading with ThreadPool (avoids PIL overhead)
     - Struct-based JPEG/PNG header parsing (10x faster per image)
     - NumPy vectorized bucket matching (O(N) broadcast, no Python loop)
@@ -108,11 +167,21 @@ def assign_all_buckets(
         ImageSizeCache,
     )
 
+    if not image_paths:
+        return []
+
     if progress_fn:
         progress_fn(0, len(image_paths))
 
+    # Try to load pre-computed bucket assignments
+    cache_dir = image_paths[0].parent
+    cached_assignments = _load_bucket_cache(cache_dir, image_paths, buckets)
+    if cached_assignments is not None:
+        if progress_fn:
+            progress_fn(len(image_paths), len(image_paths))
+        return cached_assignments
+
     # Try to use persistent size cache
-    cache_dir = image_paths[0].parent if image_paths else Path(".")
     size_cache = ImageSizeCache(cache_dir / ".image_sizes.json")
     size_cache.load()
 
@@ -153,6 +222,9 @@ def assign_all_buckets(
         size_cache.save()
     except OSError:
         pass
+
+    # Save bucket assignments cache for next run
+    _save_bucket_cache(cache_dir, image_paths, buckets, assignments)
 
     if progress_fn:
         progress_fn(len(image_paths), len(image_paths))
