@@ -26,9 +26,16 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             disagreement_damp=config.marmotte_disagreement_damp,
             error_feedback_alpha=config.marmotte_error_feedback_alpha,
             grad_rms_beta=config.marmotte_grad_rms_beta,
+            error_rank=config.marmotte_error_rank,
+            warmup_steps=config.marmotte_warmup_steps,
         )
         ratio = opt.memory_usage_ratio()
-        log.info(f"Marmotte optimizer: {ratio:.1%} memory vs Adam ({1/max(ratio, 0.001):.0f}x savings)")
+        log.info(
+            f"Marmotte v2 optimizer: {ratio:.1%} memory vs Adam "
+            f"({1/max(ratio, 0.001):.0f}x savings), "
+            f"rank-{config.marmotte_error_rank} error feedback, "
+            f"{config.marmotte_warmup_steps}-step warmup"
+        )
         return opt
     elif config.optimizer == "Adafactor":
         from transformers import Adafactor

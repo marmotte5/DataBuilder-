@@ -74,7 +74,7 @@ NETWORK_TYPES = {
 
 # Supported optimizers
 OPTIMIZERS = {
-    "Marmotte":           "Marmotte — Ultra-low memory, 1-bit momentum (~25-50x less than Adam)",
+    "Marmotte":           "Marmotte v2 — Ultra-low memory, per-channel adaptive (~10-20x less than Adam)",
     "Adafactor":          "Adafactor — Low memory, good generalist",
     "Prodigy":            "Prodigy — Automatic adaptive LR",
     "AdamW":              "AdamW — Standard, performant",
