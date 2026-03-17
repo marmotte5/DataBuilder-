@@ -124,10 +124,12 @@ class CurriculumSampler:
         # Enforce minimum weight to prevent starvation
         weights = np.maximum(weights, self.min_weight)
 
-        # Cap weight ratio to prevent extreme imbalance
-        w_min = weights[weights > 0].min() if (weights > 0).any() else self.min_weight
-        max_allowed = w_min * self.max_weight_ratio
-        weights = np.minimum(weights, max_allowed)
+        # Cap weight ratio to prevent extreme imbalance (log-compress to
+        # reduce the ratio while preserving strict ordering and temperature effect)
+        w_min = weights.min()
+        w_max = weights.max()
+        if w_min > 0 and w_max / w_min > self.max_weight_ratio:
+            weights = np.log1p(weights / w_min)
 
         # Starvation prevention: boost images not seen for 3+ epochs
         stale_mask = self._epochs_since_seen >= 3

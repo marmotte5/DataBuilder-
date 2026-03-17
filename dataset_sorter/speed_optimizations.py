@@ -670,43 +670,51 @@ class FusedBackwardPass:
             group_idx = self._param_to_group[p]
             group = self.optimizer.param_groups[group_idx]
             lr = group["lr"]
-
-            # Apply a simple SGD-like update scaled by the group LR.
-            # This avoids calling optimizer.step() which would corrupt
-            # the step counter for Adam-family optimizers.
-            # For Adam/AdamW, we maintain per-parameter EMA manually.
-            state = self.optimizer.state.get(p, {})
-
-            if not state:
-                # First time: initialize state for this parameter
-                state["step"] = 0
-                state["exp_avg"] = torch.zeros_like(p)
-                state["exp_avg_sq"] = torch.zeros_like(p)
-                self.optimizer.state[p] = state
-
-            state["step"] += 1
-            step = state["step"]
             grad = p.grad
-
-            # AdamW-style update (works for most optimizer types)
-            beta1, beta2 = group.get("betas", (0.9, 0.999))
-            eps = group.get("eps", 1e-8)
             wd = group.get("weight_decay", 0.0)
 
-            # Decoupled weight decay
-            if wd > 0:
-                p.data.mul_(1 - lr * wd)
+            if "betas" in group:
+                # Adam/AdamW-style update with per-parameter EMA
+                state = self.optimizer.state.get(p, {})
+                if not state:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                    self.optimizer.state[p] = state
 
-            # EMA updates
-            state["exp_avg"].lerp_(grad, 1 - beta1)
-            state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                state["step"] += 1
+                step = state["step"]
+                beta1, beta2 = group["betas"]
+                eps = group.get("eps", 1e-8)
 
-            # Bias correction
-            bc1 = 1 - beta1 ** step
-            bc2 = 1 - beta2 ** step
-            step_size = lr / bc1
-            denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
-            p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
+                # Decoupled weight decay
+                if wd > 0:
+                    p.data.mul_(1 - lr * wd)
+
+                # EMA updates
+                state["exp_avg"].lerp_(grad, 1 - beta1)
+                state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                # Bias correction
+                bc1 = 1 - beta1 ** step
+                bc2 = 1 - beta2 ** step
+                step_size = lr / bc1
+                denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
+                p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
+            else:
+                # SGD-style update
+                if wd > 0:
+                    grad = grad.add(p.data, alpha=wd)
+                momentum = group.get("momentum", 0)
+                if momentum > 0:
+                    state = self.optimizer.state.get(p, {})
+                    if "momentum_buffer" not in state:
+                        state["momentum_buffer"] = grad.clone()
+                        self.optimizer.state[p] = state
+                    else:
+                        state["momentum_buffer"].mul_(momentum).add_(grad)
+                    grad = state["momentum_buffer"]
+                p.data.add_(grad, alpha=-lr)
 
             p.grad = None  # Free gradient memory immediately
             self._stepped = True
@@ -807,9 +815,9 @@ class StochasticRoundingHook:
                 # Apply stochastic rounding from fp32 master → bf16 param
                 fp32_val = master_weights[p]
                 p.data.copy_(stochastic_round_to_bf16(fp32_val))
-            elif p.dtype != torch.bfloat16:
-                # fp32 param being stored as bf16: apply rounding
-                p.data.copy_(stochastic_round_to_bf16(p.data))
+            elif p.dtype == torch.bfloat16:
+                # Pure bf16 param without master weights: round in place
+                p.data.copy_(stochastic_round_to_bf16(p.data.float()))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
