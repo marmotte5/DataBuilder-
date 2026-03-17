@@ -69,6 +69,7 @@ class TrainBackendBase(ABC):
         self._speed_sampler = None   # SpeeD timestep sampler (lazy init)
         self._token_weight_mask: Optional[torch.Tensor] = None  # Per-step token weights
         self._timestep_ema_sampler = None  # Per-timestep EMA sampler (set by trainer)
+        self._training_mask: Optional[torch.Tensor] = None  # Spatial mask [B,1,H,W] for masked training
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -120,6 +121,27 @@ class TrainBackendBase(ABC):
 
     # ── Shared loss functions ──────────────────────────────────────────
 
+    def _apply_spatial_mask(self, loss: torch.Tensor) -> torch.Tensor:
+        """Apply spatial training mask before per-sample reduction.
+
+        If _training_mask is set (by trainer for masked training), multiply
+        element-wise and normalize by mask area instead of simple mean.
+        """
+        mask = self._training_mask
+        if mask is None:
+            return loss.mean(dim=list(range(1, len(loss.shape))))
+
+        # Resize mask to match loss spatial dims [B, 1, H, W] -> [B, C, H, W]
+        if mask.shape[-2:] != loss.shape[-2:]:
+            mask = F.interpolate(mask.float(), size=loss.shape[-2:], mode="nearest")
+        if mask.shape[1] == 1 and loss.shape[1] > 1:
+            mask = mask.expand_as(loss)
+
+        # Weighted mean: sum(loss * mask) / sum(mask) per sample
+        masked = loss * mask
+        mask_area = mask.sum(dim=list(range(1, len(mask.shape)))).clamp(min=1.0)
+        return masked.sum(dim=list(range(1, len(masked.shape)))) / mask_area
+
     def _compute_epsilon_loss(
         self, noise_pred: torch.Tensor, noise: torch.Tensor,
         latents: torch.Tensor, timesteps: torch.Tensor,
@@ -134,7 +156,7 @@ class TrainBackendBase(ABC):
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
+        return self._apply_spatial_mask(loss)
 
     def _compute_vpred_loss(
         self, noise_pred: torch.Tensor, noise: torch.Tensor,
@@ -155,7 +177,7 @@ class TrainBackendBase(ABC):
         # Compute target in fp32 to preserve precision in alpha*noise - sigma*latents
         target = alpha_t * noise.float() - sigma_t * latents.float()
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
+        return self._apply_spatial_mask(loss)
 
     def _compute_flow_loss(
         self, noise_pred: torch.Tensor, noise: torch.Tensor,
@@ -167,7 +189,7 @@ class TrainBackendBase(ABC):
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
-        return loss.mean(dim=list(range(1, len(loss.shape))))
+        return self._apply_spatial_mask(loss)
 
     # ── Shared flow matching helpers ───────────────────────────────────
 

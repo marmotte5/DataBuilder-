@@ -42,6 +42,7 @@ from dataset_sorter.utils import get_device, empty_cache, autocast_device_type
 from dataset_sorter.pipeline_integrator import (
     run_pre_training_pipeline, LiveTrainingMonitor, IntegrationReport,
 )
+from dataset_sorter.dpo_trainer import dpo_training_step, PreferenceStore
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +167,12 @@ class Trainer:
         self.scheduler = None
         self.ema_model: Optional[EMAModel] = None
         self.grad_scaler = None
+
+        # TensorBoard logger
+        self._tb_logger = None
+
+        # Mask data (for masked training)
+        self._mask_map: dict[int, Path] = {}
 
         # Loss history for Smart Resume (capped to prevent unbounded growth)
         self._loss_history: list[tuple[int, float]] = []
@@ -630,6 +637,43 @@ class Trainer:
         except Exception as e:
             log.debug(f"Training history unavailable: {e}")
 
+        # ── 21. TensorBoard logging ──
+        if config.tensorboard_logging:
+            from dataset_sorter.tensorboard_logger import TensorBoardLogger
+            self._tb_logger = TensorBoardLogger(
+                output_dir / "logs" / "tensorboard", enabled=True,
+            )
+            if self._tb_logger.available:
+                self._tb_logger.log_hyperparams({
+                    "model_type": config.model_type,
+                    "optimizer": config.optimizer,
+                    "learning_rate": config.learning_rate,
+                    "batch_size": config.batch_size,
+                    "resolution": config.resolution,
+                    "lora_rank": config.lora_rank,
+                    "epochs": config.epochs,
+                    "network_type": config.network_type,
+                })
+
+        # ── 22. Noise schedule rescaling (zero terminal SNR) ──
+        if config.zero_terminal_snr and self.backend.noise_scheduler is not None:
+            from dataset_sorter.noise_rescale import apply_noise_rescaling
+            applied = apply_noise_rescaling(
+                self.backend.noise_scheduler,
+                zero_terminal_snr=True,
+            )
+            if applied:
+                log.info("Zero terminal SNR applied to noise schedule")
+
+        # ── 23. Masked training setup ──
+        if config.masked_training:
+            from dataset_sorter.masked_loss import find_images_with_masks
+            self._mask_map = find_images_with_masks(image_paths)
+            if self._mask_map:
+                log.info(f"Masked training: {len(self._mask_map)} images have masks")
+            else:
+                log.warning("Masked training enabled but no mask files found")
+
         if progress_fn:
             progress_fn(8, 8, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
@@ -959,6 +1003,24 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
 
+                    # ── TensorBoard logging ──
+                    if self._tb_logger is not None and self._tb_logger.available:
+                        self._tb_logger.log_scalar(
+                            "train/loss", self.state.loss, self.state.global_step,
+                        )
+                        self._tb_logger.log_scalar(
+                            "train/lr", self.state.lr, self.state.global_step,
+                        )
+                        if (self.device.type == "cuda" and
+                                self.state.global_step % 50 == 0):
+                            vram_gb = torch.cuda.memory_allocated() / 1024**3
+                            self._tb_logger.log_scalar(
+                                "system/vram_gb", vram_gb, self.state.global_step,
+                            )
+                        # Flush periodically to avoid data loss
+                        if self.state.global_step % 100 == 0:
+                            self._tb_logger.flush()
+
                     # Sample VRAM usage periodically for adaptive monitoring
                     if (self._vram_monitor is not None and
                             self.state.global_step % 50 == 0):
@@ -1045,6 +1107,12 @@ class Trainer:
                             self.state.global_step % config.rlhf_collect_every_n_steps == 0 and
                             self.state.global_step > 0):
                         self._rlhf_collect.set()
+
+                    # ── DPO fine-tuning step using collected preferences ──
+                    if (config.rlhf_enabled and
+                            config.rlhf_dpo_rounds > 0 and
+                            self.state.global_step % config.rlhf_collect_every_n_steps == 0):
+                        self._apply_dpo_from_preferences()
 
                     # Max steps check
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
@@ -1138,6 +1206,11 @@ class Trainer:
                 self._training_history.log_run(record)
             except Exception as e:
                 log.debug(f"Failed to log training history: {e}")
+
+        # Close TensorBoard logger
+        if self._tb_logger is not None:
+            self._tb_logger.close()
+            self._tb_logger = None
 
         self.state.phase = "done"
         if progress_fn:
@@ -1261,6 +1334,40 @@ class Trainer:
                 for cap in captions_for_attn:
                     self._attention_rebalancer.update_from_attention_maps(attn_maps, cap)
 
+        # ── Masked training: pass spatial mask to backend ──
+        if self._mask_map and "index" in batch:
+            indices = batch["index"]
+            if isinstance(indices, torch.Tensor):
+                indices = indices.tolist()
+            elif isinstance(indices, (int, float)):
+                indices = [int(indices)]
+            # Load and stack masks for this batch
+            from dataset_sorter.masked_loss import load_mask_for_image
+            masks = []
+            has_any = False
+            for idx in indices:
+                idx = int(idx)
+                if idx in self._mask_map:
+                    mask = load_mask_for_image(
+                        self._mask_map[idx],
+                        self.config.resolution,
+                        self.device,
+                        torch.float32,
+                    )
+                    if mask is not None:
+                        masks.append(mask.squeeze(0))  # [1, H, W]
+                        has_any = True
+                        continue
+                # No mask for this sample — use all-ones (train everywhere)
+                masks.append(torch.ones(1, self.config.resolution, self.config.resolution,
+                                        device=self.device, dtype=torch.float32))
+            if has_any:
+                self.backend._training_mask = torch.stack(masks, dim=0)  # [B, 1, H, W]
+            else:
+                self.backend._training_mask = None
+        else:
+            self.backend._training_mask = None
+
         # ── Delegate to backend training step (handles model-specific logic) ──
         # Note: autocast is applied inside each backend's training_step/flow_training_step.
         # Removed redundant outer autocast that caused double nesting and confused
@@ -1303,6 +1410,74 @@ class Trainer:
             self._adaptive_tag_weighter.update(per_tag)
 
         return loss
+
+    def _apply_dpo_from_preferences(self):
+        """Apply DPO fine-tuning using collected RLHF preferences."""
+        if not hasattr(self, 'output_dir') or self.output_dir is None:
+            return
+        try:
+            store = PreferenceStore(self.output_dir)
+            if len(store) == 0:
+                return
+
+            from PIL import Image
+            config = self.config
+            pairs = store.pairs
+
+            # Process up to 4 pairs per DPO step to limit compute
+            recent_pairs = pairs[-4:]
+            dpo_losses = []
+
+            for pair in recent_pairs:
+                try:
+                    chosen_img = Image.open(pair.chosen_path).convert("RGB")
+                    rejected_img = Image.open(pair.rejected_path).convert("RGB")
+                except (OSError, FileNotFoundError):
+                    continue
+
+                # Encode images to latents
+                from torchvision import transforms
+                transform = transforms.Compose([
+                    transforms.Resize((config.resolution, config.resolution)),
+                    transforms.ToTensor(),
+                    transforms.Normalize([0.5], [0.5]),
+                ])
+                chosen_tensor = transform(chosen_img).unsqueeze(0).to(
+                    self.device, dtype=self.dtype
+                )
+                rejected_tensor = transform(rejected_img).unsqueeze(0).to(
+                    self.device, dtype=self.dtype
+                )
+
+                chosen_latents = self.backend.prepare_latents(chosen_tensor)
+                rejected_latents = self.backend.prepare_latents(rejected_tensor)
+
+                # Encode prompt
+                te_out = self.backend.encode_text_batch([pair.prompt])
+
+                # Compute DPO loss (use current model as both policy and reference
+                # since we don't maintain a separate reference copy)
+                loss = dpo_training_step(
+                    self.backend, chosen_latents, rejected_latents, te_out,
+                    ref_backend=self.backend,
+                    beta=config.dpo_beta,
+                    loss_type=config.dpo_loss_type,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                dpo_losses.append(loss)
+
+            if dpo_losses:
+                total_dpo_loss = sum(dpo_losses) / len(dpo_losses)
+                total_dpo_loss.backward()
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                log.info(
+                    f"DPO step applied: {len(dpo_losses)} pairs, "
+                    f"loss={total_dpo_loss.item():.4f}"
+                )
+        except Exception as e:
+            log.warning(f"DPO preference step failed: {e}")
 
     def _save_checkpoint(self, name: str):
         """Save checkpoint to the checkpoints subfolder."""

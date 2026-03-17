@@ -92,7 +92,7 @@ def validate_and_fix_config(config, report: IntegrationReport) -> bool:
 
     Returns True if config is valid (possibly after fixes), False if fatal errors remain.
     """
-    from dataset_sorter.config_validator import validate_config
+    from dataset_sorter.config_validator import validate_config, format_validation_errors
 
     errors = validate_config(config)
 
@@ -115,7 +115,7 @@ def validate_and_fix_config(config, report: IntegrationReport) -> bool:
     if not has_fatal:
         log.info("Config validation passed (auto-fixed %d issues)", len(report.config_auto_fixes))
     else:
-        log.warning("Config validation found %d fatal error(s)", len(report.config_errors))
+        log.warning("Config validation failed:\n%s", format_validation_errors(errors))
 
     return not has_fatal
 

@@ -43,6 +43,10 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 - **Z-Image inventions** — L2-pinned attention, speculative gradient, stream-bending bias, timestep bandit
 - **Pipeline integration** — Pre-training validation, auto-config, live loss monitoring with auto-adjustment
 - **Marmotte optimizer** — Ultra-low memory per-channel adaptive optimizer (~10-20x less memory than Adam)
+- **Masked training** — Region-specific loss computation using binary masks for inpainting/subject-focused training
+- **TensorBoard logging** — Real-time loss, LR, and VRAM monitoring with graceful fallback when not installed
+- **Noise schedule rescaling** — Zero terminal SNR fix (Lin et al. 2024) for improved dark/light image quality
+- **Textual inversion** — Embedding training support with configurable token count and initialization
 
 ### Dataset Management
 - **Caption preview** — Tag shuffle/dropout simulation with configurable variants
@@ -185,7 +189,7 @@ my_project/                        # Your output folder
 │   ├── epoch_0001/
 │   └── final/
 ├── backups/                       # Full timestamped project backups
-├── logs/                          # Training logs and export error logs
+├── logs/                          # Training logs, TensorBoard events, and export error logs
 └── .cache/                        # Latent / text encoder caches
 ```
 
@@ -255,6 +259,9 @@ dataset_sorter/
 ├── attention_map_debugger.py    # Attention visualization during training
 ├── curriculum_learning.py       # Loss-based adaptive image sampling
 ├── dpo_trainer.py               # DPO preference fine-tuning
+├── masked_loss.py               # Masked training loss (region-specific)
+├── noise_rescale.py             # Noise schedule rescaling (zero terminal SNR)
+├── tensorboard_logger.py        # TensorBoard logging with graceful fallback
 ├── duplicate_detector.py        # Duplicate/near-duplicate image detection
 ├── disk_space.py                # Disk space validation
 ├── auto_pipeline.py             # One-click clean + train pipeline

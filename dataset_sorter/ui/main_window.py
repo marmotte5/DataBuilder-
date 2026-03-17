@@ -532,6 +532,13 @@ class MainWindow(QMainWindow):
                 gt._worker.quit()
                 gt._worker.wait(3000)
 
+        # Shutdown shared async I/O executor
+        try:
+            from dataset_sorter.async_io import shutdown_executor
+            shutdown_executor()
+        except ImportError:
+            pass
+
         super().closeEvent(event)
 
     # -- Drag and drop on main window --

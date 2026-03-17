@@ -238,6 +238,25 @@ class ScanWorker(QThread):
             log.warning(f"Scan completed with {len(error_log)} error(s)")
             self.scan_errors.emit(len(error_log))
 
+        # Populate metadata cache for fast subsequent queries
+        try:
+            from dataset_sorter.metadata_cache import MetadataCache
+            cache = MetadataCache(self.source_dir / ".metadata.db")
+            batch = []
+            for entry in entries:
+                if entry is not None and entry.image_path is not None:
+                    batch.append({
+                        "path": str(entry.image_path),
+                        "filename": entry.image_path.name,
+                        "tags": ", ".join(entry.tags) if entry.tags else "",
+                        "bucket": entry.assigned_bucket,
+                    })
+            if batch:
+                cache.put_batch(batch)
+                log.debug(f"Metadata cache: {len(batch)} entries written")
+        except Exception as e:
+            log.debug(f"Metadata cache update skipped: {e}")
+
         self.finished_scan.emit(entries)
 
 

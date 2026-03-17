@@ -279,6 +279,24 @@ class TrainingConfig:
     live_monitor_interval: int = 200        # Steps between live loss curve checks
     live_monitor_auto_adjust: bool = True   # Auto-reduce LR on divergence/plateau
 
+    # ── Masked Training ──────────────────────────────────────────────────
+    masked_training: bool = False       # Enable masked loss (only train on masked regions)
+    mask_weight: float = 1.0           # Relative weight for masked vs unmasked regions
+
+    # ── TensorBoard Logging ──────────────────────────────────────────────
+    tensorboard_logging: bool = False   # Enable TensorBoard logging
+
+    # ── Noise Schedule Rescaling ─────────────────────────────────────────
+    zero_terminal_snr: bool = False     # Enforce zero terminal SNR (Lin et al. 2024)
+    rescale_noise_schedule: bool = False  # Apply noise schedule rescaling
+
+    # ── Textual Inversion (Embedding Training) ────────────────────────────
+    embedding_training: bool = False    # Train text embeddings instead of model
+    embedding_token: str = ""           # Placeholder token (e.g. "<my-subject>")
+    embedding_num_vectors: int = 4      # Number of embedding vectors per token
+    embedding_init_text: str = ""       # Initialization text (e.g. "a photo of a dog")
+    embedding_lr: float = 5e-4         # Learning rate for embedding training
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 
