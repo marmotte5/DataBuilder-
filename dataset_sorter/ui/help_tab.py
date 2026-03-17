@@ -206,8 +206,36 @@ class HelpTab(QWidget):
         layout.addWidget(_body(
             "Buckets are numbered folders (1-80) that group images by tag rarity. "
             "Rare tags get higher bucket numbers, common tags get lower ones. "
-            "This helps the AI model learn rare concepts more effectively by giving "
-            "them more training weight."
+            "Each image is assigned to a single bucket based on its rarest tag."
+        ))
+
+        layout.addWidget(_subheading("What are Repeats?"))
+        layout.addWidget(_body(
+            "Repeats control how many times the model sees each image per training epoch. "
+            "Rare images (high bucket number) automatically get more repeats so the model "
+            "learns them as well as common ones.\n\n"
+            "The repeat count scales linearly from 1x (most common bucket) to 20x "
+            "(rarest bucket). Folder names follow the Kohya format: {repeats}_{bucket}_{name}\n\n"
+            "Example:\n"
+            "  1_1_bucket/    — common images, 1x repeat\n"
+            "  10_40_bucket/  — medium rarity, 10x repeats\n"
+            "  20_80_bucket/  — very rare, 20x repeats"
+        ))
+
+        layout.addWidget(_subheading("What is the Project Folder?"))
+        layout.addWidget(_body(
+            "When you export, the output directory becomes a full project folder "
+            "that organizes everything for training in one place:\n\n"
+            "  dataset/      — Your images in bucket folders with repeat prefixes\n"
+            "  models/       — Trained model outputs (final weights go here)\n"
+            "  samples/      — Sample images generated during training\n"
+            "  checkpoints/  — Step and epoch checkpoint saves\n"
+            "  backups/      — Full project backups (timestamped)\n"
+            "  logs/         — Training and export logs\n"
+            "  .cache/       — Latent and text encoder caches\n"
+            "  project.json  — Project metadata\n\n"
+            "Both export and training use the same folder structure, so you can "
+            "export first, then train, and everything stays organized."
         ))
 
         layout.addWidget(_subheading("What is a LoRA?"))
@@ -232,7 +260,7 @@ class HelpTab(QWidget):
             "Ctrl+R  —  Scan the source folder\n"
             "Ctrl+S  —  Save your configuration\n"
             "Ctrl+O  —  Load a saved configuration\n"
-            "Ctrl+E  —  Export the dataset\n"
+            "Ctrl+E  —  Export the project\n"
             "Ctrl+D  —  Dry run (preview before exporting)\n"
             "Ctrl+T  —  Toggle dark/light theme\n"
             "Ctrl+Z  —  Undo last change\n"
