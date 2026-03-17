@@ -749,14 +749,9 @@ class GenerateWorker(QThread):
                 kwargs["height"] = height
 
             # Negative prompt and CFG
-            if model_type in CFG_MODELS:
-                kwargs["guidance_scale"] = cfg_scale
-                if negative_prompt:
-                    kwargs["negative_prompt"] = negative_prompt
-            elif model_type in FLOW_GUIDANCE_MODELS:
-                kwargs["guidance_scale"] = cfg_scale
-            else:
-                kwargs["guidance_scale"] = cfg_scale
+            kwargs["guidance_scale"] = cfg_scale
+            if model_type in CFG_MODELS and negative_prompt:
+                kwargs["negative_prompt"] = negative_prompt
 
             # Clip skip (for SD 1.5 / SDXL)
             if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):

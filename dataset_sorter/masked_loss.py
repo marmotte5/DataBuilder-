@@ -112,7 +112,8 @@ def load_mask_for_image(
 
     try:
         from PIL import Image
-        mask_img = Image.open(mask_path).convert("L")
+        with Image.open(mask_path) as _raw:
+            mask_img = _raw.convert("L")
         mask_img = mask_img.resize((resolution, resolution), Image.NEAREST)
 
         import numpy as np

@@ -1451,8 +1451,10 @@ class Trainer:
 
             for pair in recent_pairs:
                 try:
-                    chosen_img = Image.open(pair.chosen_path).convert("RGB")
-                    rejected_img = Image.open(pair.rejected_path).convert("RGB")
+                    with Image.open(pair.chosen_path) as _ci:
+                        chosen_img = _ci.convert("RGB")
+                    with Image.open(pair.rejected_path) as _ri:
+                        rejected_img = _ri.convert("RGB")
                 except (OSError, FileNotFoundError):
                     continue
 
