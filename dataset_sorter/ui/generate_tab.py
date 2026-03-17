@@ -20,15 +20,14 @@ from PyQt6.QtGui import QFont, QPixmap, QImage
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QCheckBox, QTextEdit, QFileDialog, QGroupBox, QTabWidget,
-    QScrollArea, QFrame, QProgressBar, QSplitter, QSizePolicy,
-    QSlider, QToolButton,
+    QTextEdit, QFileDialog, QGroupBox,
+    QScrollArea, QFrame, QProgressBar, QSplitter,
+    QToolButton,
 )
 
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE, CARD_STYLE,
-    SECTION_SUBHEADER_STYLE,
+    DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
 from dataset_sorter.ui.toast import show_toast
 

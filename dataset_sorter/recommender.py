@@ -13,7 +13,7 @@ import json
 import math
 
 from dataset_sorter.constants import (
-    MAX_BUCKETS, MODEL_RESOLUTIONS, MODEL_CLIP_SKIP,
+    MODEL_RESOLUTIONS, MODEL_CLIP_SKIP,
     MODEL_PREDICTION_TYPE, MODEL_TIMESTEP_SAMPLING,
 )
 from dataset_sorter.models import TrainingConfig

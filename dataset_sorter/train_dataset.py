@@ -195,7 +195,7 @@ class CachedTrainDataset(Dataset):
         - Parallel disk cache writes
         """
         from dataset_sorter.io_speed import (
-            fast_decode_image, save_tensor_fast, load_tensor_fast,
+            fast_decode_image, load_tensor_fast,
             compress_latent_fp16, decompress_latent_fp16,
             compute_file_hashes, save_tensors_parallel,
         )

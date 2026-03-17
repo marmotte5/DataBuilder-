@@ -17,7 +17,7 @@ from dataset_sorter.constants import (
     ATTENTION_MODES,
 )
 from dataset_sorter.ui.theme import (
-    COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE, MUTED_LABEL_STYLE,
+    COLORS, ACCENT_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
 from dataset_sorter.ui.toast import show_toast
 

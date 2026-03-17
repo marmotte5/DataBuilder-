@@ -11,7 +11,6 @@ Backend modules must:
 
 import importlib
 import logging
-import pkgutil
 from pathlib import Path
 from typing import Optional
 

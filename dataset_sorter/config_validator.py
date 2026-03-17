@@ -8,13 +8,11 @@ to keep the dependency footprint minimal while providing similar guarantees.
 """
 
 import logging
-from dataclasses import fields
-from typing import Optional
 
 from dataset_sorter.constants import (
     OPTIMIZERS, NETWORK_TYPES, LR_SCHEDULERS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES, SAMPLE_SAMPLERS,
-    SAVE_PRECISIONS, ATTENTION_MODES, LORA_INIT_METHODS,
+    SAVE_PRECISIONS, LORA_INIT_METHODS,
 )
 from dataset_sorter.models import TrainingConfig
 

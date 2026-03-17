@@ -7,7 +7,6 @@ and rich queries like "show all images with >77 tokens" instantly.
 Replaces per-file JSON sidecars with a single DB per dataset.
 """
 
-import hashlib
 import logging
 import os
 import sqlite3

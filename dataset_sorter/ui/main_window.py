@@ -5,7 +5,6 @@ Supports drag-and-drop, keyboard shortcuts, dark/light theme toggle,
 and progress persistence across restarts.
 """
 
-import copy
 import json
 import logging
 import sys
@@ -34,8 +33,7 @@ from dataset_sorter import recommender
 
 from dataset_sorter.ui.theme import (
     get_stylesheet, COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, DANGER_BUTTON_STYLE,
-    NAV_BUTTON_STYLE, toggle_theme, get_current_theme,
+    DANGER_BUTTON_STYLE, toggle_theme, get_current_theme,
 )
 from dataset_sorter.ui.tag_panel import TagPanel
 from dataset_sorter.ui.override_panel import OverridePanel

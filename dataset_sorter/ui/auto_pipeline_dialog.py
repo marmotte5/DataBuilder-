@@ -10,24 +10,24 @@ Step 2: Review & Launch — See analysis, approve cleaning, start training
 from collections import Counter
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QGroupBox, QTextEdit, QProgressBar,
-    QCheckBox, QLineEdit, QFileDialog, QStackedWidget,
-    QWidget, QMessageBox, QFrame,
+    QCheckBox, QLineEdit, QFileDialog,
+    QMessageBox, QFrame,
 )
 
 from dataset_sorter.constants import (
     MODEL_TYPE_KEYS, MODEL_TYPE_LABELS, VRAM_TIERS,
-    NETWORK_TYPES, OPTIMIZERS,
+    OPTIMIZERS,
 )
 from dataset_sorter.models import ImageEntry, TrainingConfig
 from dataset_sorter.auto_pipeline import AutoPipeline, PipelineAnalysis
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
+    MUTED_LABEL_STYLE,
 )
 
 

@@ -25,14 +25,10 @@ Performance:
 
 import logging
 import mmap
-import os
-import struct
 import threading
-from collections import deque
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch
 
 log = logging.getLogger(__name__)

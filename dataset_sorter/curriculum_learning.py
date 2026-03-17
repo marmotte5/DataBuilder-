@@ -12,7 +12,6 @@ Two complementary strategies:
 """
 
 import logging
-import math
 from typing import Optional
 
 import torch

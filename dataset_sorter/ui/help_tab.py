@@ -4,7 +4,6 @@ Provides a full walkthrough of the app's workflow, explains every concept
 in simple terms, and gives tips for common tasks.
 """
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QLabel, QFrame,
 )

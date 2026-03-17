@@ -21,7 +21,6 @@ Post-training:
 """
 
 import logging
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Callable
@@ -218,7 +217,7 @@ def analyze_tags_for_training(
     Returns dict of tag → importance weight (0.0 to 1.0).
     """
     from dataset_sorter.tag_importance import (
-        compute_tag_importance, classify_all_tags, TagType, TAG_TYPE_IMPORTANCE,
+        compute_tag_importance, classify_all_tags, TagType,
     )
 
     # Build tag counts from captions

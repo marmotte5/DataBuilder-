@@ -6,19 +6,17 @@ for subsequent DPO fine-tuning.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QWidget, QFrame, QProgressBar, QGroupBox,
+    QScrollArea, QWidget, QFrame,
 )
 
 from dataset_sorter.ui.theme import (
-    COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
-    DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
+    COLORS, SUCCESS_BUTTON_STYLE,
 )
 
 log = logging.getLogger(__name__)

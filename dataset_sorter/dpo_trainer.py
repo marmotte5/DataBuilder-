@@ -16,7 +16,6 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn.functional as F

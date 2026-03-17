@@ -9,7 +9,7 @@ import logging
 import os
 import sqlite3
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 

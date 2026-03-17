@@ -23,10 +23,8 @@ This provides:
 
 import logging
 import mmap
-import os
 import struct
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -283,8 +281,7 @@ class SafetensorsMMapDataset(Dataset):
 
         Returns dict with 'latents', 'te_out', 'caption' keys.
         """
-        import random
-
+        
         result = {}
 
         # Try mmap path first

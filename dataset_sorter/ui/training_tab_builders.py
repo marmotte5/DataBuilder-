@@ -8,7 +8,7 @@ These are used as a mixin so the main TrainingTab class stays small.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QCheckBox, QTextEdit, QGroupBox, QScrollArea, QFrame,
+    QCheckBox, QTextEdit, QScrollArea, QFrame,
 )
 
 from dataset_sorter.constants import (

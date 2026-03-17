@@ -23,7 +23,6 @@ import random
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
 
 log = logging.getLogger(__name__)
 

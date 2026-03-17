@@ -5,7 +5,6 @@ LRU pixmap cache avoids redundant disk reads when navigating.
 """
 
 from collections import OrderedDict
-from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap

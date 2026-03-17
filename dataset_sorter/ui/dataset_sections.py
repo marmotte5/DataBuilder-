@@ -18,8 +18,6 @@ from PyQt6.QtWidgets import (
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.dataset_management import (
     preview_caption_augmentation,
-    estimate_token_count,
-    get_token_limit,
     compute_caption_token_stats,
     compute_tag_frequency_histogram,
     spell_check_tags,

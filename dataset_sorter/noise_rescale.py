@@ -20,8 +20,6 @@ linear interpolation instead of variance-preserving schedules.
 """
 
 import logging
-import math
-from typing import Optional
 
 import torch
 

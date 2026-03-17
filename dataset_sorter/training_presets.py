@@ -9,7 +9,6 @@ Provides:
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional
 
 from dataset_sorter.models import TrainingConfig
 

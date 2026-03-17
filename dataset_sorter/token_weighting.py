@@ -29,7 +29,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import numpy as np
 import torch
 
 log = logging.getLogger(__name__)

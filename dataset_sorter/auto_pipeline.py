@@ -15,7 +15,6 @@ Usage:
 """
 
 import logging
-import math
 import re
 from collections import Counter
 from difflib import SequenceMatcher

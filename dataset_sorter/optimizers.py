@@ -18,7 +18,7 @@ arXiv 2502.16982
 
 import logging
 import math
-from typing import Iterable, Optional
+from typing import Iterable
 
 import torch
 from torch.optim import Optimizer
