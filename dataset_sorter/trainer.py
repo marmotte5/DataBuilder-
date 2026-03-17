@@ -181,6 +181,9 @@ class Trainer:
         self._resume_event = threading.Event()   # set = resume requested
         self._resume_event.set()                 # start unpaused
 
+        # Last training batch caption (used as sample prompt)
+        self._last_batch_caption: Optional[str] = None
+
         # Token weighting
         self._token_weighter = None
         # Attention map debugger
@@ -712,6 +715,14 @@ class Trainer:
                 if self._async_optimizer is not None:
                     self._async_optimizer.sync()
 
+                # ── Track last caption for sample generation ──
+                if "caption" in batch:
+                    cap = batch["caption"]
+                    if isinstance(cap, (list, tuple)):
+                        self._last_batch_caption = cap[-1]
+                    elif isinstance(cap, str):
+                        self._last_batch_caption = cap
+
                 # ── Forward + loss ──
                 loss = self._training_step(batch)
                 loss = loss / grad_accum_steps
@@ -1174,7 +1185,12 @@ class Trainer:
             self.backend.vae.to(self.device, dtype=self.dtype)
 
         try:
-            prompts = config.sample_prompts or ["a photo"]
+            # Use last training caption if available, fall back to config prompts
+            if self._last_batch_caption:
+                prompts = [self._last_batch_caption] + (config.sample_prompts or [])
+                log.info(f"Sample prompt from training data: {self._last_batch_caption[:120]}")
+            else:
+                prompts = config.sample_prompts or ["a photo"]
             images = []
             for prompt in prompts[:config.num_sample_images]:
                 img = self.backend.generate_sample(prompt, config.sample_seed)
