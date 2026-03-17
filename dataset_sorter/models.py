@@ -241,6 +241,10 @@ class TrainingConfig:
     dpo_beta: float = 0.1              # KL penalty coefficient for DPO
     dpo_loss_type: str = "sigmoid"     # sigmoid, hinge, ipo
     dpo_label_smoothing: float = 0.0   # Label smoothing for robust DPO
+    dpo_enabled: bool = False          # Enable standalone DPO training mode
+    dpo_chosen_dir: str = ""           # Directory with preferred images
+    dpo_rejected_dir: str = ""         # Directory with dispreferred images
+    dpo_reference_model: str = ""      # Path to frozen reference model (optional)
 
     # ── Token-Level Caption Weighting ─────────────────────────────────
     token_weighting_enabled: bool = False      # Enable per-token loss weighting

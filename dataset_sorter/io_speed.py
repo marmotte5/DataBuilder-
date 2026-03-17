@@ -685,7 +685,8 @@ class SharedMemoryLatentPool:
     def write(self, idx: int, tensor):
         """Write a latent tensor to shared memory."""
         offset = idx * self._item_bytes
-        data = tensor.to(dtype=__import__('torch').float32).contiguous().numpy().tobytes()
+        import torch as _torch
+        data = tensor.to(dtype=_torch.float32).contiguous().numpy().tobytes()
         self._shm.buf[offset:offset + self._item_bytes] = data
 
     def read(self, idx: int):

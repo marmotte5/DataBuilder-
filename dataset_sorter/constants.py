@@ -86,6 +86,8 @@ OPTIMIZERS = {
     "SGD":                "SGD — Simple, stable",
     "SOAP":               "SOAP — 2nd-order, 40% fewer iters (ICLR 2025)",
     "Muon":               "Muon — Orthogonal updates, 2x efficiency",
+    "GaLoreAdamW":        "GaLore AdamW — Low-rank gradient projection, full-rank quality",
+    "GaLoreAdamW8bit":    "GaLore AdamW 8-bit — GaLore + memory savings",
 }
 
 # LoRA initialization methods (PEFT library)

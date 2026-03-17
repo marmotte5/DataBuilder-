@@ -9,3 +9,34 @@ dataset_sorter_config.json
 .venv/
 venv/
 env/
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*.cert
+*.p12
+secrets.*
+credentials.*
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Training artifacts (can be large)
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+!dataset_sorter/**/*.py
+
+# Logs and cache
+*.log
+.cache/
+*.db
+*.lmdb

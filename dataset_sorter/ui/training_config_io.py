@@ -197,8 +197,16 @@ class TrainingConfigIOMixin:
         config.controlnet_scratch = self.controlnet_scratch_check.isChecked()
         config.zero_conv_lr_multiplier = self.zero_conv_lr_spin.value()
 
-        # DPO (dedicated tab)
+        # DPO (dedicated tab — authoritative when DPO is enabled)
+        config.dpo_enabled = self.dpo_enable.isChecked()
+        config.dpo_chosen_dir = self.dpo_chosen_input.text().strip()
+        config.dpo_rejected_dir = self.dpo_rejected_input.text().strip()
+        config.dpo_reference_model = self.dpo_ref_input.text().strip()
         config.dpo_label_smoothing = self.dpo_smooth_spin.value()
+        # DPO tab has its own beta/loss controls; sync them to the shared fields
+        if config.dpo_enabled:
+            config.dpo_beta = self.dpo_beta_spin.value()
+            config.dpo_loss_type = self.dpo_loss_combo.currentData() or "sigmoid"
 
         # Adversarial
         config.adversarial_enabled = self.adversarial_enable.isChecked()
@@ -424,6 +432,15 @@ class TrainingConfigIOMixin:
         self.zero_conv_lr_spin.setValue(config.zero_conv_lr_multiplier)
 
         # DPO (dedicated tab)
+        self.dpo_enable.setChecked(config.dpo_enabled)
+        self.dpo_beta_spin.setValue(config.dpo_beta)
+        for i in range(self.dpo_loss_combo.count()):
+            if self.dpo_loss_combo.itemData(i) == config.dpo_loss_type:
+                self.dpo_loss_combo.setCurrentIndex(i)
+                break
+        self.dpo_chosen_input.setText(config.dpo_chosen_dir)
+        self.dpo_rejected_input.setText(config.dpo_rejected_dir)
+        self.dpo_ref_input.setText(config.dpo_reference_model)
         self.dpo_smooth_spin.setValue(config.dpo_label_smoothing)
 
         # Adversarial
