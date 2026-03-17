@@ -14,8 +14,14 @@ from typing import Optional
 from dataset_sorter.constants import (
     OPTIMIZERS, NETWORK_TYPES, LR_SCHEDULERS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES, SAMPLE_SAMPLERS,
+    SAVE_PRECISIONS, ATTENTION_MODES, LORA_INIT_METHODS,
 )
 from dataset_sorter.models import TrainingConfig
+
+# Valid values for string fields not in constants
+_MIXED_PRECISIONS = {"bf16", "fp16", "fp32", "no"}
+_QUANTIZE_TE_OPTIONS = {"none", "int8", "int4"}
+_DPO_LOSS_TYPES = {"sigmoid", "hinge", "ipo"}
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +95,38 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             f"Unknown timestep sampling '{config.timestep_sampling}'",
         ))
 
+    _check_enum(errors, "network_type", config.network_type, NETWORK_TYPES,
+                "Unknown network type")
+    _check_enum(errors, "sample_sampler", config.sample_sampler, SAMPLE_SAMPLERS,
+                "Unknown sample sampler")
+    _check_enum(errors, "model_prediction_type", config.model_prediction_type,
+                PREDICTION_TYPES, "Unknown prediction type")
+    _check_enum(errors, "save_precision", config.save_precision, SAVE_PRECISIONS,
+                "Unknown save precision")
+    _check_enum(errors, "lora_init", config.lora_init, LORA_INIT_METHODS,
+                "Unknown LoRA initialization method")
+
+    if config.mixed_precision and config.mixed_precision not in _MIXED_PRECISIONS:
+        errors.append(ConfigValidationError(
+            "mixed_precision",
+            f"Unknown mixed precision '{config.mixed_precision}'. "
+            f"Valid options: {', '.join(sorted(_MIXED_PRECISIONS))}",
+        ))
+
+    if config.quantize_text_encoder and config.quantize_text_encoder not in _QUANTIZE_TE_OPTIONS:
+        errors.append(ConfigValidationError(
+            "quantize_text_encoder",
+            f"Unknown quantize option '{config.quantize_text_encoder}'. "
+            f"Valid options: {', '.join(sorted(_QUANTIZE_TE_OPTIONS))}",
+        ))
+
+    if config.dpo_loss_type and config.dpo_loss_type not in _DPO_LOSS_TYPES:
+        errors.append(ConfigValidationError(
+            "dpo_loss_type",
+            f"Unknown DPO loss type '{config.dpo_loss_type}'. "
+            f"Valid options: {', '.join(sorted(_DPO_LOSS_TYPES))}",
+        ))
+
     # ── Cross-field consistency ──
     is_lora = config.model_type.endswith("_lora")
 
@@ -149,6 +187,53 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             severity="warning",
         ))
 
+    # ── Cross-field dependency checks (H7) ──
+    if config.cache_latents_to_disk and not config.cache_latents:
+        errors.append(ConfigValidationError(
+            "cache_latents_to_disk",
+            "cache_latents_to_disk requires cache_latents to be enabled",
+        ))
+
+    if config.cache_text_encoder_to_disk and not config.cache_text_encoder:
+        errors.append(ConfigValidationError(
+            "cache_text_encoder_to_disk",
+            "cache_text_encoder_to_disk requires cache_text_encoder to be enabled",
+        ))
+
+    if config.adaptive_noise_scale > 0 and config.noise_offset <= 0:
+        errors.append(ConfigValidationError(
+            "adaptive_noise_scale",
+            "adaptive_noise_scale requires noise_offset > 0",
+            severity="warning",
+        ))
+
+    if config.attention_rebalancing and not config.attention_debug_enabled:
+        errors.append(ConfigValidationError(
+            "attention_rebalancing",
+            "attention_rebalancing requires attention_debug_enabled to be True",
+        ))
+
+    if config.rlhf_enabled and not config.sample_prompts:
+        errors.append(ConfigValidationError(
+            "rlhf_enabled",
+            "RLHF requires at least one sample prompt",
+            severity="warning",
+        ))
+
+    if config.use_dora and config.use_rslora:
+        errors.append(ConfigValidationError(
+            "use_dora",
+            "DoRA and rsLoRA cannot both be enabled simultaneously",
+            severity="warning",
+        ))
+
+    if config.fp8_base_model and config.mixed_precision == "fp32":
+        errors.append(ConfigValidationError(
+            "fp8_base_model",
+            "fp8 base model is not useful with fp32 mixed precision",
+            severity="warning",
+        ))
+
     return errors
 
 
@@ -158,6 +243,18 @@ def _check_type(errors, field, value, expected_types):
         errors.append(ConfigValidationError(
             field,
             f"Expected {expected_types}, got {type(value).__name__}",
+        ))
+
+
+def _check_enum(errors, field, value, valid_set, label="Unknown value"):
+    """Add error if non-empty string value is not in valid_set (dict or set)."""
+    if value and value not in valid_set:
+        if isinstance(valid_set, dict):
+            opts = ", ".join(valid_set.keys())
+        else:
+            opts = ", ".join(sorted(valid_set))
+        errors.append(ConfigValidationError(
+            field, f"{label} '{value}'. Valid options: {opts}",
         ))
 
 

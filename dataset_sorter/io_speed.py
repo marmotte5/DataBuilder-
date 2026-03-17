@@ -286,32 +286,66 @@ class MmapLatentCache:
 # 5. TMPFS RAM DISK CACHE
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_tmpfs_cache_dirs: list[Path] = []
+
+
+def _cleanup_tmpfs_caches():
+    """Remove tmpfs cache directories on interpreter exit."""
+    import shutil
+    for d in _tmpfs_cache_dirs:
+        try:
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+                log.debug(f"Cleaned up tmpfs cache: {d}")
+        except Exception:
+            pass
+
+
+import atexit
+atexit.register(_cleanup_tmpfs_caches)
+
+
 def get_tmpfs_cache_dir(size_hint_gb: float = 2.0) -> Optional[Path]:
     """Get a tmpfs (RAM-backed) directory for ultra-fast cache I/O.
 
     On Linux, /dev/shm is a tmpfs mount that uses the user's RAM directly.
     This eliminates all disk I/O for cache reads/writes, trading RAM for speed.
 
-    Returns None if tmpfs is not available (e.g., macOS, Windows).
+    Returns None if tmpfs is not available or lacks capacity.
     """
     # Linux: /dev/shm is typically available and fast
     shm_path = Path("/dev/shm")
     if shm_path.exists() and shm_path.is_dir():
+        # Check available space before using
+        try:
+            stat = os.statvfs(str(shm_path))
+            avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            if avail_gb < size_hint_gb:
+                log.warning(
+                    f"/dev/shm has only {avail_gb:.1f} GB free "
+                    f"(need {size_hint_gb:.1f} GB), skipping tmpfs cache"
+                )
+                return None
+        except OSError:
+            return None
         cache_dir = shm_path / "databuilder_cache"
         cache_dir.mkdir(exist_ok=True)
-        log.info(f"Using tmpfs RAM disk cache: {cache_dir}")
+        _tmpfs_cache_dirs.append(cache_dir)
+        log.info(f"Using tmpfs RAM disk cache: {cache_dir} ({avail_gb:.1f} GB available)")
         return cache_dir
 
     # Fallback: check if /tmp is tmpfs
     if os.path.exists("/tmp"):
         try:
             stat = os.statvfs("/tmp")
-            # tmpfs has f_type = 0x01021994
-            # But simpler: check if it's a real disk or ramdisk
             total_mb = (stat.f_blocks * stat.f_frsize) / (1024 * 1024)
             if total_mb < 50000:  # Likely tmpfs if < 50 GB
+                avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+                if avail_gb < size_hint_gb:
+                    return None
                 cache_dir = Path("/tmp/databuilder_cache")
                 cache_dir.mkdir(exist_ok=True)
+                _tmpfs_cache_dirs.append(cache_dir)
                 return cache_dir
         except OSError:
             pass

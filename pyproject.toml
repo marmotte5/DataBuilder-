@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dataset-sorter"
-version = "2.0.0"
+version = "3.0.0"
 description = "Desktop application for sorting, managing, and training image datasets for Stable Diffusion / LoRA training."
 readme = "README.md"
 license = {text = "MIT"}
@@ -53,6 +53,14 @@ optimizers = [
 ]
 speed = [
     "liger-kernel>=0.4",
+    "opencv-python>=4.8",
+    "python-turbojpeg>=1.7",
+    "lmdb>=1.4",
+    "lz4>=4.3",
+    "flash-attn>=2.5",
+]
+dev = [
+    "pytest>=7.0",
 ]
 all = [
     "dataset-sorter[training,optimizers,speed]",
@@ -62,8 +70,8 @@ all = [
 dataset-sorter = "dataset_sorter.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/DataBuilder-"
-Repository = "https://github.com/YOUR_USERNAME/DataBuilder-"
+Homepage = "https://github.com/marmotte5/DataBuilder-"
+Repository = "https://github.com/marmotte5/DataBuilder-"
 
 [tool.setuptools.packages.find]
 include = ["dataset_sorter*"]

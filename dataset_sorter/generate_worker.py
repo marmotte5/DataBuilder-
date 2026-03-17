@@ -199,8 +199,8 @@ class GenerateWorker(QThread):
                 torch.cuda.empty_cache()
             elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Cache clear failed: {e}")
 
     @property
     def is_loaded(self) -> bool:
@@ -239,8 +239,8 @@ class GenerateWorker(QThread):
             if self._mode == "load":
                 try:
                     self.unload_model()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"Unload model during error cleanup failed: {e}")
 
     # ── Model loading ───────────────────────────────────────────────────
 
@@ -302,8 +302,8 @@ class GenerateWorker(QThread):
                 vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
                 if vram < 16:
                     _use_cpu_offload = True
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"VRAM detection failed: {e}")
 
         if _use_cpu_offload:
             pipe.enable_model_cpu_offload()
@@ -493,7 +493,8 @@ class GenerateWorker(QThread):
             if fallback_cls and hasattr(fallback_cls, "from_single_file"):
                 try:
                     return fallback_cls.from_single_file(model_path, **kwargs)
-                except Exception:
+                except Exception as e:
+                    log.debug(f"Fallback {fallback_name} failed: {e}")
                     continue
 
         self.error.emit(
@@ -550,8 +551,8 @@ class GenerateWorker(QThread):
         elif len(adapter_names) == 1 and adapter_weights[0] != 1.0:
             try:
                 pipe.set_adapters(adapter_names, adapter_weights)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Could not set adapter weights: {e}")
 
     # ── Image generation ────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ configuration and uses that history to refine future recommendations.
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
@@ -14,7 +15,17 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_DB_PATH = Path.home() / ".dataset_sorter_training_history.db"
+def _get_data_dir() -> Path:
+    """Return XDG-compliant data directory for dataset_sorter."""
+    env = os.environ.get("DATASET_SORTER_DATA")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "dataset_sorter"
+    return Path.home() / ".local" / "share" / "dataset_sorter"
+
+_DB_PATH = _get_data_dir() / "training_history.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS training_runs (
@@ -77,6 +88,7 @@ class TrainingHistory:
 
     def __init__(self, db_path: Path = _DB_PATH):
         self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), timeout=10.0)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)

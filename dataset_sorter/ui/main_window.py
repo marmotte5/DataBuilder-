@@ -52,8 +52,19 @@ from dataset_sorter.ui.help_tab import HelpTab
 
 log = logging.getLogger(__name__)
 
+def _get_data_dir() -> Path:
+    """Return XDG-compliant data directory for dataset_sorter."""
+    import os
+    env = os.environ.get("DATASET_SORTER_DATA")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "dataset_sorter"
+    return Path.home() / ".local" / "share" / "dataset_sorter"
+
 # Persistence file for progress state
-_PROGRESS_FILE = Path.home() / ".dataset_sorter_state.json"
+_PROGRESS_FILE = _get_data_dir() / "state.json"
 
 
 class DragDropLineEdit(QLineEdit):
@@ -444,6 +455,7 @@ class MainWindow(QMainWindow):
             "workers": self.workers_spinner.value(),
         }
         try:
+            _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
             _PROGRESS_FILE.write_text(
                 json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
             )

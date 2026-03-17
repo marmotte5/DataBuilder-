@@ -11,6 +11,7 @@ For Python 3.14+, can leverage free-threaded mode for true parallelism.
 import logging
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 from typing import Optional
@@ -26,28 +27,32 @@ if hasattr(os, "process_cpu_count"):
 else:
     _CPU_COUNT = os.cpu_count() or 4
 
-# Shared executor for async I/O operations
+# Shared executor for async I/O operations (thread-safe init via lock)
 _IO_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = threading.Lock()
 
 
 def _get_executor() -> ThreadPoolExecutor:
-    """Get or create the shared I/O executor."""
+    """Get or create the shared I/O executor (thread-safe)."""
     global _IO_EXECUTOR
     if _IO_EXECUTOR is None:
-        # I/O-bound: use 2x CPU count for better throughput
-        _IO_EXECUTOR = ThreadPoolExecutor(
-            max_workers=min(_CPU_COUNT * 2, 16),
-            thread_name_prefix="async_io",
-        )
+        with _EXECUTOR_LOCK:
+            if _IO_EXECUTOR is None:
+                # I/O-bound: use 2x CPU count for better throughput
+                _IO_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=min(_CPU_COUNT * 2, 16),
+                    thread_name_prefix="async_io",
+                )
     return _IO_EXECUTOR
 
 
 def shutdown_executor():
     """Shutdown the shared executor (call on app exit)."""
     global _IO_EXECUTOR
-    if _IO_EXECUTOR is not None:
-        _IO_EXECUTOR.shutdown(wait=False)
-        _IO_EXECUTOR = None
+    with _EXECUTOR_LOCK:
+        if _IO_EXECUTOR is not None:
+            _IO_EXECUTOR.shutdown(wait=False)
+            _IO_EXECUTOR = None
 
 
 def read_text_async(path: Path, encoding: str = "utf-8") -> Future:

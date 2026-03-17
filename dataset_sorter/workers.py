@@ -67,8 +67,8 @@ def create_project_structure(output_dir: Path) -> None:
         }
         try:
             info_path.write_text(json.dumps(info, indent=2))
-        except OSError:
-            pass
+        except OSError as e:
+            log.debug(f"Could not write project.json: {e}")
 
 # Chunk size for submitting futures (avoids 1M-entry dict)
 _SCAN_CHUNK = 5000
@@ -242,18 +242,32 @@ class ScanWorker(QThread):
 
 
 def _unique_dest(folder_path: Path, name: str) -> Path:
-    """Return a unique destination path, appending _001 etc. on collision."""
+    """Return a unique destination path, using atomic creation to avoid races.
+
+    Uses os.open with O_CREAT|O_EXCL to atomically check-and-create,
+    preventing TOCTOU races when multiple threads export concurrently.
+    """
+    import os as _os
+
     dest = folder_path / name
-    if not dest.exists():
+    try:
+        fd = _os.open(str(dest), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
+        _os.close(fd)
         return dest
+    except FileExistsError:
+        pass
+
     stem = Path(name).stem
     suffix = Path(name).suffix
-    counter = 1
-    while True:
+    for counter in range(1, 100_000):
         candidate = folder_path / f"{stem}_{counter:03d}{suffix}"
-        if not candidate.exists():
+        try:
+            fd = _os.open(str(candidate), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
+            _os.close(fd)
             return candidate
-        counter += 1
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"Could not find unique destination for {name}")
 
 
 class ExportWorker(QThread):
@@ -407,7 +421,7 @@ class ExportWorker(QThread):
                 (self.output_dir / "logs" / "export_errors.log").write_text(
                     "\n".join(error_log), encoding="utf-8",
                 )
-            except OSError:
-                pass
+            except OSError as e:
+                log.debug(f"Could not write export error log: {e}")
 
         self.finished_export.emit(copied, errors)

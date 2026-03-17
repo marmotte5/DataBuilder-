@@ -6,6 +6,7 @@ Includes periodic VRAM usage monitoring (CUDA/MPS).
 """
 
 import logging
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -83,6 +84,7 @@ class TrainingWorker(QThread):
         self.output_dir = Path(output_dir)
         self.resume_from = Path(resume_from) if resume_from else None
         self.trainer: Trainer | None = None
+        self._config_lock = threading.Lock()
 
         if sample_prompts:
             self.config.sample_prompts = sample_prompts
@@ -237,7 +239,8 @@ class TrainingWorker(QThread):
         prefs_img_dir.mkdir(parents=True, exist_ok=True)
 
         step = self.trainer.state.global_step
-        round_idx = self.config.rlhf_dpo_rounds
+        with self._config_lock:
+            round_idx = self.config.rlhf_dpo_rounds
 
         for i, sel in enumerate(selections):
             chosen_path = prefs_img_dir / f"round{round_idx}_pair{i}_chosen.png"
@@ -258,7 +261,8 @@ class TrainingWorker(QThread):
                 },
             ))
 
-        self.config.rlhf_dpo_rounds += 1
+        with self._config_lock:
+            self.config.rlhf_dpo_rounds += 1
         self.progress.emit(
             step, self.trainer.total_steps,
             f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
@@ -285,7 +289,8 @@ class TrainingWorker(QThread):
             t = self.trainer
             if t and t.state.running and t._rlhf_collect.is_set():
                 t._rlhf_collect.clear()
-                round_idx = getattr(self.config, 'rlhf_dpo_rounds', 0)
+                with self._config_lock:
+                    round_idx = getattr(self.config, 'rlhf_dpo_rounds', 0)
                 self.generate_rlhf_candidates(round_idx)
 
     def _on_sample(self, images, step):

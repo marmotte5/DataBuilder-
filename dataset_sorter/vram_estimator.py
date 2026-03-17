@@ -232,8 +232,8 @@ def detect_gpu_vram() -> int:
                     total_bytes = int(result.stdout.strip())
                     # Report ~75% of unified memory as usable for GPU
                     return round(total_bytes * 0.75 / 1024**3)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Apple Silicon memory detection failed: {e}")
             return 16  # Conservative default for Apple Silicon
     except (ImportError, OSError):
         pass

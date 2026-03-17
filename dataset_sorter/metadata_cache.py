@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS schema_info (
 """
 
 
+_VALID_COLUMNS = frozenset({
+    "filename", "size_bytes", "mtime", "width", "height",
+    "md5", "ahash", "tags", "token_count", "bucket", "cached_at",
+})
+
+
 class MetadataCache:
     """Thread-safe SQLite metadata cache for image datasets.
 
@@ -110,6 +116,13 @@ class MetadataCache:
             pass
         return None
 
+    @staticmethod
+    def _validate_columns(kwargs: dict) -> None:
+        """Reject any column names not in the whitelist to prevent SQL injection."""
+        invalid = set(kwargs.keys()) - _VALID_COLUMNS
+        if invalid:
+            raise ValueError(f"Invalid metadata column name(s): {invalid}")
+
     def put(self, path: Path, **kwargs):
         """Insert or update metadata for a file.
 
@@ -120,6 +133,7 @@ class MetadataCache:
         import time
         kwargs.setdefault("filename", path.name)
         kwargs.setdefault("cached_at", time.time())
+        self._validate_columns(kwargs)
 
         cols = ["path"] + list(kwargs.keys())
         placeholders = ", ".join(["?"] * len(cols))
@@ -140,6 +154,7 @@ class MetadataCache:
             for path, kwargs in entries:
                 kwargs.setdefault("filename", path.name)
                 kwargs.setdefault("cached_at", now)
+                self._validate_columns(kwargs)
                 cols = ["path"] + list(kwargs.keys())
                 placeholders = ", ".join(["?"] * len(cols))
                 updates = ", ".join(f"{k}=excluded.{k}" for k in kwargs)
