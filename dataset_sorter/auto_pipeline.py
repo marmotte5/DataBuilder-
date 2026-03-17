@@ -194,8 +194,8 @@ class PipelineAnalysis:
         # Importance analysis
         if self.importance_report:
             r = self.importance_report
-            lines.append(f"Concept root detected: \"{r.concept_root}\"" if r.concept_root else "No concept root detected")
-            concept_count = sum(1 for c in r.classifications.values() if c.name.startswith("CONCEPT"))
+            lines.append(f"Concept root detected: \"{r.concept_roots[0][0]}\"" if r.concept_roots else "No concept root detected")
+            concept_count = sum(1 for c in r.tag_types.values() if c.startswith("concept"))
             lines.append(f"Concept tags: {concept_count}")
             if r.caption_tags:
                 lines.append(f"Caption-style tags: {len(r.caption_tags)}")
@@ -275,10 +275,10 @@ class AutoPipeline:
 
         # Protect concept tags from "common" removal — being common is
         # GOOD for concept tags (the model needs them on every image)
-        if a.importance_report and a.importance_report.concept_root:
+        if a.importance_report and a.importance_report.concept_roots:
             from dataset_sorter.tag_importance import TagType
             concept_tags = {
-                tag for tag, ttype in a.importance_report.classifications.items()
+                tag for tag, ttype in a.importance_report.tag_types.items()
                 if ttype in (TagType.CONCEPT_CORE, TagType.CONCEPT_DETAIL)
             }
             a.common_tags = [t for t in a.common_tags if t not in concept_tags]

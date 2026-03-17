@@ -97,8 +97,10 @@ class MMapTensorStore:
             tensor_data.append(data)
             current_offset += len(data)
 
-            # Store TE outputs
+            # Store TE outputs (skip None entries from models without pooler/second TE)
             for j, te_t in enumerate(te_outputs[i]):
+                if te_t is None:
+                    continue
                 te_key = f"te_{i}_{j}"
                 te_data = te_t.cpu().contiguous().numpy().tobytes()
                 header["tensors"][te_key] = {
@@ -131,18 +133,22 @@ class MMapTensorStore:
         import json
 
         self._file = open(self.path, "rb")
+        try:
+            # Read header
+            header_len = struct.unpack("<Q", self._file.read(8))[0]
+            header_bytes = self._file.read(header_len)
+            self._header = json.loads(header_bytes)
 
-        # Read header
-        header_len = struct.unpack("<Q", self._file.read(8))[0]
-        header_bytes = self._file.read(header_len)
-        self._header = json.loads(header_bytes)
-
-        # Memory-map the data section
-        self._data_offset = 8 + header_len
-        self._mmap = mmap.mmap(
-            self._file.fileno(), 0,
-            access=mmap.ACCESS_READ,
-        )
+            # Memory-map the data section
+            self._data_offset = 8 + header_len
+            self._mmap = mmap.mmap(
+                self._file.fileno(), 0,
+                access=mmap.ACCESS_READ,
+            )
+        except Exception:
+            self._file.close()
+            self._file = None
+            raise
 
         log.info(
             f"MMap cache opened: {self._header['num_samples']} samples, "
@@ -360,8 +366,10 @@ class MMapCacheBuilder:
             tensors[f"latent_{i}"] = lat
             current_size += lat.nelement() * lat.element_size()
 
-            # TE outputs
+            # TE outputs (skip None entries)
             for j, te_t in enumerate(te_outputs[i]):
+                if te_t is None:
+                    continue
                 te = te_t.to(self.dtype).cpu().contiguous()
                 tensors[f"te_{i}_{j}"] = te
                 current_size += te.nelement() * te.element_size()
@@ -419,6 +427,8 @@ class MMapCacheBuilder:
             })
 
             for j, te_t in enumerate(te_outputs[i]):
+                if te_t is None:
+                    continue
                 te = te_t.to(self.dtype).cpu().contiguous()
                 all_tensors.append(te)
                 metadata.append({

@@ -251,7 +251,7 @@ class Trainer:
                 # Tag weights are computed inside run_pre_training_pipeline
                 # Re-extract them for use in adaptive weighting
                 try:
-                    from dataset_sorter.tag_importance import analyze_tag_importance
+                    from dataset_sorter.tag_importance import compute_tag_importance
                     from collections import Counter
                     tag_counts = Counter()
                     for cap in captions:
@@ -260,10 +260,10 @@ class Trainer:
                             if tag:
                                 tag_counts[tag] += 1
                     if tag_counts:
-                        result = analyze_tag_importance(tag_counts, len(captions))
-                        self._tag_weights = {
-                            tag: info.importance_score for tag, info in result.items()
-                        }
+                        importance_scores = compute_tag_importance(
+                            tag_counts, len(captions),
+                        )
+                        self._tag_weights = importance_scores
                 except Exception as e:
                     log.debug(f"Tag weight extraction failed: {e}")
 
@@ -841,6 +841,11 @@ class Trainer:
                 if active:
                     log.info(f"Z-Image inventions: {', '.join(active)}")
 
+        # Save the epoch we're resuming into (if any) so we only skip
+        # batches in that specific epoch, not in every subsequent epoch.
+        _resume_epoch = self.state.epoch
+        _resume_epoch_step = self.state.epoch_step
+
         for epoch in range(self.state.epoch, config.epochs):
             if not self.state.running:
                 break
@@ -862,7 +867,7 @@ class Trainer:
                 )
 
             # Determine how many batches to skip (resume within epoch)
-            _skip_batches = self.state.epoch_step if epoch == self.state.epoch else 0
+            _skip_batches = _resume_epoch_step if epoch == _resume_epoch else 0
 
             # Choose iteration source: zero-bottleneck loader or standard DataLoader
             if _zero_loader is not None:

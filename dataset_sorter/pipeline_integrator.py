@@ -218,7 +218,7 @@ def analyze_tags_for_training(
     Returns dict of tag → importance weight (0.0 to 1.0).
     """
     from dataset_sorter.tag_importance import (
-        analyze_tag_importance, TagType, TAG_TYPE_IMPORTANCE,
+        compute_tag_importance, classify_all_tags, TagType, TAG_TYPE_IMPORTANCE,
     )
 
     # Build tag counts from captions
@@ -237,18 +237,23 @@ def analyze_tags_for_training(
         return {}
 
     # Run tag importance analysis
-    result = analyze_tag_importance(tag_counts, len(captions))
+    total_images = len(captions)
+    tag_types = classify_all_tags(tag_counts, total_images)
+    importance_scores = compute_tag_importance(
+        tag_counts, total_images, tag_types=tag_types,
+    )
 
     # Build per-tag weights from importance scores
     tag_weights = {}
     noise_count = 0
     concept_count = 0
 
-    for tag, info in result.items():
-        tag_weights[tag] = info.importance_score
-        if info.tag_type == TagType.NOISE:
+    for tag in tag_counts:
+        tag_weights[tag] = importance_scores.get(tag, 0.3)
+        tag_type = tag_types.get(tag, TagType.GENERIC)
+        if tag_type == TagType.NOISE:
             noise_count += 1
-        elif info.tag_type in (TagType.CONCEPT_CORE, TagType.CONCEPT_DETAIL):
+        elif tag_type in (TagType.CONCEPT_CORE, TagType.CONCEPT_DETAIL):
             concept_count += 1
 
     # Auto-adjust caption dropout based on tag quality

@@ -525,7 +525,7 @@ class CachedTrainDataset(Dataset):
                     hidden_states_3 = encoder_output_3.last_hidden_state.cpu()
 
                     te_result = (hidden_states, pooled, hidden_states_2, pooled_2, hidden_states_3)
-                    token_id_result = (tokens.cpu(), tokens_2.cpu() if tokenizer_2 else None, tokens_3.cpu())
+                    token_id_result = (tokens.cpu(), tokens_2.cpu() if tokens_2 is not None else None, tokens_3.cpu())
 
             for idx in indices:
                 self._te_cache[idx] = te_result
