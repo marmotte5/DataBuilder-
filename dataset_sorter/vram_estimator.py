@@ -140,7 +140,12 @@ def estimate_vram(config) -> dict:
     breakdown["Optimizer states"] = round(opt_gb, 1)
 
     # 6. Gradient memory
-    grad_gb = trainable_gb * 1.0
+    # With mixed precision (bf16/fp16 weights), gradients are accumulated
+    # in fp32 for numerical stability, using 2x the bf16 weight memory.
+    if config.mixed_precision in ("bf16", "fp16"):
+        grad_gb = trainable_gb * 2.0  # fp32 gradients for bf16 weights
+    else:
+        grad_gb = trainable_gb * 1.0  # fp32 gradients for fp32 weights
     if config.gradient_checkpointing:
         grad_gb *= 0.3  # Recompute activations, save memory
     breakdown["Gradients"] = round(grad_gb, 1)

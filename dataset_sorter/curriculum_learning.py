@@ -47,18 +47,22 @@ class CurriculumSampler:
         momentum: float = 0.95,
         warmup_epochs: int = 1,
         min_weight: float = 0.1,
+        max_weight_ratio: float = 5.0,
     ):
         self.num_images = num_images
         self.temperature = temperature
         self.momentum = momentum
         self.warmup_epochs = warmup_epochs
         self.min_weight = min_weight
+        self.max_weight_ratio = max_weight_ratio
 
         # Per-image loss EMA (initialized to 1.0 = unknown)
         self._loss_ema = np.ones(num_images, dtype=np.float32)
         self._seen_count = np.zeros(num_images, dtype=np.int32)
         self._epoch = 0
         self._active = False
+        # Track which images haven't been sampled in recent epochs
+        self._epochs_since_seen = np.zeros(num_images, dtype=np.int32)
 
     def update_loss(self, indices: list[int], losses: list[float]):
         """Update per-image loss EMA after a training step.
@@ -81,6 +85,7 @@ class CurriculumSampler:
     def on_epoch_start(self):
         """Called at the start of each epoch to update curriculum state."""
         self._epoch += 1
+        self._epochs_since_seen += 1  # Increment for all, reset on sample
         if self._epoch > self.warmup_epochs and not self._active:
             seen_ratio = (self._seen_count > 0).sum() / self.num_images
             if seen_ratio > 0.5:
@@ -92,6 +97,13 @@ class CurriculumSampler:
 
     def get_sampling_weights(self) -> np.ndarray:
         """Compute per-image sampling weights.
+
+        Includes a starvation prevention mechanism: images not seen for 3+
+        epochs get their weight boosted to ensure every image is trained on
+        periodically. This prevents catastrophic forgetting of easy concepts.
+
+        The weight ratio is capped at max_weight_ratio to prevent extreme
+        imbalance between hard and easy images.
 
         Returns:
             Array of shape (num_images,) with sampling probabilities.
@@ -111,6 +123,17 @@ class CurriculumSampler:
 
         # Enforce minimum weight to prevent starvation
         weights = np.maximum(weights, self.min_weight)
+
+        # Cap weight ratio to prevent extreme imbalance
+        w_min = weights[weights > 0].min() if (weights > 0).any() else self.min_weight
+        max_allowed = w_min * self.max_weight_ratio
+        weights = np.minimum(weights, max_allowed)
+
+        # Starvation prevention: boost images not seen for 3+ epochs
+        stale_mask = self._epochs_since_seen >= 3
+        if stale_mask.any():
+            stale_boost = weights.mean() * 2.0  # Guarantee they get sampled
+            weights[stale_mask] = np.maximum(weights[stale_mask], stale_boost)
 
         # Normalize to probability distribution
         total = weights.sum()
@@ -134,7 +157,11 @@ class CurriculumSampler:
         weights = self.get_sampling_weights()
         if rng is None:
             rng = np.random.default_rng()
-        return rng.choice(self.num_images, size=n, p=weights, replace=True).tolist()
+        indices = rng.choice(self.num_images, size=n, p=weights, replace=True).tolist()
+        # Reset starvation counter for sampled images
+        for idx in indices:
+            self._epochs_since_seen[idx] = 0
+        return indices
 
     def get_stats(self) -> dict:
         """Return curriculum statistics for logging."""

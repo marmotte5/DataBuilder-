@@ -297,8 +297,11 @@ def compute_adjustments(
             f"Keeping current hyperparameters."
         )
 
-        if analysis.improvement_rate < 0.001 and current_lr > 1e-6:
-            # Improving but slowly — slight LR boost
+        if 0 < analysis.improvement_rate < 0.001 and current_lr > 1e-6:
+            # Improving but slowly — slight LR boost.
+            # Guard: only boost if improvement_rate is positive (truly improving).
+            # A negative rate means loss is increasing, which should be caught
+            # by the diverging/oscillating checks above.
             new_lr = current_lr * 1.2
             adj["learning_rate"] = new_lr
             recs.append(

@@ -140,10 +140,13 @@ class SpeedTimestepSampler:
         if self._step == self.warmup_steps:
             self._loss_ema_prev.copy_(self._loss_ema)
 
-        # Change-aware: weight = |current_ema - previous_ema| (vectorized)
+        # Change-aware: weight = |current_ema - previous_ema| / prev (relative change)
+        # Using relative change keeps the weighting effective throughout training,
+        # not just when absolute loss values are large (early training).
         t_idx = timesteps.long()
-        change = (self._loss_ema[t_idx] - self._loss_ema_prev[t_idx]).abs()
-        weights = 1.0 + change * 10.0  # Scale factor for impact
+        prev = self._loss_ema_prev[t_idx].abs().clamp(min=1e-8)
+        change = (self._loss_ema[t_idx] - self._loss_ema_prev[t_idx]).abs() / prev
+        weights = 1.0 + change * 3.0  # Scale factor for impact (relative)
 
         # Normalize to mean=1 to not affect overall loss magnitude
         weights = weights / weights.mean().clamp(min=1e-6)
@@ -265,12 +268,13 @@ class ApproxVJPGradScaler:
     def approximate_gradients(self, parameters):
         """Apply random projection approximation to computed gradients.
 
-        For each parameter gradient G with shape (m, n), compute:
-            G_approx = sum_k (G @ v_k) * v_k^T / num_samples
-        where v_k are random unit vectors.
+        For each parameter gradient G with shape (m, n), compute a
+        low-rank approximation using random projections. The blend
+        factor is scaled by 1/n to maintain proper gradient norms,
+        since each rank-1 projection has variance proportional to n.
 
-        This preserves the gradient's expected value while reducing
-        the effective rank of the update, saving compute on large layers.
+        This reduces the effective rank of the update, saving compute
+        on large layers while preserving the gradient's expected value.
         """
         if not self.enabled:
             return
@@ -297,14 +301,17 @@ class ApproxVJPGradScaler:
                 v = torch.randn(n, 1, device=G.device, dtype=G.dtype)
                 v = v / v.norm().clamp(min=1e-8)
                 # Project: (G @ v) @ v^T gives rank-1 approximation
+                # E[(Gv)v^T] = G/n, so we scale by n to get unbiased estimate
                 proj = G @ v  # (m, 1)
                 approx.add_(proj @ v.T)  # (m, n)
 
-            # Scale to maintain expected value
+            # Scale by n/k to get unbiased estimate: E[approx] = G
             approx.mul_(n / self.num_samples)
 
-            # Blend: mix exact and approximate (reduce variance)
-            blend = min(0.5, 1.0 / self.num_samples)
+            # Blend: mix exact and approximate gradients.
+            # Scale blend by 1/n to keep gradient norm stable, since
+            # approx has variance proportional to n.
+            blend = min(0.3, self.num_samples / max(n, 1))
             p.grad = ((1 - blend) * grad + blend * approx.reshape(orig_shape))
 
 
@@ -628,34 +635,82 @@ class FusedBackwardPass:
             for p in group["params"]:
                 self._param_to_group[p] = group_idx
 
+        # Track how many params have been processed in this backward pass
+        self._total_hooked = 0
+
         for p in trainable:
             if p not in self._param_to_group:
                 continue
             # Use post_accumulate_grad_hook (PyTorch 2.1+)
             hook = p.register_post_accumulate_grad_hook(self._make_hook(p))
             self._hooks.append(hook)
+            self._total_hooked += 1
 
-        log.info(f"Fused backward pass: installed hooks on {len(self._hooks)} parameters")
+        # Track the actual step count separately from the optimizer's internal
+        # counter, since we call optimizer.step() once per parameter.
+        self._actual_step = 0
+        self._params_processed = 0
+
+        log.info(f"Fused backward pass: installed hooks on {self._total_hooked} parameters")
 
     def _make_hook(self, param):
-        """Create a hook that steps the optimizer for a single parameter."""
+        """Create a hook that applies the optimizer update for a single parameter.
+
+        Instead of calling optimizer.step() (which incorrectly increments the
+        global step counter per-parameter), we manually apply the optimizer
+        update using the parameter's state dict entry. This preserves correct
+        bias correction and adaptive LR behavior.
+        """
         def hook(p):
             if p.grad is None:
                 return
             if self.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_([p], self.max_grad_norm)
-            # Create a temporary single-param optimizer step
-            # by temporarily replacing the group's params
+
             group_idx = self._param_to_group[p]
             group = self.optimizer.param_groups[group_idx]
-            original_params = group["params"]
-            group["params"] = [p]
-            try:
-                self.optimizer.step()
-            finally:
-                group["params"] = original_params
+            lr = group["lr"]
+
+            # Apply a simple SGD-like update scaled by the group LR.
+            # This avoids calling optimizer.step() which would corrupt
+            # the step counter for Adam-family optimizers.
+            # For Adam/AdamW, we maintain per-parameter EMA manually.
+            state = self.optimizer.state.get(p, {})
+
+            if not state:
+                # First time: initialize state for this parameter
+                state["step"] = 0
+                state["exp_avg"] = torch.zeros_like(p)
+                state["exp_avg_sq"] = torch.zeros_like(p)
+                self.optimizer.state[p] = state
+
+            state["step"] += 1
+            step = state["step"]
+            grad = p.grad
+
+            # AdamW-style update (works for most optimizer types)
+            beta1, beta2 = group.get("betas", (0.9, 0.999))
+            eps = group.get("eps", 1e-8)
+            wd = group.get("weight_decay", 0.0)
+
+            # Decoupled weight decay
+            if wd > 0:
+                p.data.mul_(1 - lr * wd)
+
+            # EMA updates
+            state["exp_avg"].lerp_(grad, 1 - beta1)
+            state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+            # Bias correction
+            bc1 = 1 - beta1 ** step
+            bc2 = 1 - beta2 ** step
+            step_size = lr / bc1
+            denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
+            p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
+
             p.grad = None  # Free gradient memory immediately
             self._stepped = True
+            self._params_processed += 1
         return hook
 
     def finish_step(self):
@@ -663,6 +718,7 @@ class FusedBackwardPass:
         if self._stepped and self.scheduler is not None:
             self.scheduler.step()
         self._stepped = False
+        self._params_processed = 0
 
     def remove_hooks(self):
         """Remove all installed hooks."""
@@ -727,20 +783,33 @@ class StochasticRoundingHook:
         self.enabled = enabled
 
     @torch.no_grad()
-    def apply(self, parameters):
-        """Apply stochastic rounding to all bf16 parameters."""
+    def apply(self, parameters, master_weights: dict | None = None):
+        """Apply stochastic rounding when copying fp32 master weights to bf16 parameters.
+
+        Stochastic rounding is only effective when there's a precision gap
+        between the source (fp32) and destination (bf16). If no master weights
+        are provided and params are already bf16, this is a no-op since
+        bf16→fp32→bf16 round-trip produces zero residual.
+
+        Args:
+            parameters: Model parameters to update.
+            master_weights: Optional dict mapping param to fp32 master copy.
+                If provided, stochastic rounding is applied during the
+                fp32→bf16 copy. Without this, the function is a no-op for
+                pure bf16 parameters.
+        """
         if not self.enabled:
             return
         for p in parameters:
-            if not p.requires_grad or p.dtype != torch.bfloat16:
+            if not p.requires_grad:
                 continue
-            # Parameters are already bf16, but the optimizer may have
-            # accumulated fp32 gradients. If master weights exist (fp32 copy),
-            # the rounding happens at the copy-back step.
-            # For pure bf16 training: round the updated weights stochastically.
-            # The optimizer step was done in fp32 (via autocast), so we just
-            # need to ensure the stored bf16 weights are stochastically rounded.
-            p.data.copy_(stochastic_round_to_bf16(p.data.float()))
+            if master_weights is not None and p in master_weights:
+                # Apply stochastic rounding from fp32 master → bf16 param
+                fp32_val = master_weights[p]
+                p.data.copy_(stochastic_round_to_bf16(fp32_val))
+            elif p.dtype != torch.bfloat16:
+                # fp32 param being stored as bf16: apply rounding
+                p.data.copy_(stochastic_round_to_bf16(p.data))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

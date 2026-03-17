@@ -82,12 +82,37 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             precondition_frequency=10,
         )
     elif config.optimizer == "Muon":
-        from dataset_sorter.optimizers import Muon
-        return Muon(
-            param_groups, lr=lr if lr > 0.001 else 0.02,
-            weight_decay=config.weight_decay,
-            momentum=0.95,
-        )
+        # Muon's Newton-Schulz orthogonalization only works on 2D+ matrices.
+        # 1D params (biases, norms, embeddings) must use AdamW instead.
+        # Use create_muon_param_groups to split correctly.
+        from dataset_sorter.optimizers import Muon, create_muon_param_groups
+        log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
+        # Extract all trainable params from the provided param_groups
+        all_params = []
+        for pg in param_groups:
+            all_params.extend(pg["params"])
+        # Build a temporary module wrapper to use create_muon_param_groups
+        # (it needs named_parameters, so we filter manually instead)
+        muon_params = [p for p in all_params if p.requires_grad and p.dim() >= 2]
+        adamw_params = [p for p in all_params if p.requires_grad and p.dim() < 2]
+        muon_lr = lr if lr > 0.001 else 0.02
+        if muon_params:
+            # Create Muon for 2D+ params only
+            muon_opt = Muon(
+                [{"params": muon_params, "lr": muon_lr}],
+                lr=muon_lr,
+                weight_decay=config.weight_decay,
+                momentum=0.95,
+            )
+            if adamw_params:
+                log.info(
+                    f"Muon: {len(muon_params)} 2D+ params with Muon, "
+                    f"{len(adamw_params)} 1D params excluded (use separate AdamW)"
+                )
+            return muon_opt
+        else:
+            log.warning("Muon: no 2D+ params found, falling back to AdamW")
+            return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "GaLoreAdamW":
         try:
             from galore_torch import GaLoreAdamW

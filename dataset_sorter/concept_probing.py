@@ -212,33 +212,48 @@ class ConceptProber:
         tokenizer,
         text_encoder,
     ) -> float:
-        """Compute CLIP text-image similarity between concept and generated images."""
+        """Compute CLIP text-image similarity between concept and generated images.
+
+        Attempts to load a full CLIP model (text + vision) for proper
+        text-image similarity scoring. Falls back to quality heuristic
+        if CLIP vision encoder is not available.
+        """
         try:
             from transformers import CLIPProcessor, CLIPModel
         except ImportError:
+            log.debug("CLIP model not available, using quality heuristic")
             return self._compute_quality_heuristic(images)
 
         try:
-            # Use the existing text encoder for text features
-            text_inputs = tokenizer(
-                concept, padding="max_length", truncation=True,
-                max_length=77, return_tensors="pt",
+            # Try to load a lightweight CLIP model for proper text-image similarity
+            clip_model = CLIPModel.from_pretrained(
+                "openai/clip-vit-base-patch32",
+                torch_dtype=torch.float16,
+            ).to(self.device).eval()
+            clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+            # Compute text-image similarity using full CLIP
+            inputs = clip_processor(
+                text=[concept], images=images,
+                return_tensors="pt", padding=True,
             )
-            text_features = text_encoder(
-                text_inputs.input_ids.to(self.device),
-            )
-            if hasattr(text_features, 'pooler_output') and text_features.pooler_output is not None:
-                text_emb = text_features.pooler_output
-            else:
-                text_emb = text_features.last_hidden_state[:, 0]
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+            with torch.no_grad():
+                outputs = clip_model(**inputs)
+                # outputs.logits_per_text: (1, num_images)
+                similarities = outputs.logits_per_text.softmax(dim=-1)
+                score = float(similarities.mean())
 
-            # For image features, we'd need a CLIP image encoder.
-            # Fall back to quality heuristic if not available.
-            return self._compute_quality_heuristic(images)
+            # Clean up CLIP model to free VRAM
+            del clip_model, clip_processor
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        except Exception:
+            return score
+
+        except Exception as e:
+            log.debug(f"CLIP similarity failed ({e}), using quality heuristic")
             return self._compute_quality_heuristic(images)
 
     def _compute_quality_heuristic(self, images: list) -> float:

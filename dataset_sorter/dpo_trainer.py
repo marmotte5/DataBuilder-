@@ -234,12 +234,27 @@ def compute_image_log_probs(
         **fwd_kwargs,
     ).sample
 
-    # Negative MSE as log-probability proxy
-    per_sample_loss = F.mse_loss(
+    # Per-sample MSE
+    per_sample_mse = F.mse_loss(
         noise_pred.float(), noise.float(), reduction="none"
     ).mean(dim=list(range(1, len(noise_pred.shape))))
 
-    return -per_sample_loss  # Higher = model assigns higher probability
+    # Weight by SNR to get a proper variational bound estimate.
+    # Without SNR weighting, log-probs are dominated by the random timestep
+    # (high-noise timesteps always have high MSE regardless of image quality).
+    # SNR(t) = alpha_t^2 / sigma_t^2 normalizes across timesteps.
+    snr_weights = torch.ones_like(per_sample_mse)
+    if hasattr(backend.noise_scheduler, 'alphas_cumprod'):
+        alphas_cumprod = backend.noise_scheduler.alphas_cumprod.to(
+            device=timesteps.device, dtype=torch.float32,
+        )
+        alpha_sq = alphas_cumprod[timesteps]
+        sigma_sq = 1.0 - alpha_sq
+        snr = alpha_sq / sigma_sq.clamp(min=1e-8)
+        # Clamp SNR to prevent extreme weights at boundary timesteps
+        snr_weights = snr.clamp(min=0.1, max=10.0)
+
+    return -(per_sample_mse * snr_weights)  # Higher = model assigns higher probability
 
 
 def dpo_training_step(

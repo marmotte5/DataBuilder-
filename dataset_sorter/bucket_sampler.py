@@ -250,7 +250,7 @@ class BucketBatchSampler:
         self,
         bucket_assignments: list[tuple[int, int]],
         batch_size: int = 1,
-        drop_last: bool = True,
+        drop_last: bool = False,
         shuffle: bool = True,
         seed: Optional[int] = None,
     ):
@@ -267,17 +267,33 @@ class BucketBatchSampler:
                 self.bucket_indices[bucket] = []
             self.bucket_indices[bucket].append(idx)
 
+        # Warn about buckets with very few images (they may be dropped if drop_last=True)
+        dropped_images = 0
+        for bucket, indices in self.bucket_indices.items():
+            if drop_last and len(indices) < batch_size:
+                dropped_images += len(indices)
+                log.warning(
+                    f"Bucket {bucket[0]}x{bucket[1]}: only {len(indices)} images "
+                    f"(< batch_size={batch_size}), these images will be EXCLUDED from training"
+                )
+
         # Pre-compute total batches
         self._total_batches = 0
         for indices in self.bucket_indices.values():
             n = len(indices) // batch_size if drop_last else math.ceil(len(indices) / batch_size)
             self._total_batches += n
 
+        total_images = sum(len(v) for v in self.bucket_indices.values())
         log.info(
             f"Bucket sampler: {len(self.bucket_indices)} buckets, "
-            f"{sum(len(v) for v in self.bucket_indices.values())} images, "
+            f"{total_images} images, "
             f"{self._total_batches} batches (batch_size={batch_size})"
         )
+        if dropped_images > 0:
+            log.warning(
+                f"Bucket sampler: {dropped_images}/{total_images} images excluded "
+                f"due to drop_last=True. Set drop_last=False to include all images."
+            )
         for bucket, indices in sorted(self.bucket_indices.items()):
             log.debug(f"  Bucket {bucket[0]}x{bucket[1]}: {len(indices)} images")
 

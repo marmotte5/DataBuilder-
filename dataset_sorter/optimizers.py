@@ -123,10 +123,18 @@ class SOAP(Optimizer):
         return loss
 
     def _update_preconditioner(self, grad: torch.Tensor, state: dict):
-        """Update eigenvector estimates via power iteration on GG^T."""
+        """Update eigenvector estimates via power iteration on GG^T.
+
+        Skips dimensions exceeding max_precond_dim to avoid OOM from
+        large covariance matrices and expensive eigendecompositions.
+        """
         Q_list = state["Q"]
+        max_dim = self.defaults.get("max_precond_dim", 2048)
         for i, Q in enumerate(Q_list):
             if Q is None:
+                continue
+            # Skip dimensions too large for efficient eigendecomposition
+            if grad.shape[i] > max_dim:
                 continue
             # Compute the i-th mode unfolding's covariance estimate
             # Move dim i to front, reshape to 2D

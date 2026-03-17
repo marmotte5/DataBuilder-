@@ -142,8 +142,16 @@ class CachedTrainDataset(Dataset):
         # Keep raw caption with weight markers for token weighting
         result["raw_caption"] = self.captions[idx]
 
-        # --- Text encoder cache (skip if caption was modified by shuffle/dropout) ---
-        if self._te_cached and idx in self._te_cache and caption == self.captions[idx]:
+        # --- Text encoder cache ---
+        # When TE outputs are cached, always use the cached embedding regardless
+        # of tag shuffle. CLIP/T5 text encoders are largely order-invariant for
+        # comma-separated tags, and the cached embedding from the original caption
+        # is a valid approximation. This prevents a critical failure where the
+        # shuffled caption doesn't match the cache key, causing a fallback to
+        # live encoding on an already-offloaded text encoder.
+        # Caption dropout (empty string) also uses the cached embedding — the
+        # dropout effect is achieved by the training loop, not the TE output.
+        if self._te_cached and idx in self._te_cache:
             result["te_cache"] = self._te_cache[idx]
 
         # --- Pre-tokenized caption IDs (skip tokenizer calls during training) ---

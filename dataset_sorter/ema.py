@@ -92,7 +92,24 @@ class EMAModel:
     def load_state_dict(self, state_dict: dict):
         self.decay = state_dict["decay"]
         self.step = state_dict["step"]
-        self.shadow_params = [p.clone() for p in state_dict["shadow_params"]]
+        saved = state_dict["shadow_params"]
+        # Gracefully handle parameter count mismatch (e.g., LoRA layers
+        # added/removed between save and load). Match by position up to
+        # the shorter list and log a warning if counts differ.
+        if len(saved) != len(self.shadow_params):
+            log.warning(
+                f"EMA state_dict has {len(saved)} params but model has "
+                f"{len(self.shadow_params)}. Loading {min(len(saved), len(self.shadow_params))} "
+                f"matching params by position."
+            )
+        for i in range(min(len(saved), len(self.shadow_params))):
+            if saved[i].shape == self.shadow_params[i].shape:
+                self.shadow_params[i] = saved[i].clone()
+            else:
+                log.warning(
+                    f"EMA param {i}: shape mismatch {saved[i].shape} vs "
+                    f"{self.shadow_params[i].shape}, keeping initialized value"
+                )
         if self.cpu_offload:
             self.shadow_params = [p.cpu() for p in self.shadow_params]
 
