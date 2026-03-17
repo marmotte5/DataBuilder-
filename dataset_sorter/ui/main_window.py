@@ -342,9 +342,10 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.btn_auto_pipeline)
 
         bottom.addStretch()
-        self.btn_export = QPushButton("Export Dataset")
+        self.btn_export = QPushButton("Export Project")
         self.btn_export.setToolTip(
-            "Copy your images into organized bucket folders in the output directory.\n"
+            "Create a full project folder with dataset, models, samples, and more.\n"
+            "Images are organized into bucket folders with automatic repeats.\n"
             "Your original files are never touched — only copies are made. (Shortcut: Ctrl+E)"
         )
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
@@ -1378,14 +1379,17 @@ class MainWindow(QMainWindow):
         if not ok:
             QMessageBox.warning(self, "Error", msg)
             return
+        from dataset_sorter.workers import compute_repeats
         bucket_counts: Counter = Counter()
         for e in self.entries:
             bucket_counts[e.assigned_bucket] += 1
+        max_bucket = max(bucket_counts.keys()) if bucket_counts else 1
         summary = []
         for bn in sorted(bucket_counts):
             name = self.bucket_names.get(bn, "bucket")
-            folder = f"{bn}_{sanitize_folder_name(name)}"
-            summary.append((folder, name, bucket_counts[bn]))
+            repeats = compute_repeats(bn, max_bucket)
+            folder = f"{repeats}_{bn}_{sanitize_folder_name(name)}"
+            summary.append((folder, name, bucket_counts[bn], repeats))
         unused = MAX_BUCKETS - len(bucket_counts)
         dialog = DryRunDialog(summary, sum(bucket_counts.values()), unused, self)
         dialog.exec()

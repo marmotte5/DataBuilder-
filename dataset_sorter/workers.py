@@ -7,21 +7,68 @@ Optimized for 1M+ image datasets.
 Export uses ThreadPoolExecutor for parallel file copying (3-5x speedup on SSDs).
 """
 
+import json
 import logging
+import math
 import os
 import shutil
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS
+from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS, MAX_BUCKETS
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.utils import is_path_inside, sanitize_folder_name
 
 log = logging.getLogger(__name__)
+
+# ── Project folder layout ────────────────────────────────────────────
+PROJECT_SUBDIRS = [
+    "dataset",       # Exported images organized into bucket folders
+    "models",        # Trained model outputs / final weights
+    "samples",       # Sample images generated during training
+    "checkpoints",   # Step/epoch checkpoint saves
+    "backups",       # Full project backups
+    "logs",          # Training logs
+    ".cache",        # Latent / text encoder caches
+]
+
+
+def compute_repeats(bucket_num: int, max_bucket: int, min_repeats: int = 1,
+                    max_repeats: int = 20) -> int:
+    """Compute repeat count for a bucket based on its rarity.
+
+    Rare buckets (high number) get more repeats so the model sees them
+    as often as common ones.  Uses a linear scale:
+        bucket 1  → min_repeats  (most common, least repetition)
+        max_bucket → max_repeats  (rarest, most repetition)
+    """
+    if max_bucket <= 1:
+        return min_repeats
+    t = (bucket_num - 1) / (max_bucket - 1)  # 0..1
+    return max(min_repeats, min(max_repeats, round(min_repeats + t * (max_repeats - min_repeats))))
+
+
+def create_project_structure(output_dir: Path) -> None:
+    """Create the standard project directory tree."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for subdir in PROJECT_SUBDIRS:
+        (output_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    info_path = output_dir / "project.json"
+    if not info_path.exists():
+        info = {
+            "created": datetime.now().isoformat(),
+            "version": 1,
+        }
+        try:
+            info_path.write_text(json.dumps(info, indent=2))
+        except OSError:
+            pass
 
 # Chunk size for submitting futures (avoids 1M-entry dict)
 _SCAN_CHUNK = 5000
@@ -262,6 +309,10 @@ class ExportWorker(QThread):
 
         self.status.emit("Preparing export...")
 
+        # Create full project folder structure
+        create_project_structure(self.output_dir)
+        dataset_dir = self.output_dir / "dataset"
+
         copied = 0
         errors = 0
         error_log: list[str] = []
@@ -273,13 +324,17 @@ class ExportWorker(QThread):
 
         total = len(self._snapshots)
 
-        # Pre-create all bucket directories
+        # Compute repeats based on rarity (highest active bucket = rarest)
+        max_bucket = max(bucket_entries.keys()) if bucket_entries else 1
+
+        # Pre-create all bucket directories inside dataset/
         bucket_folders: dict[int, Path | None] = {}
         for bucket_num in sorted(bucket_entries.keys()):
             bname = sanitize_folder_name(self.bucket_names.get(bucket_num, "bucket"))
-            folder_name = f"{bucket_num}_{bname}"
-            folder_path = self.output_dir / folder_name
-            if is_path_inside(folder_path, self.output_dir):
+            repeats = compute_repeats(bucket_num, max_bucket)
+            folder_name = f"{repeats}_{bucket_num}_{bname}"
+            folder_path = dataset_dir / folder_name
+            if is_path_inside(folder_path, dataset_dir):
                 folder_path.mkdir(parents=True, exist_ok=True)
                 bucket_folders[bucket_num] = folder_path
             else:
@@ -349,7 +404,7 @@ class ExportWorker(QThread):
 
         if error_log:
             try:
-                (self.output_dir / "export_errors.log").write_text(
+                (self.output_dir / "logs" / "export_errors.log").write_text(
                     "\n".join(error_log), encoding="utf-8",
                 )
             except OSError:

@@ -13,10 +13,13 @@ class DryRunDialog(QDialog):
     """Shows export summary before execution."""
 
     def __init__(self, bucket_summary, total_images, hidden_empty, parent=None):
-        """Build the dry-run dialog showing a table of bucket assignments and image counts."""
+        """Build the dry-run dialog showing a table of bucket assignments and image counts.
+
+        bucket_summary: list of (folder, name, count, repeats) tuples.
+        """
         super().__init__(parent)
-        self.setWindowTitle("Export Preview — What Will Be Created")
-        self.setMinimumSize(580, 480)
+        self.setWindowTitle("Export Preview — Project Structure")
+        self.setMinimumSize(640, 520)
         self.accepted_export = False
 
         layout = QVBoxLayout(self)
@@ -31,16 +34,20 @@ class DryRunDialog(QDialog):
         layout.addWidget(info)
 
         explain = QLabel(
-            "Below is a preview of how your images will be sorted into folders. "
-            "Click \"Start Export\" to create the folders, or \"Cancel\" to go back and make changes."
+            "Your output folder becomes a full project directory:\n"
+            "  dataset/  — images in bucket folders with automatic repeats\n"
+            "  models/   — trained model outputs\n"
+            "  samples/  — sample images during training\n"
+            "  checkpoints/ · backups/ · logs/\n\n"
+            "Rare buckets get more repeats so the model trains on them equally."
         )
         explain.setWordWrap(True)
         explain.setStyleSheet(MUTED_LABEL_STYLE)
         layout.addWidget(explain)
 
         table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Folder Path", "Bucket Name", "Number of Images"])
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Folder Path", "Bucket Name", "Images", "Repeats"])
         table.setRowCount(len(bucket_summary))
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().setVisible(False)
@@ -50,13 +57,19 @@ class DryRunDialog(QDialog):
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
-        for row, (folder, name, count) in enumerate(bucket_summary):
-            table.setItem(row, 0, QTableWidgetItem(folder))
+        for row, entry in enumerate(bucket_summary):
+            folder, name, count = entry[0], entry[1], entry[2]
+            repeats = entry[3] if len(entry) > 3 else 1
+            table.setItem(row, 0, QTableWidgetItem(f"dataset/{folder}"))
             table.setItem(row, 1, QTableWidgetItem(name))
             ci = QTableWidgetItem(str(count))
             ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             table.setItem(row, 2, ci)
+            ri = QTableWidgetItem(f"{repeats}x")
+            ri.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(row, 3, ri)
         layout.addWidget(table, 1)
 
         if hidden_empty > 0:

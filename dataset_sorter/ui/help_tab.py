@@ -181,10 +181,15 @@ class HelpTab(QWidget):
 
         layout.addWidget(_step_card("6", "Export Your Dataset",
             "When you're happy with your tags and settings:\n"
-            "1. Click \"Dry Run\" to preview the bucket organization\n"
-            "2. Click \"Export\" to create the organized dataset in your output folder\n\n"
-            "The export copies images into numbered bucket folders — your originals "
-            "are never touched!"
+            "1. Click \"Dry Run\" to preview the bucket organization and repeats\n"
+            "2. Click \"Export\" to create a full project folder\n\n"
+            "The output folder becomes a project directory:\n"
+            "  dataset/  — images in bucket folders with automatic repeats\n"
+            "  models/   — trained model outputs\n"
+            "  samples/  — sample images during training\n"
+            "  checkpoints/ - backups/ - logs/\n\n"
+            "Rare buckets get more repeats so the model sees them equally. "
+            "Your originals are never touched!"
         ))
 
         # ── Key Concepts ──

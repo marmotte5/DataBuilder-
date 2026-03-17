@@ -866,6 +866,20 @@ class Trainer:
 
         # Final save
         self._save_checkpoint("final")
+
+        # Copy final model to models/ for easy access
+        final_ckpt = self.output_dir / "checkpoints" / "final"
+        models_dir = self.output_dir / "models"
+        if final_ckpt.exists() and models_dir.exists():
+            try:
+                final_model = models_dir / "final"
+                if final_model.exists():
+                    shutil.rmtree(final_model)
+                shutil.copytree(str(final_ckpt), str(final_model))
+                log.info(f"Final model copied to {final_model}")
+            except OSError as e:
+                log.warning(f"Could not copy final model to models/: {e}")
+
         if sample_fn:
             self._generate_samples(sample_fn)
 
@@ -1304,33 +1318,27 @@ class Trainer:
     # ── Project Folder Structure ──────────────────────────────────────────
 
     def _create_project_folders(self, output_dir: Path):
-        """Create the standard project directory tree."""
-        output_dir.mkdir(parents=True, exist_ok=True)
+        """Create the standard project directory tree.
 
-        folders = [
-            output_dir / "checkpoints",     # Step/epoch saves
-            output_dir / "samples",          # Generated sample images
-            output_dir / "backups",          # Full project backups
-            output_dir / "logs",             # Training logs
-            output_dir / ".cache",           # Latent / TE caches
-        ]
-        for folder in folders:
-            folder.mkdir(parents=True, exist_ok=True)
+        Uses the shared project layout so export and training share the
+        same folder structure (dataset/, models/, samples/, etc.).
+        """
+        from dataset_sorter.workers import create_project_structure
+        create_project_structure(output_dir)
 
-        # Write a project info file
+        # Enrich project.json with training-specific info
         info_path = output_dir / "project.json"
-        if not info_path.exists():
-            info = {
-                "created": datetime.now().isoformat(),
+        try:
+            existing = json.loads(info_path.read_text()) if info_path.exists() else {}
+            existing.update({
                 "model_type": self.config.model_type,
                 "resolution": self.config.resolution,
                 "optimizer": self.config.optimizer,
                 "lora_rank": self.config.lora_rank,
-            }
-            try:
-                info_path.write_text(json.dumps(info, indent=2))
-            except OSError as e:
-                log.warning(f"Could not write project.json: {e}")
+            })
+            info_path.write_text(json.dumps(existing, indent=2))
+        except OSError as e:
+            log.warning(f"Could not write project.json: {e}")
 
         log.info(f"Project folders ready at {output_dir}")
 
