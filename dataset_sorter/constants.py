@@ -226,6 +226,14 @@ ZIMAGE_EXCLUSIVE_OPTS = {
     "zimage_velocity_weighting": "Straight-Path Velocity Weighting — emphasize informative timesteps",
 }
 
+# Z-Image advanced inventions (hardware-aware + algorithmic).
+ZIMAGE_INVENTIONS = {
+    "zimage_l2_attention":      "L2-Pinned Attention — text tokens stay in 72MB L2 cache (RTX 4090)",
+    "zimage_speculative_grad":  "Speculative Gradient — lookahead predictor, ~30% larger effective LR",
+    "zimage_stream_bending":    "Stream-Bending Bias — learnable text→image attention gravity",
+    "zimage_timestep_bandit":   "Timestep Bandit — Thompson Sampling, targets hardest noise levels",
+}
+
 # ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
 MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"

@@ -780,6 +780,23 @@ class Trainer:
         if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
             trainable_params += [p for p in self.backend.text_encoder_2.parameters() if p.requires_grad]
 
+        # ── Z-Image Advanced Inventions (need trainable_params) ──
+        _speculative_predictor = None
+        if getattr(self.backend, 'model_name', '') == 'zimage':
+            _any_invention = any([
+                config.zimage_l2_attention, config.zimage_speculative_grad,
+                config.zimage_stream_bending, config.zimage_timestep_bandit,
+            ])
+            if _any_invention:
+                from dataset_sorter.zimage_inventions import apply_zimage_inventions
+                inv_results = apply_zimage_inventions(
+                    self.backend, config, trainable_params,
+                )
+                _speculative_predictor = inv_results.get("speculative_grad")
+                active = [k for k, v in inv_results.items() if v]
+                if active:
+                    log.info(f"Z-Image inventions: {', '.join(active)}")
+
         for epoch in range(self.state.epoch, config.epochs):
             if not self.state.running:
                 break
@@ -830,6 +847,10 @@ class Trainer:
                 if self._async_optimizer is not None:
                     self._async_optimizer.sync()
 
+                # ── Speculative gradient: pre-apply predicted step ──
+                if _speculative_predictor is not None:
+                    _speculative_predictor.speculate()
+
                 # ── Forward + loss ──
                 if _zero_loader is not None:
                     # Zero-bottleneck path: data already on GPU, skip _training_step
@@ -865,6 +886,10 @@ class Trainer:
                     self.grad_scaler.scale(loss).backward()
                 else:
                     loss.backward()
+
+                # ── Speculative gradient: correct prediction after backward ──
+                if _speculative_predictor is not None:
+                    _speculative_predictor.correct(self.optimizer)
 
                 running_loss += loss.item()
 

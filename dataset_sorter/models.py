@@ -206,6 +206,18 @@ class TrainingConfig:
     logit_normal_sigma: float = 1.0        # Logit-normal scale (0.5=aggressive, 1.0=standard)
     zimage_velocity_weighting: bool = False # Straight-path velocity loss weighting
 
+    # ── Z-Image Advanced Inventions ────────────────────────────────
+    zimage_l2_attention: bool = False       # L2-pinned attention (text tokens stay in L2 cache)
+    zimage_speculative_grad: bool = False   # Speculative gradient stepping (lookahead predictor)
+    speculative_lookahead_alpha: float = 0.3  # Fraction of predicted step to pre-apply
+    speculative_ema_beta: float = 0.95      # EMA decay for gradient direction prediction
+    speculative_boost_factor: float = 1.3   # LR boost when speculation is accurate
+    zimage_stream_bending: bool = False     # Stream-bending attention bias (text gravity)
+    stream_bending_gravity: float = 0.5     # Initial text→image attention bias strength
+    zimage_timestep_bandit: bool = False    # Thompson Sampling timestep selection
+    bandit_num_buckets: int = 20            # Number of timestep buckets for bandit
+    bandit_exploration: float = 1.0         # Exploration bonus (higher = more exploration)
+
     # ── Curriculum Learning ──────────────────────────────────────────
     curriculum_learning: bool = False       # Loss-based adaptive image sampling
     curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)

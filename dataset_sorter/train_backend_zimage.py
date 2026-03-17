@@ -293,7 +293,10 @@ class ZImageBackend(TrainBackendBase):
         config = self.config
 
         # Adaptive timestep sampling (shared with other flow models)
-        if self._timestep_ema_sampler is not None:
+        if getattr(self, '_timestep_bandit', None) is not None:
+            # Z-exclusive: Thompson Sampling bandit (most advanced option)
+            u = self._timestep_bandit.sample_timesteps(batch_size)
+        elif self._timestep_ema_sampler is not None:
             discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
             u = discrete_ts.float() / 1000.0
         elif getattr(self, '_logit_normal_sampler', None) is not None:
@@ -373,5 +376,12 @@ class ZImageBackend(TrainBackendBase):
                     sample_weight = sample_weight.unsqueeze(-1)
                 loss = loss * sample_weight
             self._token_weight_mask = None
+
+        # Z-exclusive: update timestep bandit with observed losses
+        if getattr(self, '_timestep_bandit', None) is not None:
+            per_sample = loss.detach()
+            if per_sample.dim() > 1:
+                per_sample = per_sample.flatten(1).mean(1)
+            self._timestep_bandit.update(t.detach(), per_sample)
 
         return loss.mean()
