@@ -285,15 +285,16 @@ class ExportWorker(QThread):
             else:
                 bucket_folders[bucket_num] = None
 
-        # Build flat list of export tasks
-        export_tasks: list[tuple] = []  # (image_path, txt_path, tags, folder_path)
+        # Build flat list of export tasks with sequential index per bucket
+        export_tasks: list[tuple] = []  # (image_path, txt_path, tags, folder_path, new_name)
         for bucket_num, b_entries in sorted(bucket_entries.items()):
             folder_path = bucket_folders.get(bucket_num)
             if folder_path is None:
                 errors += len(b_entries)
                 continue
-            for image_path, txt_path, tags, _ in b_entries:
-                export_tasks.append((image_path, txt_path, tags, folder_path))
+            for file_index, (image_path, txt_path, tags, _) in enumerate(b_entries, start=1):
+                new_name = f"{bucket_num}_{file_index:04d}{image_path.suffix}"
+                export_tasks.append((image_path, txt_path, tags, folder_path, new_name))
 
         if not export_tasks:
             self.progress.emit(total, total)
@@ -305,9 +306,9 @@ class ExportWorker(QThread):
 
         def _export_one(task: tuple) -> tuple[bool, str]:
             """Export a single image+txt pair. Returns (success, error_msg)."""
-            image_path, txt_path, tags, folder_path = task
+            image_path, txt_path, tags, folder_path, new_name = task
             try:
-                dest_img = _unique_dest(folder_path, image_path.name)
+                dest_img = _unique_dest(folder_path, new_name)
                 if not is_path_inside(dest_img, output_dir):
                     return False, f"{image_path}: dest outside output dir"
                 shutil.copy2(str(image_path), str(dest_img))
