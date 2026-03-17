@@ -404,7 +404,6 @@ def recommend(
 
     # Warmup
     config.warmup_steps = max(10, min(config.total_steps // 10, 200))
-    config.lr_warmup_ratio = config.warmup_steps / max(config.total_steps, 1)
 
     # --- Scheduler ---
     if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):

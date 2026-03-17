@@ -26,7 +26,6 @@ class TrainingConfig:
     # ── Learning ───────────────────────────────────────────────────────
     learning_rate: float = 1e-4
     lr_scheduler: str = "cosine"
-    lr_warmup_ratio: float = 0.1    # Fraction of total steps
 
     # ── Text encoder ───────────────────────────────────────────────────
     text_encoder_lr: float = 5e-5
@@ -114,14 +113,12 @@ class TrainingConfig:
     tag_shuffle: bool = True        # Shuffle tags in captions each epoch
     keep_first_n_tags: int = 1      # Keep first N tags in order (trigger word)
     caption_dropout_rate: float = 0.0
-    caption_dropout_every_n_epochs: int = 0  # Alternate: drop every N epochs
     random_crop: bool = False       # Random crop vs center crop
     flip_augmentation: bool = False # Horizontal flip augmentation
     color_augmentation: bool = False
 
     # ── Sampling ───────────────────────────────────────────────────────
     sample_every_n_steps: int = 50
-    sample_every_n_epochs: int = 0
     sample_prompts: list[str] = field(default_factory=list)
     sample_sampler: str = "euler_a"
     sample_steps: int = 28
@@ -226,7 +223,6 @@ class TrainingConfig:
     timestep_ema_num_buckets: int = 20     # Number of timestep buckets for EMA tracking
 
     # ── Regularization ─────────────────────────────────────────────────
-    prior_loss_weight: float = 1.0  # DreamBooth prior preservation
     max_grad_norm: float = 1.0      # Gradient clipping
 
     # ── Smart Resume ─────────────────────────────────────────────────
