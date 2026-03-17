@@ -38,7 +38,7 @@ GENERIC_TAGS = frozenset({
     "highres", "absurdres", "commentary", "commentary request",
     "translated", "translation request", "bad id", "bad pixiv id",
     "bad tumblr id", "bad twitter id", "bad deviantart id",
-    "watermark", "web address", "signature", "artist name",
+    "artist name",
     "dated", "username", "patreon username", "twitter username",
     "sample", "revision", "third-party edit", "image sample",
     "official art", "scan", "novel illustration", "game cg",

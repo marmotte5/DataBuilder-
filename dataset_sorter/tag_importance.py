@@ -105,7 +105,7 @@ _GENERIC_TAGS = frozenset({
 _NOISE_TAGS = frozenset({
     "low quality", "worst quality", "normal quality",
     "jpeg artifacts", "compression artifacts",
-    "watermark", "web address", "signature", "artist name",
+    "artist name",
     "dated", "username", "patreon username", "twitter username",
     "commentary", "commentary request", "translated", "translation request",
     "bad id", "bad pixiv id", "bad tumblr id", "bad twitter id",
