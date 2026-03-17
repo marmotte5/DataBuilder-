@@ -206,13 +206,18 @@ class TrainingWorker(QThread):
         self.phase_changed.emit("rlhf_collecting")
 
         try:
-            prompts = self.config.sample_prompts or ["a photo"]
+            # Snapshot config fields under lock to avoid race with main thread
+            with self._config_lock:
+                prompts = list(self.config.sample_prompts) if self.config.sample_prompts else ["a photo"]
+                num_pairs = self.config.rlhf_pairs_per_round
+                num_steps = self.config.sample_steps
+                cfg_scale = self.config.sample_cfg_scale
             candidates = generate_candidate_pairs(
                 backend=self.trainer.backend,
                 prompts=prompts,
-                num_pairs=self.config.rlhf_pairs_per_round,
-                num_steps=self.config.sample_steps,
-                cfg_scale=self.config.sample_cfg_scale,
+                num_pairs=num_pairs,
+                num_steps=num_steps,
+                cfg_scale=cfg_scale,
             )
             if candidates:
                 self.rlhf_candidates_ready.emit(candidates, round_idx)
@@ -263,8 +268,11 @@ class TrainingWorker(QThread):
 
         with self._config_lock:
             self.config.rlhf_dpo_rounds += 1
+        # Snapshot total_steps via reference to avoid TOCTOU race
+        t = self.trainer
+        total = t.total_steps if t else 0
         self.progress.emit(
-            step, self.trainer.total_steps,
+            step, total,
             f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
         )
 
@@ -285,7 +293,9 @@ class TrainingWorker(QThread):
 
         # Check RLHF collection trigger (called from training loop on
         # worker thread — no QTimer/event loop needed).
-        if self.config.rlhf_enabled:
+        with self._config_lock:
+            rlhf_on = self.config.rlhf_enabled
+        if rlhf_on:
             t = self.trainer
             if t and t.state.running and t._rlhf_collect.is_set():
                 t._rlhf_collect.clear()
