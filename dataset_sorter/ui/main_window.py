@@ -148,210 +148,197 @@ class MainWindow(QMainWindow):
             show_toast(central, text, variant, duration_ms)
 
     def _build_ui(self):
-        """Construct all widgets: top path bar, scan controls, security banner, splitter panels, and bottom bar."""
+        """Construct all widgets: compact top bar, 2-column layout, action bar."""
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(10)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
 
-        # ── Workflow guide banner ──
-        self.workflow_banner = QLabel(
-            "How to use:  "
-            "1. Choose your image folder below  "
-            "2. Click \"Scan\" to find all images and tags  "
-            "3. Review and edit tags in the panels below  "
-            "4. Click \"Export\" to save your organized dataset"
-        )
-        self.workflow_banner.setStyleSheet(
-            f"background-color: {COLORS['accent_subtle']}; "
-            f"color: {COLORS['accent_hover']}; "
-            f"border: 1px solid {COLORS['accent']}; border-radius: 10px; "
-            f"padding: 10px 18px; font-size: 12px; font-weight: 600;"
-        )
-        self.workflow_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.workflow_banner.setWordWrap(True)
-        root.addWidget(self.workflow_banner)
-
-        # Top bar — paths (drag-and-drop enabled)
-        top = QHBoxLayout()
-        top.setSpacing(10)
-        src_label = self._label("Source Folder")
-        src_label.setToolTip("Where your images and .txt tag files are stored")
-        top.addWidget(src_label)
-        self.source_input = DragDropLineEdit()
-        self.source_input.setPlaceholderText("Your image folder — drag & drop or click Browse...")
-        self.source_input.setToolTip(
-            "The folder containing your training images (.png, .jpg, .webp) "
-            "and their text description files (.txt). You can drag a folder here."
-        )
-        top.addWidget(self.source_input, 2)
-        btn_src = QPushButton("Browse")
-        btn_src.setToolTip("Open a folder picker to choose your image folder")
-        btn_src.clicked.connect(self._browse_source)
-        top.addWidget(btn_src)
-        out_label = self._label("Output Folder")
-        out_label.setToolTip("Where the organized dataset will be created (your originals are never changed)")
-        top.addWidget(out_label)
-        self.output_input = DragDropLineEdit()
-        self.output_input.setPlaceholderText("Where to save results — drag & drop or click Browse...")
-        self.output_input.setToolTip(
-            "An empty folder where the organized dataset will be exported. "
-            "Images are copied here — your originals stay untouched."
-        )
-        top.addWidget(self.output_input, 2)
-        btn_out = QPushButton("Browse")
-        btn_out.setToolTip("Open a folder picker to choose the output folder")
-        btn_out.clicked.connect(self._browse_output)
-        top.addWidget(btn_out)
-
-        # Theme toggle
+        # ── Step indicator bar ──
+        self._step_indicators = []
+        step_bar = QHBoxLayout()
+        step_bar.setSpacing(4)
+        steps = [
+            ("1. Folders", "Set source and output folders"),
+            ("2. Scan", "Read images and tags"),
+            ("3. Edit", "Review, clean, and organize tags"),
+            ("4. Export", "Save organized dataset"),
+        ]
+        for i, (label, tip) in enumerate(steps):
+            step_lbl = QLabel(label)
+            step_lbl.setToolTip(tip)
+            step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            active = i == 0
+            step_lbl.setStyleSheet(
+                f"background-color: {COLORS['accent'] if active else COLORS['surface']}; "
+                f"color: {'white' if active else COLORS['text_muted']}; "
+                f"border-radius: 6px; padding: 5px 14px; "
+                f"font-size: 11px; font-weight: {'700' if active else '500'};"
+            )
+            step_bar.addWidget(step_lbl)
+            self._step_indicators.append(step_lbl)
+        step_bar.addStretch()
         self.btn_theme = QPushButton("Light")
-        self.btn_theme.setToolTip("Switch between dark and light appearance (Ctrl+T)")
-        self.btn_theme.setMaximumWidth(60)
+        self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
+        self.btn_theme.setMaximumWidth(55)
+        self.btn_theme.setStyleSheet(
+            f"QPushButton {{ padding: 5px 10px; font-size: 11px; "
+            f"border-radius: 6px; }}"
+        )
         self.btn_theme.clicked.connect(self._toggle_theme)
-        top.addWidget(self.btn_theme)
+        step_bar.addWidget(self.btn_theme)
+        root.addLayout(step_bar)
 
-        root.addLayout(top)
+        # ── Compact path bar — single row ──
+        path_bar = QHBoxLayout()
+        path_bar.setSpacing(6)
+        src_lbl = QLabel("Source")
+        src_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 600; "
+            f"font-size: 11px; background: transparent;"
+        )
+        path_bar.addWidget(src_lbl)
+        self.source_input = DragDropLineEdit()
+        self.source_input.setPlaceholderText("Image folder (drag & drop)...")
+        self.source_input.setToolTip(
+            "Folder with training images (.png, .jpg, .webp) and .txt tag files."
+        )
+        path_bar.addWidget(self.source_input, 3)
+        btn_src = QPushButton("...")
+        btn_src.setMaximumWidth(32)
+        btn_src.setToolTip("Browse for source folder")
+        btn_src.clicked.connect(self._browse_source)
+        path_bar.addWidget(btn_src)
 
-        # Scan settings bar — workers, GPU, scan button, cancel button
-        scan_bar = QHBoxLayout()
-        scan_bar.setSpacing(8)
+        out_lbl = QLabel("Output")
+        out_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 600; "
+            f"font-size: 11px; background: transparent;"
+        )
+        path_bar.addWidget(out_lbl)
+        self.output_input = DragDropLineEdit()
+        self.output_input.setPlaceholderText("Output folder (drag & drop)...")
+        self.output_input.setToolTip("Where the organized dataset will be exported.")
+        path_bar.addWidget(self.output_input, 3)
+        btn_out = QPushButton("...")
+        btn_out.setMaximumWidth(32)
+        btn_out.setToolTip("Browse for output folder")
+        btn_out.clicked.connect(self._browse_output)
+        path_bar.addWidget(btn_out)
 
-        wlbl = QLabel("Scan Speed:")
-        wlbl.setToolTip("More workers = faster scanning on fast drives (SSD)")
-        wlbl.setStyleSheet(MUTED_LABEL_STYLE)
-        scan_bar.addWidget(wlbl)
+        # Scan controls inline with paths
         self.workers_spinner = QSpinBox()
         self.workers_spinner.setRange(1, 32)
         self.workers_spinner.setValue(DEFAULT_NUM_WORKERS)
-        self.workers_spinner.setToolTip(
-            "How many images to process at the same time.\n"
-            "Higher number = faster scanning, but uses more CPU.\n"
-            "Default (4) works well for most computers."
-        )
-        self.workers_spinner.setMaximumWidth(70)
-        scan_bar.addWidget(self.workers_spinner)
+        self.workers_spinner.setToolTip("Scan workers (higher = faster)")
+        self.workers_spinner.setMaximumWidth(55)
+        self.workers_spinner.setVisible(False)  # Hidden by default, shown via menu
+        path_bar.addWidget(self.workers_spinner)
 
-        self.gpu_checkbox = QCheckBox("GPU validation")
-        self.gpu_checkbox.setToolTip(
-            "Optional: Use your graphics card to check for corrupted images.\n"
-            "Leave unchecked if you're not sure — scanning works fine without it."
-        )
+        self.gpu_checkbox = QCheckBox("GPU")
+        self.gpu_checkbox.setToolTip("Use GPU for image validation")
         self.gpu_checkbox.setEnabled(self._gpu_available)
-        if not self._gpu_available:
-            self.gpu_checkbox.setToolTip(
-                "GPU not available. Install torch with CUDA (PC/Linux) or MPS (Mac) support to enable."
-            )
-        scan_bar.addWidget(self.gpu_checkbox)
-
-        scan_bar.addStretch()
+        self.gpu_checkbox.setVisible(False)  # Hidden by default
+        path_bar.addWidget(self.gpu_checkbox)
 
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setToolTip("Stop the current scanning or exporting process (Escape)")
         self.btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_cancel.setVisible(False)
         self.btn_cancel.clicked.connect(self._cancel_operation)
-        scan_bar.addWidget(self.btn_cancel)
+        path_bar.addWidget(self.btn_cancel)
 
-        self.btn_scan = QPushButton("Scan Images")
-        self.btn_scan.setToolTip(
-            "Read all images and tags from your source folder.\n"
-            "This is always the first step! (Shortcut: Ctrl+R)"
-        )
+        self.btn_scan = QPushButton("Scan")
+        self.btn_scan.setToolTip("Read all images and tags (Ctrl+R)")
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_scan.clicked.connect(self._start_scan)
-        scan_bar.addWidget(self.btn_scan)
-        root.addLayout(scan_bar)
+        path_bar.addWidget(self.btn_scan)
 
-        # Security banner
-        banner = QLabel(
-            "Your files are safe! This app NEVER modifies, renames, moves, or "
-            "deletes your original images. Everything is saved to the output folder only."
-        )
-        banner.setStyleSheet(SECURITY_BANNER_STYLE)
-        banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        banner.setWordWrap(True)
-        root.addWidget(banner)
+        root.addLayout(path_bar)
 
-        # Progress
+        # Progress bar (hidden until needed)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         root.addWidget(self.progress_bar)
 
-        # Splitter
+        # ── Main content: 2-column layout (tags | everything else) ──
         splitter = QSplitter(Qt.Orientation.Horizontal)
+
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
-        self.override_panel = OverridePanel()
-        splitter.addWidget(self.override_panel)
 
+        # Right side: all functionality in tabs
         right_tabs = QTabWidget()
-
-        # Help tab first — so beginners see it immediately
-        self.help_tab = HelpTab()
-        right_tabs.addTab(self.help_tab, "Getting Started")
-        right_tabs.setTabToolTip(0, "New here? Start with this beginner-friendly guide!")
 
         self.preview_tab = PreviewTab()
         right_tabs.addTab(self.preview_tab, "Preview")
-        right_tabs.setTabToolTip(1, "See thumbnail images for the selected tag")
+        right_tabs.setTabToolTip(0, "Thumbnail preview for selected tag")
 
-        self.reco_tab = RecoTab()
-        right_tabs.addTab(self.reco_tab, "Recommendations")
-        right_tabs.setTabToolTip(2, "Get suggested training settings for your model and GPU")
+        self.override_panel = OverridePanel()
+        right_tabs.addTab(self.override_panel, "Edit Tags")
+        right_tabs.setTabToolTip(1, "Override buckets, delete/rename/merge tags")
 
         self.image_tab = ImageTab()
-        right_tabs.addTab(self.image_tab, "Image Browser")
-        right_tabs.setTabToolTip(3, "Browse through all your images one by one")
+        right_tabs.addTab(self.image_tab, "Images")
+        right_tabs.setTabToolTip(2, "Browse images one by one")
 
         self.dataset_tab = DatasetTab()
-        right_tabs.addTab(self.dataset_tab, "Dataset Analysis")
-        right_tabs.setTabToolTip(4, "Analyze tags, find duplicates, check spelling, and more")
+        right_tabs.addTab(self.dataset_tab, "Analysis")
+        right_tabs.setTabToolTip(3, "Captions, tokens, duplicates, tag quality")
+
+        self.reco_tab = RecoTab()
+        right_tabs.addTab(self.reco_tab, "Settings")
+        right_tabs.setTabToolTip(4, "Training parameter recommendations")
 
         self.training_tab = TrainingTab()
-        right_tabs.addTab(self.training_tab, "Training")
-        right_tabs.setTabToolTip(5, "Configure and run LoRA/model training directly")
+        right_tabs.addTab(self.training_tab, "Train")
+        right_tabs.setTabToolTip(5, "Configure and run training")
 
         self.generate_tab = GenerateTab()
         right_tabs.addTab(self.generate_tab, "Generate")
-        right_tabs.setTabToolTip(6, "Test your trained model by generating images")
+        right_tabs.setTabToolTip(6, "Generate images with your model")
 
+        self.help_tab = HelpTab()
+        right_tabs.addTab(self.help_tab, "Help")
+        right_tabs.setTabToolTip(7, "Getting started guide")
+
+        self._right_tabs = right_tabs
         splitter.addWidget(right_tabs)
 
-        splitter.setSizes([500, 300, 400])
+        splitter.setSizes([350, 850])
         root.addWidget(splitter, 1)
 
-        # Bottom bar
-        bottom = QHBoxLayout()
-        self.btn_dry = QPushButton("Preview Export")
-        self.btn_dry.setToolTip(
-            "See a summary of how your images will be organized before exporting.\n"
-            "No files are created — it's just a preview. (Shortcut: Ctrl+D)"
-        )
-        self.btn_dry.clicked.connect(self._dry_run)
-        bottom.addWidget(self.btn_dry)
+        # ── Compact action bar ──
+        action_bar = QHBoxLayout()
+        action_bar.setSpacing(8)
 
-        self.btn_auto_pipeline = QPushButton("One-Click Pipeline")
-        self.btn_auto_pipeline.setToolTip(
-            "Automate everything: clean tags, optimize settings, and start training.\n"
-            "Great for beginners who want quick results without manual setup."
-        )
+        self.btn_dry = QPushButton("Preview Export")
+        self.btn_dry.setToolTip("Preview bucket organization (Ctrl+D)")
+        self.btn_dry.clicked.connect(self._dry_run)
+        action_bar.addWidget(self.btn_dry)
+
+        self.btn_auto_pipeline = QPushButton("Auto Pipeline")
+        self.btn_auto_pipeline.setToolTip("One-click: clean tags, optimize, train")
         self.btn_auto_pipeline.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_auto_pipeline.clicked.connect(self._open_auto_pipeline)
-        bottom.addWidget(self.btn_auto_pipeline)
+        action_bar.addWidget(self.btn_auto_pipeline)
 
-        bottom.addStretch()
-        self.btn_export = QPushButton("Export Project")
-        self.btn_export.setToolTip(
-            "Create a full project folder with dataset, models, samples, and more.\n"
-            "Images are organized into bucket folders with automatic repeats.\n"
-            "Your original files are never touched — only copies are made. (Shortcut: Ctrl+E)"
+        action_bar.addStretch()
+
+        # Inline stats
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
         )
+        action_bar.addWidget(self._status_label)
+
+        self.btn_export = QPushButton("Export Project")
+        self.btn_export.setToolTip("Export organized dataset (Ctrl+E)")
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_export.clicked.connect(self._start_export)
-        bottom.addWidget(self.btn_export)
-        root.addLayout(bottom)
+        action_bar.addWidget(self.btn_export)
+
+        root.addLayout(action_bar)
 
     def _label(self, text):
         """Create a styled muted label for form field headings."""
@@ -361,6 +348,38 @@ class MainWindow(QMainWindow):
             f"font-size: 12px; background: transparent;"
         )
         return lbl
+
+    def _update_step_indicator(self, active_step: int):
+        """Highlight the active workflow step (0-indexed)."""
+        for i, lbl in enumerate(self._step_indicators):
+            is_active = i == active_step
+            is_done = i < active_step
+            if is_active:
+                bg = COLORS['accent']
+                fg = "white"
+                weight = "700"
+            elif is_done:
+                bg = COLORS['success_bg']
+                fg = COLORS['success']
+                weight = "600"
+            else:
+                bg = COLORS['surface']
+                fg = COLORS['text_muted']
+                weight = "500"
+            lbl.setStyleSheet(
+                f"background-color: {bg}; color: {fg}; "
+                f"border-radius: 6px; padding: 5px 14px; "
+                f"font-size: 11px; font-weight: {weight};"
+            )
+
+    def _update_status_label(self):
+        """Update the inline stats in the action bar."""
+        n = len(self.entries)
+        if n > 0:
+            n_tags = len(self.tag_counts)
+            self._status_label.setText(f"{n:,} images  |  {n_tags:,} tags")
+        else:
+            self._status_label.setText("")
 
     def _connect_signals(self):
         """Wire all child-panel signals to their MainWindow handler slots."""
@@ -572,6 +591,7 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
+        self._update_step_indicator(1)  # Step 2: Scanning
 
         num_workers = self.workers_spinner.value()
         use_gpu = self.gpu_checkbox.isChecked() and self._gpu_available
@@ -641,6 +661,8 @@ class MainWindow(QMainWindow):
             f"{n_txt} txt files, {len(self.tag_counts)} unique tags."
         )
         self._toast(f"Scan complete — {len(self.entries)} images found", "success")
+        self._update_step_indicator(2)  # Step 3: Edit
+        self._update_status_label()
 
     # -- Tag index & buckets --
 

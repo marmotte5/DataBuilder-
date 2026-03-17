@@ -50,63 +50,79 @@ class DatasetTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        """Construct the tabbed layout with all dataset analysis sub-sections."""
+        """Construct grouped tabs: Captions, Tag Quality, Data Quality, Smart Tools."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(0)
 
         tabs = QTabWidget()
 
-        # 1. Caption Preview
+        # ── Tab 1: Captions & Tokens ──
+        # Combines caption preview, token counting, and augmentation
+        captions_container = QWidget()
+        captions_layout = QVBoxLayout(captions_container)
+        captions_layout.setContentsMargins(0, 0, 0, 0)
+        captions_inner = QTabWidget()
+        captions_inner.setDocumentMode(True)
+
         self.caption_section = CaptionPreviewSection()
-        tabs.addTab(self.caption_section, "Captions")
-        tabs.setTabToolTip(0, "Preview what your image captions look like after shuffling and dropout")
-
-        # 2. Token Counts
+        captions_inner.addTab(self.caption_section, "Preview")
         self.token_section = TokenCountSection()
-        tabs.addTab(self.token_section, "Token Counts")
-        tabs.setTabToolTip(1, "Check how long your captions are (models have token limits)")
+        captions_inner.addTab(self.token_section, "Tokens")
+        self.augmentation_section = AugmentationSection()
+        captions_inner.addTab(self.augmentation_section, "Augment")
+        captions_layout.addWidget(captions_inner)
 
-        # 3. Tag Histogram
+        tabs.addTab(captions_container, "Captions")
+        tabs.setTabToolTip(0, "Caption preview, token counts, and augmentation")
+
+        # ── Tab 2: Tag Quality ──
+        # Combines histogram, spell check, tag specificity, and tag importance
+        quality_container = QWidget()
+        quality_layout = QVBoxLayout(quality_container)
+        quality_layout.setContentsMargins(0, 0, 0, 0)
+        quality_inner = QTabWidget()
+        quality_inner.setDocumentMode(True)
+
         self.histogram_section = TagHistogramSection()
-        tabs.addTab(self.histogram_section, "Tag Chart")
-        tabs.setTabToolTip(2, "Visual chart showing how often each tag appears in your dataset")
-
-        # 4. Spell Check
+        quality_inner.addTab(self.histogram_section, "Frequency")
         self.spellcheck_section = SpellCheckSection()
         self.spellcheck_section.apply_fix.connect(self.apply_tag_fix.emit)
-        tabs.addTab(self.spellcheck_section, "Spell Check")
-        tabs.setTabToolTip(3, "Find and fix typos in your tags automatically")
-
-        # 5. Augmentation
-        self.augmentation_section = AugmentationSection()
-        tabs.addTab(self.augmentation_section, "Augmentation")
-        tabs.setTabToolTip(4, "Add variations to your images (flip, rotate, crop) to increase dataset size")
-
-        # 6. Duplicates
-        self.duplicate_section = DuplicateSection()
-        tabs.addTab(self.duplicate_section, "Find Duplicates")
-        tabs.setTabToolTip(5, "Detect duplicate or very similar images in your dataset")
-
-        # 7. Concept Coverage
-        self.concept_section = ConceptCoverageSection()
-        self.concept_section.navigate_to_image.connect(self.navigate_to_image.emit)
-        tabs.addTab(self.concept_section, "Concepts")
-        tabs.setTabToolTip(6, "See what concepts (subjects, styles) your dataset covers")
-
-        # 8. Tag Specificity
+        quality_inner.addTab(self.spellcheck_section, "Spelling")
         self.specificity_section = TagSpecificitySection()
         self.specificity_section.navigate_to_image.connect(self.navigate_to_image.emit)
-        tabs.addTab(self.specificity_section, "Tag Rarity")
-        tabs.setTabToolTip(7, "Analyze which tags are rare vs. common in your dataset")
+        quality_inner.addTab(self.specificity_section, "Rarity")
+        quality_layout.addWidget(quality_inner)
 
-        # 9. Tag Importance (smart concept-aware scoring)
+        tabs.addTab(quality_container, "Tag Quality")
+        tabs.setTabToolTip(1, "Tag frequency, spelling, and rarity analysis")
+
+        # ── Tab 3: Data Quality ──
+        # Combines duplicates and concept coverage
+        data_container = QWidget()
+        data_layout = QVBoxLayout(data_container)
+        data_layout.setContentsMargins(0, 0, 0, 0)
+        data_inner = QTabWidget()
+        data_inner.setDocumentMode(True)
+
+        self.duplicate_section = DuplicateSection()
+        data_inner.addTab(self.duplicate_section, "Duplicates")
+        self.concept_section = ConceptCoverageSection()
+        self.concept_section.navigate_to_image.connect(self.navigate_to_image.emit)
+        data_inner.addTab(self.concept_section, "Concepts")
+        data_layout.addWidget(data_inner)
+
+        tabs.addTab(data_container, "Data Quality")
+        tabs.setTabToolTip(2, "Find duplicates and analyze concept coverage")
+
+        # ── Tab 4: Smart Tools ──
+        # AI-powered tag importance and auto-bucketing
         self.importance_section = TagImportanceSection()
         self.importance_section.navigate_to_image.connect(self.navigate_to_image.emit)
         self.importance_section.apply_smart_buckets.connect(self.apply_smart_buckets.emit)
         self.importance_section.apply_tag_cleaning.connect(self.apply_importance_cleaning.emit)
-        tabs.addTab(self.importance_section, "Smart Sorting")
-        tabs.setTabToolTip(8, "AI-powered tag scoring and automatic bucket assignment")
+        tabs.addTab(self.importance_section, "Smart Sort")
+        tabs.setTabToolTip(3, "AI-powered tag scoring and automatic bucket assignment")
 
         layout.addWidget(tabs)
 

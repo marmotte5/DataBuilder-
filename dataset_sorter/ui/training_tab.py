@@ -243,16 +243,50 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         # Splitter: config (left) | logs+samples (right)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left: Configuration tabs
+        # Left: Configuration tabs (grouped for clarity)
         config_tabs = QTabWidget()
-        config_tabs.addTab(self._build_model_tab(), "Model")
-        config_tabs.addTab(self._build_optimizer_tab(), "Optimizer")
-        config_tabs.addTab(self._build_dataset_tab(), "Dataset")
+
+        # Core tab: Model + Optimizer combined
+        core_container = QWidget()
+        core_layout = QVBoxLayout(core_container)
+        core_layout.setContentsMargins(0, 0, 0, 0)
+        core_inner = QTabWidget()
+        core_inner.setDocumentMode(True)
+        core_inner.addTab(self._build_model_tab(), "Model")
+        core_inner.addTab(self._build_optimizer_tab(), "Optimizer")
+        core_layout.addWidget(core_inner)
+        config_tabs.addTab(core_container, "Core")
+        config_tabs.setTabToolTip(0, "Model architecture, LoRA, and optimizer settings")
+
+        # Dataset tab: Dataset + Sampling combined
+        data_container = QWidget()
+        data_layout = QVBoxLayout(data_container)
+        data_layout.setContentsMargins(0, 0, 0, 0)
+        data_inner = QTabWidget()
+        data_inner.setDocumentMode(True)
+        data_inner.addTab(self._build_dataset_tab(), "Data")
+        data_inner.addTab(self._build_sampling_tab(), "Sampling")
+        data_layout.addWidget(data_inner)
+        config_tabs.addTab(data_container, "Dataset")
+        config_tabs.setTabToolTip(1, "Dataset augmentation, captions, and sample generation")
+
+        # Advanced tab (standalone — already large)
         config_tabs.addTab(self._build_advanced_tab(), "Advanced")
-        config_tabs.addTab(self._build_sampling_tab(), "Sampling")
-        config_tabs.addTab(self._build_controlnet_tab(), "ControlNet")
-        config_tabs.addTab(self._build_dpo_tab(), "DPO")
-        config_tabs.addTab(self._build_rlhf_tab(), "RLHF")
+        config_tabs.setTabToolTip(2, "Memory, attention, noise, curriculum, and more")
+
+        # Extensions tab: ControlNet + DPO + RLHF combined
+        ext_container = QWidget()
+        ext_layout = QVBoxLayout(ext_container)
+        ext_layout.setContentsMargins(0, 0, 0, 0)
+        ext_inner = QTabWidget()
+        ext_inner.setDocumentMode(True)
+        ext_inner.addTab(self._build_controlnet_tab(), "ControlNet")
+        ext_inner.addTab(self._build_dpo_tab(), "DPO")
+        ext_inner.addTab(self._build_rlhf_tab(), "RLHF")
+        ext_layout.addWidget(ext_inner)
+        config_tabs.addTab(ext_container, "Extensions")
+        config_tabs.setTabToolTip(3, "ControlNet, DPO, and RLHF configuration")
+
         splitter.addWidget(config_tabs)
 
         # Right: Training output

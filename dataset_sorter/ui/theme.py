@@ -305,6 +305,17 @@ def get_stylesheet() -> str:
         font-size: 12px; font-weight: 600;
     }}
 
+    /* --- Collapsible Section Headers --- */
+    QPushButton[class="collapsible-header"] {{
+        background-color: {c['surface']}; color: {c['text']};
+        border: 1px solid {c['border']}; border-radius: 8px;
+        padding: 8px 14px; font-weight: 600; font-size: 12px;
+        text-align: left;
+    }}
+    QPushButton[class="collapsible-header"]:hover {{
+        background-color: {c['surface_hover']}; border-color: {c['accent']};
+    }}
+
     /* --- Tooltips --- */
     QToolTip {{
         background-color: {c['surface']}; color: {c['text']};
