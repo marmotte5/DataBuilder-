@@ -17,7 +17,20 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     """Create optimizer with proper parameter groups for different LR."""
     lr = config.learning_rate
 
-    if config.optimizer == "Adafactor":
+    if config.optimizer == "Marmotte":
+        from dataset_sorter.optimizers import Marmotte
+        opt = Marmotte(
+            param_groups, lr=lr, weight_decay=config.weight_decay,
+            momentum=config.marmotte_momentum,
+            agreement_boost=config.marmotte_agreement_boost,
+            disagreement_damp=config.marmotte_disagreement_damp,
+            error_feedback_alpha=config.marmotte_error_feedback_alpha,
+            grad_rms_beta=config.marmotte_grad_rms_beta,
+        )
+        ratio = opt.memory_usage_ratio()
+        log.info(f"Marmotte optimizer: {ratio:.1%} memory vs Adam ({1/max(ratio, 0.001):.0f}x savings)")
+        return opt
+    elif config.optimizer == "Adafactor":
         from transformers import Adafactor
         return Adafactor(
             param_groups, lr=lr, weight_decay=config.weight_decay,

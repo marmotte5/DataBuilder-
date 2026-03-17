@@ -69,6 +69,13 @@ class TrainingConfig:
     fused_backward_pass: bool = False   # Fuse backward + optimizer step (VRAM saver)
     stochastic_rounding: bool = False   # Stochastic rounding for bf16 weight updates
 
+    # Marmotte: Ultra-low memory optimizer (1-bit momentum + rank-1 error feedback)
+    marmotte_momentum: float = 0.9          # Momentum coefficient before 1-bit compression
+    marmotte_agreement_boost: float = 1.5   # Step boost when grad & momentum agree
+    marmotte_disagreement_damp: float = 0.5 # Step dampen when grad & momentum disagree
+    marmotte_error_feedback_alpha: float = 0.1  # EMA decay for rank-1 error update
+    marmotte_grad_rms_beta: float = 0.999   # EMA decay for gradient RMS tracking
+
     # GaLore: Gradient Low-Rank Projection (memory-efficient full-rank training)
     galore_rank: int = 0                # 0 = disabled; typical: 64-128
     galore_update_proj_gap: int = 200   # Re-project every N steps
