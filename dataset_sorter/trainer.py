@@ -73,41 +73,19 @@ def get_gpu_info() -> dict:
     return info
 
 
-_BACKEND_REGISTRY: dict[str, tuple[str, str]] = {
-    "sdxl": ("dataset_sorter.train_backend_sdxl", "SDXLBackend"),
-    "pony": ("dataset_sorter.train_backend_sdxl", "SDXLBackend"),
-    "sd15": ("dataset_sorter.train_backend_sd15", "SD15Backend"),
-    "flux": ("dataset_sorter.train_backend_flux", "FluxBackend"),
-    "flux2": ("dataset_sorter.train_backend_flux2", "Flux2Backend"),
-    "sd3": ("dataset_sorter.train_backend_sd3", "SD3Backend"),
-    "sd35": ("dataset_sorter.train_backend_sd35", "SD35Backend"),
-    "sd2": ("dataset_sorter.train_backend_sd2", "SD2Backend"),
-    "zimage": ("dataset_sorter.train_backend_zimage", "ZImageBackend"),
-    "pixart": ("dataset_sorter.train_backend_pixart", "PixArtBackend"),
-    "cascade": ("dataset_sorter.train_backend_cascade", "StableCascadeBackend"),
-    "hunyuan": ("dataset_sorter.train_backend_hunyuan", "HunyuanDiTBackend"),
-    "kolors": ("dataset_sorter.train_backend_kolors", "KolorsBackend"),
-    "auraflow": ("dataset_sorter.train_backend_auraflow", "AuraFlowBackend"),
-    "sana": ("dataset_sorter.train_backend_sana", "SanaBackend"),
-    "hidream": ("dataset_sorter.train_backend_hidream", "HiDreamBackend"),
-    "chroma": ("dataset_sorter.train_backend_chroma", "ChromaBackend"),
-}
+from dataset_sorter.backend_registry import get_registry as _get_backend_registry
 
 
 def _get_backend(config: TrainingConfig, device, dtype):
-    """Instantiate the correct model-specific backend."""
-    import importlib
-
+    """Instantiate the correct model-specific backend via the plugin registry."""
+    registry = _get_backend_registry()
     base_type = config.model_type.replace("_lora", "").replace("_full", "")
-    entry = _BACKEND_REGISTRY.get(base_type)
 
-    if entry is None:
-        log.warning(f"Unknown model type '{config.model_type}', falling back to SDXL backend")
-        entry = _BACKEND_REGISTRY["sdxl"]
+    # Pony uses the SDXL backend
+    if base_type == "pony":
+        base_type = "sdxl"
 
-    module = importlib.import_module(entry[0])
-    cls = getattr(module, entry[1])
-    return cls(config, device, dtype)
+    return registry.instantiate(base_type, config, device, dtype)
 
 
 @dataclass
@@ -471,6 +449,44 @@ class Trainer:
                 self.backend.text_encoder_2.to(self.device)
             if getattr(self.backend, "text_encoder_3", None) is not None:
                 self.backend.text_encoder_3.to(self.device)
+
+        # ── 8b. Memory-mapped dataset (replaces standard dataset loading) ──
+        if config.mmap_dataset and config.cache_latents and config.cache_text_encoder:
+            try:
+                from dataset_sorter.mmap_dataset import MMapCacheBuilder, SafetensorsMMapDataset
+                mmap_dir = output_dir / ".cache" / "mmap"
+                builder = MMapCacheBuilder(mmap_dir, dtype=self.dtype)
+                latents = [self.dataset[i].get("latents") for i in range(len(self.dataset))]
+                te_outs = [self.dataset[i].get("te_out", ()) for i in range(len(self.dataset))]
+                caps = [self.dataset[i].get("caption", "") for i in range(len(self.dataset))]
+                builder.build_safetensors_cache(latents, te_outs, caps)
+                mmap_ds = SafetensorsMMapDataset(
+                    mmap_dir, len(self.dataset), self.device, self.dtype,
+                    tag_shuffle=config.tag_shuffle,
+                    keep_first_n_tags=config.keep_first_n_tags,
+                    caption_dropout_rate=config.caption_dropout_rate,
+                )
+                mmap_ds.open()
+                self.dataset = mmap_ds
+                log.info(f"MMap dataset active: {len(self.dataset)} samples, zero-copy loading")
+            except Exception as e:
+                log.warning(f"MMap dataset setup failed, using standard dataset: {e}")
+
+        # ── 8c. Sequence packing setup (DiT models, variable-length batches) ──
+        self._sequence_packer = None
+        if config.sequence_packing:
+            try:
+                from dataset_sorter.sequence_packing import SequencePacker, is_packing_available
+                if is_packing_available():
+                    self._sequence_packer = SequencePacker(
+                        max_packed_length=config.resolution ** 2 // 64,
+                        device=self.device,
+                    )
+                    log.info("Sequence packing enabled (zero-padding waste elimination)")
+                else:
+                    log.warning("Sequence packing requested but flash_attn_varlen not available")
+            except Exception as e:
+                log.warning(f"Sequence packing setup failed: {e}")
 
         if progress_fn:
             progress_fn(5, 8, "Setting up optimizer...")

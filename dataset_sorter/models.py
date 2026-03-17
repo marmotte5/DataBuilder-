@@ -177,9 +177,6 @@ class TrainingConfig:
     # ── Liger-Kernel Fused Ops ─────────────────────────────────────
     liger_kernels: bool = False        # Apply fused Triton kernels (LayerNorm, etc.)
 
-    # ── Regional torch.compile ─────────────────────────────────────
-    regional_compile: bool = False     # Compile individual attention/FF blocks
-
     # ── Triton Fused Kernels (Unsloth-style) ─────────────────────
     triton_fused_adamw: bool = False   # Use custom Triton fused AdamW kernel (8 ops → 1)
     triton_fused_loss: bool = False    # Use fused MSE loss kernel (cast+MSE+reduce → 1)
@@ -289,13 +286,6 @@ class TrainingConfig:
     # ── Noise Schedule Rescaling ─────────────────────────────────────────
     zero_terminal_snr: bool = False     # Enforce zero terminal SNR (Lin et al. 2024)
     rescale_noise_schedule: bool = False  # Apply noise schedule rescaling
-
-    # ── Textual Inversion (Embedding Training) ────────────────────────────
-    embedding_training: bool = False    # Train text embeddings instead of model
-    embedding_token: str = ""           # Placeholder token (e.g. "<my-subject>")
-    embedding_num_vectors: int = 4      # Number of embedding vectors per token
-    embedding_init_text: str = ""       # Initialization text (e.g. "a photo of a dog")
-    embedding_lr: float = 5e-4         # Learning rate for embedding training
 
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)

@@ -863,14 +863,15 @@ class TestEMA:
 
 class TestTrainerHelpers:
     def test_backend_registry_all_models(self):
-        from dataset_sorter.trainer import _BACKEND_REGISTRY
+        from dataset_sorter.backend_registry import get_registry
+        registry = get_registry()
         expected_bases = [
-            "sdxl", "pony", "sd15", "flux", "flux2", "sd3", "sd35", "sd2",
+            "sdxl", "sd15", "flux", "flux2", "sd3", "sd35", "sd2",
             "zimage", "pixart", "cascade", "hunyuan", "kolors", "auraflow",
             "sana", "hidream", "chroma",
         ]
         for base in expected_bases:
-            assert base in _BACKEND_REGISTRY, f"Missing backend for {base}"
+            assert base in registry, f"Missing backend for {base}"
 
     def test_get_backend_fallback(self):
         from dataset_sorter.trainer import _get_backend

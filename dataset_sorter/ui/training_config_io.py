@@ -124,6 +124,23 @@ class TrainingConfigIOMixin:
         config.fused_backward_pass = self.fused_backward_check.isChecked()
         config.fp8_base_model = self.fp8_check.isChecked()
         config.quantize_text_encoder = self.te_quant_combo.currentData() or "none"
+        config.torch_compile = self.torch_compile_check.isChecked()
+        config.liger_kernels = self.liger_check.isChecked()
+
+        # Extreme Speed
+        config.triton_fused_adamw = self.triton_adamw_check.isChecked()
+        config.triton_fused_loss = self.triton_loss_check.isChecked()
+        config.triton_fused_flow = self.triton_flow_check.isChecked()
+        config.fp8_training = self.fp8_training_check.isChecked()
+        config.zero_bottleneck_loader = self.zero_bottleneck_check.isChecked()
+        config.mmap_dataset = self.mmap_dataset_check.isChecked()
+        config.sequence_packing = self.sequence_packing_check.isChecked()
+
+        # Extra Training Features
+        config.masked_training = self.masked_training_check.isChecked()
+        config.tensorboard_logging = self.tensorboard_check.isChecked()
+        config.zero_terminal_snr = self.zero_snr_check.isChecked()
+
         config.cudnn_benchmark = self.cudnn_check.isChecked()
         config.mixed_precision = self.precision_combo.currentText()
 
@@ -302,6 +319,23 @@ class TrainingConfigIOMixin:
             if self.te_quant_combo.itemData(i) == config.quantize_text_encoder:
                 self.te_quant_combo.setCurrentIndex(i)
                 break
+        self.torch_compile_check.setChecked(config.torch_compile)
+        self.liger_check.setChecked(config.liger_kernels)
+
+        # Extreme Speed
+        self.triton_adamw_check.setChecked(config.triton_fused_adamw)
+        self.triton_loss_check.setChecked(config.triton_fused_loss)
+        self.triton_flow_check.setChecked(config.triton_fused_flow)
+        self.fp8_training_check.setChecked(config.fp8_training)
+        self.zero_bottleneck_check.setChecked(config.zero_bottleneck_loader)
+        self.mmap_dataset_check.setChecked(config.mmap_dataset)
+        self.sequence_packing_check.setChecked(config.sequence_packing)
+
+        # Extra Training Features
+        self.masked_training_check.setChecked(config.masked_training)
+        self.tensorboard_check.setChecked(config.tensorboard_logging)
+        self.zero_snr_check.setChecked(config.zero_terminal_snr)
+
         self.cudnn_check.setChecked(config.cudnn_benchmark)
         pidx = ["bf16", "fp16", "fp32"].index(config.mixed_precision) if config.mixed_precision in ["bf16", "fp16", "fp32"] else 0
         self.precision_combo.setCurrentIndex(pidx)
