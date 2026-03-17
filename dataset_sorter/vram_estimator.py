@@ -276,11 +276,10 @@ class AdaptiveVRAMMonitor:
         self._oom_count: int = 0
 
     def sample(self) -> float:
-        """Sample current VRAM usage. Returns usage in GB."""
+        """Sample current VRAM usage. Returns reserved memory in GB."""
         try:
             import torch
             if torch.cuda.is_available():
-                used = torch.cuda.memory_allocated() / (1024 ** 3)
                 reserved = torch.cuda.memory_reserved() / (1024 ** 3)
                 self._samples.append(reserved)
                 self._peak_gb = max(self._peak_gb, reserved)

@@ -113,6 +113,11 @@ class BackendRegistry:
         if cls is None:
             log.warning(f"Unknown backend '{model_key}', falling back to SDXL")
             cls = self.get_backend_class("sdxl")
+        if cls is None:
+            raise ValueError(
+                f"Backend '{model_key}' not found and SDXL fallback unavailable. "
+                f"Available backends: {self.available_backends}"
+            )
         return cls(config, device, dtype)
 
     @property

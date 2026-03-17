@@ -47,11 +47,15 @@ def _get_executor() -> ThreadPoolExecutor:
 
 
 def shutdown_executor():
-    """Shutdown the shared executor (call on app exit)."""
+    """Shutdown the shared executor (call on app exit).
+
+    Waits for pending I/O tasks to complete to prevent data loss
+    from in-flight file writes.
+    """
     global _IO_EXECUTOR
     with _EXECUTOR_LOCK:
         if _IO_EXECUTOR is not None:
-            _IO_EXECUTOR.shutdown(wait=False)
+            _IO_EXECUTOR.shutdown(wait=True)
             _IO_EXECUTOR = None
 
 
