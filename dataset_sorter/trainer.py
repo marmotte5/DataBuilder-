@@ -652,48 +652,63 @@ class Trainer:
         self.state.running = True
         self._training_start_time = _time.time()
 
-        # ── Optimized DataLoader ──
-        # persistent_workers: keeps worker processes alive between epochs (saves startup)
-        # prefetch_factor: pre-load next batches while GPU is busy
-        # num_workers: adaptive based on dataset size and cached state
-        from dataset_sorter.io_speed import compute_optimal_workers
-        use_workers = compute_optimal_workers(
-            dataset_size=len(self.dataset),
-            latents_cached=config.cache_latents,
-            te_cached=config.cache_text_encoder,
-        )
-
-        if self._bucket_sampler is not None:
-            # Aspect ratio bucketing: use custom batch sampler (handles shuffle + grouping)
-            dataloader = DataLoader(
-                self.dataset,
-                batch_sampler=self._bucket_sampler,
-                num_workers=use_workers,
-                pin_memory=True,
-                persistent_workers=use_workers > 0,
-                prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+        # ── Zero-Bottleneck DataLoader (replaces standard DataLoader) ──
+        _zero_loader = None
+        if config.zero_bottleneck_loader and config.cache_latents and config.cache_text_encoder:
+            from dataset_sorter.zero_bottleneck_dataloader import create_zero_bottleneck_loader
+            _zero_loader = create_zero_bottleneck_loader(
+                self.dataset, config, self.device, self.dtype, self.output_dir,
             )
-            log.info("DataLoader using BucketBatchSampler for multi-aspect training")
-        else:
-            dataloader = DataLoader(
-                self.dataset,
-                batch_size=config.batch_size,
-                shuffle=True,
-                num_workers=use_workers,
-                pin_memory=True,
-                drop_last=True,
-                persistent_workers=use_workers > 0,
-                prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+            if _zero_loader is not None:
+                log.info(
+                    f"Zero-bottleneck DataLoader active: {len(_zero_loader)} batches/epoch "
+                    f"(mmap → pinned DMA → GPU, zero GIL overhead)"
+                )
+
+        # ── Optimized DataLoader (fallback when zero-bottleneck is unavailable) ──
+        dataloader = None
+        if _zero_loader is None:
+            # persistent_workers: keeps worker processes alive between epochs (saves startup)
+            # prefetch_factor: pre-load next batches while GPU is busy
+            # num_workers: adaptive based on dataset size and cached state
+            from dataset_sorter.io_speed import compute_optimal_workers
+            use_workers = compute_optimal_workers(
+                dataset_size=len(self.dataset),
+                latents_cached=config.cache_latents,
+                te_cached=config.cache_text_encoder,
             )
 
-        # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
-        if config.async_dataload and self.device.type == "cuda":
-            from dataset_sorter.speed_optimizations import AsyncGPUPrefetcher
-            dataloader = AsyncGPUPrefetcher(
-                dataloader, self.device, self.dtype,
-                prefetch_count=config.prefetch_factor,
-            )
-            log.info("Async GPU prefetch enabled")
+            if self._bucket_sampler is not None:
+                # Aspect ratio bucketing: use custom batch sampler (handles shuffle + grouping)
+                dataloader = DataLoader(
+                    self.dataset,
+                    batch_sampler=self._bucket_sampler,
+                    num_workers=use_workers,
+                    pin_memory=True,
+                    persistent_workers=use_workers > 0,
+                    prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+                )
+                log.info("DataLoader using BucketBatchSampler for multi-aspect training")
+            else:
+                dataloader = DataLoader(
+                    self.dataset,
+                    batch_size=config.batch_size,
+                    shuffle=True,
+                    num_workers=use_workers,
+                    pin_memory=True,
+                    drop_last=True,
+                    persistent_workers=use_workers > 0,
+                    prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+                )
+
+            # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
+            if config.async_dataload and self.device.type == "cuda":
+                from dataset_sorter.speed_optimizations import AsyncGPUPrefetcher
+                dataloader = AsyncGPUPrefetcher(
+                    dataloader, self.device, self.dtype,
+                    prefetch_count=config.prefetch_factor,
+                )
+                log.info("Async GPU prefetch enabled")
 
         grad_accum_steps = config.gradient_accumulation
         running_loss = 0.0
@@ -774,7 +789,13 @@ class Trainer:
             # Determine how many batches to skip (resume within epoch)
             _skip_batches = self.state.epoch_step if epoch == self.state.epoch else 0
 
-            for step, batch in enumerate(dataloader):
+            # Choose iteration source: zero-bottleneck loader or standard DataLoader
+            if _zero_loader is not None:
+                _batch_iter = enumerate(_zero_loader.epoch_iterator(shuffle=True))
+            else:
+                _batch_iter = enumerate(dataloader)
+
+            for step, batch in _batch_iter:
                 if not self.state.running:
                     break
 
@@ -795,16 +816,23 @@ class Trainer:
                 if self._async_optimizer is not None:
                     self._async_optimizer.sync()
 
-                # ── Track last caption for sample generation ──
-                if "caption" in batch:
-                    cap = batch["caption"]
-                    if isinstance(cap, (list, tuple)):
-                        self._last_batch_caption = cap[-1]
-                    elif isinstance(cap, str):
-                        self._last_batch_caption = cap
-
                 # ── Forward + loss ──
-                loss = self._training_step(batch)
+                if _zero_loader is not None:
+                    # Zero-bottleneck path: data already on GPU, skip _training_step
+                    latents = batch["latents"]
+                    te_out = batch.get("te_out", ())
+                    bsz = latents.shape[0]
+                    loss = self.backend.training_step(latents, te_out, bsz)
+                else:
+                    # ── Track last caption for sample generation ──
+                    if "caption" in batch:
+                        cap = batch["caption"]
+                        if isinstance(cap, (list, tuple)):
+                            self._last_batch_caption = cap[-1]
+                        elif isinstance(cap, str):
+                            self._last_batch_caption = cap
+
+                    loss = self._training_step(batch)
                 loss = loss / grad_accum_steps
 
                 # ── NaN guard: skip backward if loss is NaN/Inf ──
@@ -988,10 +1016,13 @@ class Trainer:
                 self._save_checkpoint(f"epoch_{epoch + 1:04d}")
 
         # Clean up DataLoader workers (persistent_workers keep processes alive)
-        # Unwrap AsyncGPUPrefetcher if present to access the real DataLoader
-        _real_loader = getattr(dataloader, 'dataloader', dataloader)
-        if hasattr(_real_loader, '_iterator') and _real_loader._iterator is not None:
-            _real_loader._iterator._shutdown_workers()
+        if _zero_loader is not None:
+            _zero_loader.close()
+        if dataloader is not None:
+            # Unwrap AsyncGPUPrefetcher if present to access the real DataLoader
+            _real_loader = getattr(dataloader, 'dataloader', dataloader)
+            if hasattr(_real_loader, '_iterator') and _real_loader._iterator is not None:
+                _real_loader._iterator._shutdown_workers()
         del dataloader
         if self.device.type == "cuda":
             torch.cuda.empty_cache()

@@ -194,6 +194,9 @@ class TrainingConfig:
     # ── Memory-Mapped Dataset ────────────────────────────────────
     mmap_dataset: bool = False         # Use mmap'd safetensors for zero-copy data loading
 
+    # ── Zero-Bottleneck DataLoader ───────────────────────────────
+    zero_bottleneck_loader: bool = False  # Replace DataLoader with mmap+pinned+DMA pipeline
+
     # ── Curriculum Learning ──────────────────────────────────────────
     curriculum_learning: bool = False       # Loss-based adaptive image sampling
     curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)

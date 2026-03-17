@@ -213,6 +213,7 @@ EXTREME_SPEED_OPTS = {
     "fp8_training":        "FP8 Training — 2x TFLOPS on RTX 4090/H100",
     "sequence_packing":    "Sequence Packing — Zero padding waste (DiT models)",
     "mmap_dataset":        "Memory-Mapped Dataset — Zero-copy I/O (bypass GIL)",
+    "zero_bottleneck_loader": "Zero-Bottleneck DataLoader — mmap+pinned DMA, no GIL/pickle",
     "cuda_graph_training": "CUDA Graph Training — Eliminate kernel launch overhead",
 }
 
