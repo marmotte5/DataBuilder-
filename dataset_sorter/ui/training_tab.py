@@ -672,6 +672,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._training_worker.finished_training.connect(self._on_finished)
         self._training_worker.paused_changed.connect(self._on_paused_changed)
         self._training_worker.smart_resume_report.connect(self._on_smart_resume_report)
+        self._training_worker.pipeline_report.connect(self._on_pipeline_report)
         self._training_worker.rlhf_candidates_ready.connect(self._on_rlhf_candidates)
 
         # Start VRAM monitor
@@ -834,6 +835,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"ERROR: {error_msg}")
 
     # ── Smart Resume ─────────────────────────────────────────────────
+
+    def _on_pipeline_report(self, report: str):
+        """Show pre-training pipeline integration report in the log."""
+        self._log("")
+        self._log(report)
+        self._log("")
 
     def _on_smart_resume_report(self, report: str):
         """Show Smart Resume analysis in the log and optionally in a dialog."""

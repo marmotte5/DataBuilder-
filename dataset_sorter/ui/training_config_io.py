@@ -189,6 +189,24 @@ class TrainingConfigIOMixin:
         config.dpo_beta = self.rlhf_dpo_beta_spin.value()
         config.dpo_loss_type = self.rlhf_loss_combo.currentData() or "sigmoid"
 
+        # ControlNet
+        config.controlnet_enabled = self.controlnet_enable.isChecked()
+        config.controlnet_type = self.controlnet_type_combo.currentData() or "canny"
+        config.controlnet_scale = self.controlnet_scale_spin.value()
+        config.controlnet_dir = self.controlnet_dir_input.text().strip()
+        config.controlnet_scratch = self.controlnet_scratch_check.isChecked()
+        config.zero_conv_lr_multiplier = self.zero_conv_lr_spin.value()
+
+        # DPO (dedicated tab)
+        config.dpo_label_smoothing = self.dpo_smooth_spin.value()
+
+        # Adversarial
+        config.adversarial_enabled = self.adversarial_enable.isChecked()
+        config.adversarial_disc_lr = self.adv_disc_lr_spin.value()
+        config.adversarial_weight = self.adv_weight_spin.value()
+        config.adversarial_start_step = self.adv_start_spin.value()
+        config.adversarial_feature_match = self.adv_feature_match_check.isChecked()
+
         return config
 
     def apply_config(self, config: TrainingConfig):
@@ -393,6 +411,27 @@ class TrainingConfigIOMixin:
             if self.rlhf_loss_combo.itemData(i) == config.dpo_loss_type:
                 self.rlhf_loss_combo.setCurrentIndex(i)
                 break
+
+        # ControlNet
+        self.controlnet_enable.setChecked(config.controlnet_enabled)
+        for i in range(self.controlnet_type_combo.count()):
+            if self.controlnet_type_combo.itemData(i) == config.controlnet_type:
+                self.controlnet_type_combo.setCurrentIndex(i)
+                break
+        self.controlnet_scale_spin.setValue(config.controlnet_scale)
+        self.controlnet_dir_input.setText(config.controlnet_dir)
+        self.controlnet_scratch_check.setChecked(config.controlnet_scratch)
+        self.zero_conv_lr_spin.setValue(config.zero_conv_lr_multiplier)
+
+        # DPO (dedicated tab)
+        self.dpo_smooth_spin.setValue(config.dpo_label_smoothing)
+
+        # Adversarial
+        self.adversarial_enable.setChecked(config.adversarial_enabled)
+        self.adv_disc_lr_spin.setValue(config.adversarial_disc_lr)
+        self.adv_weight_spin.setValue(config.adversarial_weight)
+        self.adv_start_spin.setValue(config.adversarial_start_step)
+        self.adv_feature_match_check.setChecked(config.adversarial_feature_match)
 
     def _save_training_config(self):
         """Open a Save dialog and write the current training config to a JSON file.

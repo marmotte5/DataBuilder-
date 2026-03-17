@@ -287,6 +287,21 @@ class TrainingConfig:
     zero_terminal_snr: bool = False     # Enforce zero terminal SNR (Lin et al. 2024)
     rescale_noise_schedule: bool = False  # Apply noise schedule rescaling
 
+    # ── ControlNet Training ────────────────────────────────────────────
+    controlnet_enabled: bool = False        # Enable ControlNet training mode
+    controlnet_type: str = "canny"          # Conditioning type (canny, depth, openpose, etc.)
+    controlnet_scale: float = 1.0           # Conditioning signal scale
+    controlnet_dir: str = ""                # Directory with condition images
+    controlnet_scratch: bool = True         # Train ControlNet from scratch
+    zero_conv_lr_multiplier: float = 1.0   # LR multiplier for zero-conv layers
+
+    # ── Adversarial Fine-tuning ────────────────────────────────────────
+    adversarial_enabled: bool = False       # Enable adversarial (GAN-like) training
+    adversarial_disc_lr: float = 1e-4      # Discriminator learning rate
+    adversarial_weight: float = 0.1        # Adversarial loss weight
+    adversarial_start_step: int = 100      # Step to activate discriminator
+    adversarial_feature_match: bool = True  # Use feature matching loss
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 
