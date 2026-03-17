@@ -205,6 +205,17 @@ MODEL_TIMESTEP_SAMPLING: dict[str, str] = _expand_variants({
     "chroma":   "logit_normal",
 })
 
+# ── Extreme Speed Optimizations ──────────────────────────────────────
+EXTREME_SPEED_OPTS = {
+    "triton_fused_adamw":  "Triton Fused AdamW — 8 ops → 1 kernel (Unsloth-style)",
+    "triton_fused_loss":   "Triton Fused MSE Loss — cast+MSE+reduce in 1 kernel",
+    "triton_fused_flow":   "Triton Fused Flow Interpolation — 3 temps eliminated",
+    "fp8_training":        "FP8 Training — 2x TFLOPS on RTX 4090/H100",
+    "sequence_packing":    "Sequence Packing — Zero padding waste (DiT models)",
+    "mmap_dataset":        "Memory-Mapped Dataset — Zero-copy I/O (bypass GIL)",
+    "cuda_graph_training": "CUDA Graph Training — Eliminate kernel launch overhead",
+}
+
 # ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
 MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"

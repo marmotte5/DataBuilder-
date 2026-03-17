@@ -417,6 +417,17 @@ class CUDAGraphWrapper:
     - Warmup for N steps with regular execution (to let cuDNN autotuner settle)
     - Capture the graph on step N+1
     - Replay the captured graph for all subsequent steps
+
+    IMPORTANT: Noise and timesteps must be generated OUTSIDE the graph and
+    passed as inputs (via 'noise' and 'timesteps' kwargs). If noise is
+    generated inside the captured region, CUDA graphs replay the same
+    random values every step, destroying training stochasticity.
+
+    The caller must pre-generate noise and timesteps each step:
+        noise = torch.randn_like(latents)
+        timesteps = torch.randint(0, T, (batch_size,), device=device)
+        loss = graph_wrapper.step(train_fn, latents=latents, noise=noise,
+                                   timesteps=timesteps, te_out=te_out)
     """
 
     def __init__(self, warmup_steps: int = 11, enabled: bool = True):
@@ -433,7 +444,10 @@ class CUDAGraphWrapper:
 
         Args:
             train_fn: Callable that takes keyword args and returns a loss tensor.
-            **kwargs: Tensor keyword arguments (latents, te_out, etc.).
+                Must accept 'noise' and 'timesteps' as explicit inputs
+                (not generate them internally).
+            **kwargs: Tensor keyword arguments. Must include 'noise' and
+                'timesteps' to preserve stochasticity across graph replays.
 
         Returns:
             Loss tensor.
@@ -451,7 +465,7 @@ class CUDAGraphWrapper:
             # Capture phase: record the graph
             return self._capture(train_fn, **kwargs)
 
-        # Replay phase: copy inputs and replay
+        # Replay phase: copy inputs (including fresh noise) and replay
         return self._replay(**kwargs)
 
     def _capture(self, train_fn, **kwargs) -> torch.Tensor:
@@ -474,7 +488,9 @@ class CUDAGraphWrapper:
             warmup_result = train_fn(**self._static_inputs)
             torch.cuda.synchronize()
 
-            # Capture
+            # Capture — noise/timesteps in static_inputs will be overwritten
+            # each step via copy_() in _replay(), so the graph replays with
+            # fresh random values every time.
             self._graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self._graph):
                 self._static_output = train_fn(**self._static_inputs)
@@ -491,7 +507,11 @@ class CUDAGraphWrapper:
             return train_fn(**kwargs)
 
     def _replay(self, **kwargs) -> torch.Tensor:
-        """Replay the captured CUDA graph with new inputs."""
+        """Replay the captured CUDA graph with new inputs.
+
+        Critical: 'noise' and 'timesteps' are copied into the static
+        buffers before replay, ensuring fresh stochasticity each step.
+        """
         # Copy new data into static input buffers
         for key, val in kwargs.items():
             if key in self._static_inputs:

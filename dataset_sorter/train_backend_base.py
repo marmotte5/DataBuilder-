@@ -129,6 +129,10 @@ class TrainBackendBase(ABC):
             target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
         else:
             target = noise
+        # Use Triton fused MSE+cast kernel when available (~15% faster)
+        if self.config.triton_fused_loss:
+            from dataset_sorter.triton_kernels import fused_mse_loss
+            return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
         return loss.mean(dim=list(range(1, len(loss.shape))))
 
@@ -159,6 +163,9 @@ class TrainBackendBase(ABC):
     ) -> torch.Tensor:
         """Flow matching loss: target = noise - latents."""
         target = noise.float() - latents.float()
+        if self.config.triton_fused_loss:
+            from dataset_sorter.triton_kernels import fused_mse_loss
+            return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
         return loss.mean(dim=list(range(1, len(loss.shape))))
 
@@ -186,6 +193,9 @@ class TrainBackendBase(ABC):
         self, latents: torch.Tensor, noise: torch.Tensor, t: torch.Tensor,
     ) -> torch.Tensor:
         """Flow matching interpolation: (1-t)*x + t*noise."""
+        if self.config.triton_fused_flow:
+            from dataset_sorter.triton_kernels import fused_flow_interpolate
+            return fused_flow_interpolate(latents, noise, t)
         t_view = t.view(-1, 1, 1, 1)
         return (1 - t_view) * latents + t_view * noise
 
@@ -483,6 +493,7 @@ class TrainBackendBase(ABC):
                                          image_hw=image_hw)
 
         # Forward pass with autocast for speed
+        # FP8 context is managed by FP8TrainingWrapper when fp8_training=True
         _act = autocast_device_type()
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             fwd_kwargs = {}

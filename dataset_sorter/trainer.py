@@ -195,6 +195,8 @@ class Trainer:
         self._async_optimizer = None
         # CUDA graph wrapper
         self._cuda_graph = None
+        # FP8 training wrapper
+        self._fp8_wrapper = None
         # Curriculum learning
         self._curriculum_sampler = None
         # Timestep EMA
@@ -299,7 +301,16 @@ class Trainer:
         # ── 3. Apply all speed optimizations ──
         self.backend.apply_speed_optimizations()
 
-        # ── 3b. MeBP: selective activation checkpointing (Apple 2025) ──
+        # ── 3b. FP8 Training (Ada/Hopper GPUs — 2x TFLOPS) ──
+        if config.fp8_training and self.backend.unet is not None:
+            from dataset_sorter.fp8_training import FP8TrainingWrapper
+            self._fp8_wrapper = FP8TrainingWrapper(
+                self.backend.unet, self.device, enabled=True,
+            )
+            self.backend.unet = self._fp8_wrapper.setup()
+            log.info(f"FP8 training: {self._fp8_wrapper.get_stats()}")
+
+        # ── 3c. MeBP: selective activation checkpointing (Apple 2025) ──
         if config.mebp_enabled and self.backend.unet is not None:
             from dataset_sorter.speed_optimizations import MeBPWrapper
             self.backend.unet = MeBPWrapper(
@@ -444,7 +455,18 @@ class Trainer:
             progress_fn(5, 8, "Setting up optimizer...")
 
         # ── 9. Build parameter groups (separate LR for text encoders) ──
-        self.optimizer = _get_optimizer(config, self._build_param_groups())
+        if config.triton_fused_adamw:
+            from dataset_sorter.triton_kernels import FusedAdamW
+            all_params = []
+            for group in self._build_param_groups():
+                all_params.extend(group["params"])
+            self.optimizer = FusedAdamW(
+                all_params, lr=config.learning_rate,
+                weight_decay=config.weight_decay,
+            )
+            log.info("Using Triton FusedAdamW (8 ops → 1 kernel)")
+        else:
+            self.optimizer = _get_optimizer(config, self._build_param_groups())
 
         # ── 10. Steps calculation ──
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
@@ -692,15 +714,16 @@ class Trainer:
             log.info("Async optimizer step enabled (overlaps with next forward pass)")
 
         # ── CUDA Graph Training Wrapper ──
-        # NOTE: CUDA graphs capture torch.randn_like() calls and replay them
-        # deterministically, which destroys training stochasticity.
-        # This feature is disabled pending a proper implementation that
-        # re-generates noise outside the captured graph.
+        # Fixed: noise and timesteps are now generated OUTSIDE the graph
+        # and passed as explicit inputs, preserving stochasticity.
         if config.cuda_graph_training and self.device.type == "cuda":
-            log.warning(
-                "cuda_graph_training is currently disabled: CUDA graphs "
-                "replay captured random noise, destroying training stochasticity. "
-                "Use torch.compile (regional_compile=True) instead for speed."
+            from dataset_sorter.speed_optimizations import CUDAGraphWrapper
+            self._cuda_graph = CUDAGraphWrapper(
+                warmup_steps=config.cuda_graph_warmup, enabled=True,
+            )
+            log.info(
+                f"CUDA graph training enabled (warmup={config.cuda_graph_warmup}). "
+                f"Noise generated outside graph for stochasticity."
             )
 
         # ── Fused Backward Pass ──
@@ -810,25 +833,51 @@ class Trainer:
                         fused_backward.finish_step()
                     else:
                         if config.max_grad_norm > 0:
-                            if self.grad_scaler is not None:
-                                self.grad_scaler.unscale_(self.optimizer)
-                            torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
+                            if config.triton_fused_adamw:
+                                # Triton fused: grad clip + optimizer step in one pass
+                                from dataset_sorter.triton_kernels import fused_grad_clip_and_step
+                                fused_grad_clip_and_step(
+                                    self.optimizer, trainable_params,
+                                    config.max_grad_norm, self.grad_scaler,
+                                )
+                                self.scheduler.step()
+                                self.optimizer.zero_grad(set_to_none=True)
+                            else:
+                                if self.grad_scaler is not None:
+                                    self.grad_scaler.unscale_(self.optimizer)
+                                torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
 
-                        # VJP approximation: reduce gradient compute (Feb 2026)
-                        if vjp_scaler is not None:
-                            vjp_scaler.approximate_gradients(trainable_params)
+                                # VJP approximation: reduce gradient compute (Feb 2026)
+                                if vjp_scaler is not None:
+                                    vjp_scaler.approximate_gradients(trainable_params)
 
-                        if self._async_optimizer is not None:
-                            # Async: launch optimizer.step() on separate stream
-                            self._async_optimizer.step(self.optimizer, self.grad_scaler)
-                        elif self.grad_scaler is not None:
-                            self.grad_scaler.step(self.optimizer)
-                            self.grad_scaler.update()
+                                if self._async_optimizer is not None:
+                                    # Async: launch optimizer.step() on separate stream
+                                    self._async_optimizer.step(self.optimizer, self.grad_scaler)
+                                elif self.grad_scaler is not None:
+                                    self.grad_scaler.step(self.optimizer)
+                                    self.grad_scaler.update()
+                                else:
+                                    self.optimizer.step()
+
+                                self.scheduler.step()
+                                self.optimizer.zero_grad(set_to_none=True)
                         else:
-                            self.optimizer.step()
+                            # No grad clipping
+                            # VJP approximation: reduce gradient compute (Feb 2026)
+                            if vjp_scaler is not None:
+                                vjp_scaler.approximate_gradients(trainable_params)
 
-                        self.scheduler.step()
-                        self.optimizer.zero_grad(set_to_none=True)
+                            if self._async_optimizer is not None:
+                                self._async_optimizer.step(self.optimizer, self.grad_scaler)
+                            elif self.grad_scaler is not None:
+                                self.grad_scaler.step(self.optimizer)
+                                self.grad_scaler.update()
+                            else:
+                                self.optimizer.step()
+
+                            self.scheduler.step()
+                            self.optimizer.zero_grad(set_to_none=True)
 
                     # Stochastic rounding: reduce bf16 truncation bias
                     if sr_hook is not None:

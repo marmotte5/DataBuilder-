@@ -180,6 +180,20 @@ class TrainingConfig:
     # ── Regional torch.compile ─────────────────────────────────────
     regional_compile: bool = False     # Compile individual attention/FF blocks
 
+    # ── Triton Fused Kernels (Unsloth-style) ─────────────────────
+    triton_fused_adamw: bool = False   # Use custom Triton fused AdamW kernel (8 ops → 1)
+    triton_fused_loss: bool = False    # Use fused MSE loss kernel (cast+MSE+reduce → 1)
+    triton_fused_flow: bool = False    # Use fused flow interpolation kernel
+
+    # ── FP8 Training (Ada/Hopper GPUs) ───────────────────────────
+    fp8_training: bool = False         # Enable FP8 forward/backward (2x TFLOPS on 4090/H100)
+
+    # ── Sequence Packing (DiT models) ────────────────────────────
+    sequence_packing: bool = False     # Pack variable-length sequences (zero padding waste)
+
+    # ── Memory-Mapped Dataset ────────────────────────────────────
+    mmap_dataset: bool = False         # Use mmap'd safetensors for zero-copy data loading
+
     # ── Curriculum Learning ──────────────────────────────────────────
     curriculum_learning: bool = False       # Loss-based adaptive image sampling
     curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)
