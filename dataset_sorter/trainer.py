@@ -38,7 +38,7 @@ from dataset_sorter.smart_resume import (
     compute_adjustments, format_analysis_report, apply_adjustments_to_config,
 )
 from dataset_sorter.train_dataset import CachedTrainDataset
-from dataset_sorter.utils import get_device, empty_cache, autocast_device_type
+from dataset_sorter.utils import get_device, empty_cache
 from dataset_sorter.pipeline_integrator import (
     run_pre_training_pipeline, LiveTrainingMonitor, IntegrationReport,
 )

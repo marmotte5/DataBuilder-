@@ -16,7 +16,7 @@ from typing import Optional
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QMimeData
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,

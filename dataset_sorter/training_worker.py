@@ -17,7 +17,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.trainer import Trainer
-from dataset_sorter.disk_space import get_vram_snapshot, reset_peak_vram
+from dataset_sorter.disk_space import get_vram_snapshot
 
 
 class VRAMMonitor(QThread):

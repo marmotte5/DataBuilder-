@@ -9,7 +9,6 @@ Export uses ThreadPoolExecutor for parallel file copying (3-5x speedup on SSDs).
 
 import json
 import logging
-import math
 import os
 import shutil
 import uuid
@@ -20,7 +19,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS, MAX_BUCKETS
+from dataset_sorter.constants import IMAGE_EXTENSIONS, DEFAULT_NUM_WORKERS
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.utils import is_path_inside, sanitize_folder_name
 

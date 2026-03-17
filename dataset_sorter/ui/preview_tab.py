@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 
 from dataset_sorter.models import ImageEntry
-from dataset_sorter.ui.theme import COLORS, MUTED_LABEL_STYLE
+from dataset_sorter.ui.theme import COLORS
 
 
 class PreviewTab(QWidget):
