@@ -1,6 +1,6 @@
 # Dataset Sorter
 
-A desktop application for sorting image datasets by tag rarity — designed for Stable Diffusion / LoRA training dataset preparation. Features a modern dark/light UI built with PyQt6, integrated training with 60+ parameters, automatic repeat balancing, and a unified project folder system.
+A desktop application for sorting image datasets by tag rarity — designed for Stable Diffusion / LoRA training dataset preparation. Features a modern dark/light UI built with PyQt6, integrated training with 180+ parameters, automatic repeat balancing, and a unified project folder system.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)
@@ -19,9 +19,9 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 - **Sequential file renaming** — Exported files are renamed `{bucket}_{index}.{ext}` for clean organization
 
 ### Training
-- **Integrated training** — Full training UI with 60+ parameters across 7 config tabs (Model, Optimizer, Dataset, Advanced, Sampling, ControlNet, DPO)
+- **Integrated training** — Full training UI with 180+ parameters across 7 config tabs (Model, Optimizer, Dataset, Advanced, Sampling, ControlNet, DPO)
 - **17 model types** — SD 1.5, SD 2, SDXL, Pony, Flux, Flux 2, SD3, SD 3.5, Z-Image, PixArt, Stable Cascade, Hunyuan DiT, Kolors, AuraFlow, Sana, HiDream, Chroma
-- **11 optimizers** — Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, CAME, AdamW Schedule-Free, Lion, SGD, SOAP, Muon
+- **12 optimizers** — Marmotte, Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, CAME, AdamW Schedule-Free, Lion, SGD, SOAP, Muon
 - **7 training presets** — Character LoRA, Style LoRA, Concept LoRA, Photorealistic, Quick Test, DPO Preference, ControlNet
 - **ControlNet training** — 9 conditioning types (canny, depth, pose, segmentation, normal, MLSD, softedge, scribble, inpaint)
 - **DPO training** — Direct Preference Optimization with 3 loss types (sigmoid, hinge, IPO)
@@ -37,6 +37,12 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 - **SpeeD (CVPR 2025)** — Asymmetric timestep sampling + change-aware loss weighting
 - **Advanced memory** — MeBP, approximate VJP, async GPU prefetch, fused backward pass, fp8 base model
 - **Smart resume** — Analyzes loss curves and auto-adjusts LR/optimizer on resume
+- **Extreme speed** — Triton fused kernels, FP8 training, sequence packing, memory-mapped datasets, CUDA graph training
+- **Zero-bottleneck dataloader** — mmap + pinned DMA replaces PyTorch DataLoader (bypasses GIL/pickle)
+- **Z-Image optimizations** — Unified stream attention, fused 3D RoPE, fat latent cache, logit-normal timesteps, velocity weighting
+- **Z-Image inventions** — L2-pinned attention, speculative gradient, stream-bending bias, timestep bandit
+- **Pipeline integration** — Pre-training validation, auto-config, live loss monitoring with auto-adjustment
+- **Marmotte optimizer** — Ultra-low memory per-channel adaptive optimizer (~10-20x less memory than Adam)
 
 ### Dataset Management
 - **Caption preview** — Tag shuffle/dropout simulation with configurable variants
@@ -67,6 +73,8 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 - **Parallel export** — ThreadPoolExecutor-based file copying (3-5x speedup on SSDs)
 - **Optional GPU validation** — Detect corrupt images early using torchvision
 - **Config validation** — Validates training config before launch
+- **Backend registry** — Plugin-based auto-discovery of model backends (supports third-party extensions)
+- **Performance profiling** — Built-in profiling utilities for bottleneck identification
 - **Nuitka build** — Build standalone executables with `build_nuitka.py`
 - **pyproject.toml** — Proper Python packaging with optional dependency groups
 
@@ -82,7 +90,7 @@ A desktop application for sorting image datasets by tag rarity — designed for 
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/DataBuilder-.git
+git clone https://github.com/marmotte5/DataBuilder-.git
 cd DataBuilder-
 
 # Install (basic — sorting & UI only)
@@ -207,7 +215,7 @@ This prevents the model from over-learning common tags while under-learning rare
 dataset_sorter/
 ├── __init__.py                  # Package marker
 ├── __main__.py                  # Entry point
-├── constants.py                 # Global constants (17 model types, optimizers, etc.)
+├── constants.py                 # Global constants (17 model types, 12 optimizers, etc.)
 ├── models.py                    # Data classes (TrainingConfig, ImageEntry, DatasetStats)
 ├── utils.py                     # Path validation, sanitization, GPU detection
 ├── workers.py                   # QThread workers for scan/export, project structure, repeats
@@ -222,12 +230,21 @@ dataset_sorter/
 ├── vram_estimator.py            # VRAM estimation for 17 model types
 ├── bucket_sampler.py            # Aspect ratio bucketing for multi-resolution training
 ├── train_dataset.py             # Training dataset with caching and augmentation
+├── backend_registry.py          # Plugin registry for training backends (auto-discovery)
 ├── train_backend_base.py        # Base class for model-specific backends
-├── train_backend_*.py           # 17 model backends (sd15, sdxl, flux, sd3, etc.)
-├── optimizer_factory.py         # Optimizer creation (11 types)
-├── optimizers.py                # Custom optimizer implementations (SOAP, Muon)
+├── train_backend_*.py           # 17 model backends (sd15, sdxl, flux, sd3, zimage, etc.)
+├── optimizer_factory.py         # Optimizer creation (12 types)
+├── optimizers.py                # Custom optimizer implementations (Marmotte, SOAP, Muon)
 ├── ema.py                       # Exponential Moving Average for weights
 ├── speed_optimizations.py       # torch.compile, MeBP, CUDA optimizations
+├── triton_kernels.py            # Triton fused kernels (AdamW, MSE loss, flow interpolation)
+├── fp8_training.py              # FP8 training wrapper (2x TFLOPS on Ada/Hopper GPUs)
+├── sequence_packing.py          # Sequence packing for zero padding waste (DiT models)
+├── mmap_dataset.py              # Memory-mapped dataset for zero-copy I/O
+├── zero_bottleneck_dataloader.py # mmap + pinned DMA dataloader (bypasses GIL/pickle)
+├── zimage_optimizations.py      # Z-Image (S3-DiT) exclusive speed optimizations
+├── zimage_inventions.py         # Z-Image advanced inventions (L2 attention, speculative grad)
+├── pipeline_integrator.py       # Pre-training pipeline, live monitoring, auto-config
 ├── async_io.py                  # Async data loading and GPU prefetching
 ├── io_speed.py                  # Fast image scanning, dimension reading, deduplication
 ├── dataset_management.py        # Caption augmentation, token counts, spell check
