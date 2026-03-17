@@ -39,6 +39,9 @@ from dataset_sorter.smart_resume import (
 )
 from dataset_sorter.train_dataset import CachedTrainDataset
 from dataset_sorter.utils import get_device, empty_cache, autocast_device_type
+from dataset_sorter.pipeline_integrator import (
+    run_pre_training_pipeline, LiveTrainingMonitor, IntegrationReport,
+)
 
 log = logging.getLogger(__name__)
 
@@ -206,6 +209,10 @@ class Trainer:
         # Training history (learns from past runs)
         self._training_history = None
         self._training_start_time = 0.0
+        # Pipeline integration
+        self._integration_report: Optional[IntegrationReport] = None
+        self._live_monitor: Optional[LiveTrainingMonitor] = None
+        self._tag_weights: dict[str, float] = {}  # Per-tag importance weights
 
     def setup(
         self,
@@ -221,8 +228,58 @@ class Trainer:
         self.state.phase = "loading"
         config = self.config
 
+        # ── 0. Pipeline Integration: pre-training validation & auto-config ──
+        if config.pipeline_integration:
+            self.state.phase = "integrating"
+            if progress_fn:
+                progress_fn(0, 8, "Running pre-training pipeline...")
+            self._integration_report = run_pre_training_pipeline(
+                config, image_paths, captions,
+                progress_fn=lambda c, t, m: progress_fn(c, t, m) if progress_fn else None,
+            )
+            # Store tag weights for use during training
+            if self._integration_report and config.auto_tag_analysis:
+                # Tag weights are computed inside run_pre_training_pipeline
+                # Re-extract them for use in adaptive weighting
+                try:
+                    from dataset_sorter.tag_importance import analyze_tag_importance
+                    from collections import Counter
+                    tag_counts = Counter()
+                    for cap in captions:
+                        for tag in cap.split(","):
+                            tag = tag.strip()
+                            if tag:
+                                tag_counts[tag] += 1
+                    if tag_counts:
+                        result = analyze_tag_importance(tag_counts, len(captions))
+                        self._tag_weights = {
+                            tag: info.importance_score for tag, info in result.items()
+                        }
+                except Exception as e:
+                    log.debug(f"Tag weight extraction failed: {e}")
+
+            # Log integration report
+            if self._integration_report:
+                report_text = self._integration_report.format_pre_training()
+                log.info(report_text)
+
+                # Abort on fatal config errors (unless auto-fix resolved them)
+                if self._integration_report.config_errors:
+                    raise ValueError(
+                        f"Config validation failed with {len(self._integration_report.config_errors)} "
+                        f"error(s):\n" + "\n".join(self._integration_report.config_errors)
+                    )
+
+            # Setup live training monitor
+            if config.live_loss_monitor:
+                self._live_monitor = LiveTrainingMonitor(
+                    config,
+                    check_every_n_steps=config.live_monitor_interval,
+                    auto_adjust=config.live_monitor_auto_adjust,
+                )
+
         if progress_fn:
-            progress_fn(0, 6, "Loading model...")
+            progress_fn(0, 8, "Loading model...")
 
         # ── 1. Instantiate model-specific backend ──
         self.backend = _get_backend(config, self.device, self.dtype)
@@ -230,7 +287,7 @@ class Trainer:
         log.info(f"Backend: {self.backend.model_name} ({config.model_type})")
 
         if progress_fn:
-            progress_fn(1, 6, "Applying speed optimizations...")
+            progress_fn(1, 8, "Applying speed optimizations...")
 
         # ── 2. Setup LoRA or full finetune ──
         is_lora = config.model_type.endswith("_lora")
@@ -263,7 +320,7 @@ class Trainer:
             self.grad_scaler = torch.amp.GradScaler("cuda")
 
         if progress_fn:
-            progress_fn(2, 6, "Preparing dataset...")
+            progress_fn(2, 8, "Preparing dataset...")
 
         # ── 6. Create dataset (with optional aspect ratio bucketing) ──
         cache_dir = output_dir / ".cache" if config.cache_latents_to_disk else None
@@ -276,7 +333,7 @@ class Trainer:
                 generate_buckets, assign_all_buckets, BucketBatchSampler,
             )
             if progress_fn:
-                progress_fn(2, 6, "Computing aspect ratio buckets...")
+                progress_fn(2, 8, "Computing aspect ratio buckets...")
 
             buckets = generate_buckets(
                 resolution=config.resolution,
@@ -314,7 +371,7 @@ class Trainer:
         if config.cache_latents:
             self.state.phase = "caching"
             if progress_fn:
-                progress_fn(2, 6, "Caching VAE latents...")
+                progress_fn(2, 8, "Caching VAE latents...")
             self.dataset.cache_latents_from_vae(
                 self.backend.vae, self.device, self.dtype,
                 to_disk=config.cache_latents_to_disk,
@@ -323,7 +380,7 @@ class Trainer:
             self.backend.offload_vae()
 
         if progress_fn:
-            progress_fn(3, 6, "Caching text encoder outputs...")
+            progress_fn(3, 8, "Caching text encoder outputs...")
 
         # ── 8. Cache text encoder outputs ──
         if config.cache_text_encoder:
@@ -384,7 +441,7 @@ class Trainer:
                 self.backend.text_encoder_3.to(self.device)
 
         if progress_fn:
-            progress_fn(4, 6, "Setting up optimizer...")
+            progress_fn(5, 8, "Setting up optimizer...")
 
         # ── 9. Build parameter groups (separate LR for text encoders) ──
         self.optimizer = _get_optimizer(config, self._build_param_groups())
@@ -401,7 +458,7 @@ class Trainer:
         self.scheduler = _get_scheduler(config, self.optimizer, total_steps)
 
         if progress_fn:
-            progress_fn(5, 6, "Setting up EMA...")
+            progress_fn(6, 8, "Setting up EMA...")
 
         # ── 11. EMA ──
         if config.use_ema:
@@ -450,7 +507,7 @@ class Trainer:
         if config.concept_probe_enabled and self.backend.pipeline is not None:
             from dataset_sorter.concept_probing import ConceptProber
             if progress_fn:
-                progress_fn(5, 6, "Probing base model knowledge...")
+                progress_fn(6, 8, "Probing base model knowledge...")
             prober = ConceptProber(
                 device=self.device,
                 num_images_per_concept=config.concept_probe_images,
@@ -538,7 +595,7 @@ class Trainer:
             log.debug(f"Training history unavailable: {e}")
 
         if progress_fn:
-            progress_fn(6, 6, f"Ready. {total_steps} steps, {config.epochs} epochs.")
+            progress_fn(8, 8, f"Ready. {total_steps} steps, {config.epochs} epochs.")
 
         self.state.phase = "ready"
 
@@ -819,6 +876,21 @@ class Trainer:
                         self._loss_history = self._loss_history[-self._max_history_len:]
                         self._lr_history = self._lr_history[-self._max_history_len:]
 
+                    # Live training monitor: detect divergence/plateau and auto-adjust
+                    if self._live_monitor is not None:
+                        adjustment_msg = self._live_monitor.on_step(
+                            self.state.global_step,
+                            self.state.loss,
+                            self.state.lr,
+                            optimizer=self.optimizer,
+                            scheduler=self.scheduler,
+                        )
+                        if adjustment_msg and progress_fn:
+                            progress_fn(
+                                self.state.global_step, self.total_steps,
+                                f"[Monitor] {adjustment_msg}",
+                            )
+
                     # Callbacks
                     if loss_fn:
                         loss_fn(self.state.global_step, self.state.loss, self.state.lr)
@@ -898,7 +970,26 @@ class Trainer:
         if self._vram_monitor is not None:
             log.info(self._vram_monitor.get_report())
 
+        # Log live training monitor summary
+        if self._live_monitor is not None:
+            mon_report = self._live_monitor.get_report()
+            if mon_report.lr_adjustments:
+                log.info(
+                    f"Live monitor: {len(mon_report.lr_adjustments)} LR adjustment(s) made"
+                )
+                for adj in mon_report.lr_adjustments:
+                    log.info(f"  {adj}")
+            if mon_report.divergence_detected:
+                log.warning("Live monitor: divergence was detected during training")
+            if mon_report.plateau_detected:
+                log.info("Live monitor: plateau was detected during training")
+
         # Log training run to history for future recommendations
+        # (uses live monitor divergence detection for more accurate history)
+        _diverged = (
+            self._live_monitor.get_report().divergence_detected
+            if self._live_monitor else False
+        )
         if self._training_history is not None:
             import time as _time
             try:
@@ -920,7 +1011,7 @@ class Trainer:
                     min_loss=min_loss,
                     convergence_step=0,
                     loss_curve=[l for _, l in self._loss_history[-200:]],
-                    diverged=False,
+                    diverged=_diverged,
                     oom_occurred=self._vram_monitor._oom_count > 0 if self._vram_monitor else False,
                     peak_vram_gb=self._vram_monitor.peak_gb if self._vram_monitor else 0.0,
                     training_time_s=_time.time() - self._training_start_time if self._training_start_time else 0,

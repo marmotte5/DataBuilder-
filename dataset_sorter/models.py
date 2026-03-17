@@ -221,6 +221,17 @@ class TrainingConfig:
     attention_rebalance_threshold: float = 0.15  # Attention fraction below this = "ignored"
     attention_rebalance_boost: float = 2.0     # Max boost for ignored tokens
 
+    # ── Pipeline Integration ──────────────────────────────────────────
+    pipeline_integration: bool = True       # Run pre-training pipeline (validation, dedup, tag analysis)
+    auto_fix_config: bool = True            # Auto-fix recoverable config errors
+    auto_dedup: bool = True                 # Auto-detect and de-weight duplicate images
+    auto_tag_analysis: bool = True          # Analyze tag importance and adjust dropout
+    auto_history_apply: bool = True         # Apply suggestions from training history
+    auto_speed_opts: bool = True            # Auto-enable speed optimizations for hardware
+    live_loss_monitor: bool = True          # Monitor loss curve during training and auto-adjust
+    live_monitor_interval: int = 200        # Steps between live loss curve checks
+    live_monitor_auto_adjust: bool = True   # Auto-reduce LR on divergence/plateau
+
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
 

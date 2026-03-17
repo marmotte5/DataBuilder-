@@ -62,6 +62,7 @@ class TrainingWorker(QThread):
     paused_changed = pyqtSignal(bool)             # is_paused
     smart_resume_report = pyqtSignal(str)         # analysis report text
     rlhf_candidates_ready = pyqtSignal(list, int) # candidates, round_idx
+    pipeline_report = pyqtSignal(str)             # pre-training integration report
 
     def __init__(
         self,
@@ -90,7 +91,7 @@ class TrainingWorker(QThread):
         try:
             self.trainer = Trainer(self.config)
 
-            # Setup (model loading, caching)
+            # Setup (model loading, caching, pipeline integration)
             self.phase_changed.emit("setup")
             self.trainer.setup(
                 model_path=self.model_path,
@@ -99,6 +100,11 @@ class TrainingWorker(QThread):
                 output_dir=self.output_dir,
                 progress_fn=self._on_progress,
             )
+
+            # Emit pipeline integration report if available
+            report = getattr(self.trainer, '_integration_report', None)
+            if report is not None:
+                self.pipeline_report.emit(report.format_pre_training())
 
             # Resume from checkpoint if requested
             if self.resume_from is not None:
