@@ -319,6 +319,20 @@ class Trainer:
             )
             log.info("MeBP: selective activation checkpointing enabled")
 
+        # ── 3d. Z-Image exclusive optimizations (S3-DiT single-stream) ──
+        if getattr(self.backend, 'model_name', '') == 'zimage':
+            _any_zimage_opt = any([
+                config.zimage_unified_attention, config.zimage_fused_rope,
+                config.zimage_fat_cache, config.zimage_logit_normal,
+                config.zimage_velocity_weighting,
+            ])
+            if _any_zimage_opt:
+                from dataset_sorter.zimage_optimizations import apply_zimage_optimizations
+                zimage_results = apply_zimage_optimizations(self.backend, config)
+                active = [k for k, v in zimage_results.items() if v]
+                if active:
+                    log.info(f"Z-Image exclusive optimizations: {', '.join(active)}")
+
         # ── 4. Text encoder setup ──
         self.backend.freeze_text_encoders()
         if config.train_text_encoder:

@@ -184,7 +184,10 @@ class TrainBackendBase(ABC):
 
         u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
         if sampling == "logit_normal":
-            u = torch.sigmoid(torch.randn_like(u) * 1.0)
+            # Configurable logit-normal: sigmoid(N(mu, sigma^2))
+            mu = getattr(self.config, 'logit_normal_mu', 0.0)
+            sigma = getattr(self.config, 'logit_normal_sigma', 1.0)
+            u = torch.sigmoid(torch.randn_like(u) * sigma + mu)
         elif sampling == "sigmoid":
             u = torch.sigmoid(torch.randn_like(u))
         return u

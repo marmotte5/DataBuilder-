@@ -285,6 +285,10 @@ class ZImageBackend(TrainBackendBase):
         resolution-dependent timestep shifting. All shared features
         (noise_offset, EMA sampling, SpeeD weighting, token weighting,
         autocast, min_snr warning) are included for parity.
+
+        Z-exclusive optimizations (when enabled):
+        - Logit-Normal timestep sampling (focuses on informative mid-range)
+        - Straight-path velocity weighting (emphasizes where flow changes most)
         """
         config = self.config
 
@@ -292,6 +296,9 @@ class ZImageBackend(TrainBackendBase):
         if self._timestep_ema_sampler is not None:
             discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
             u = discrete_ts.float() / 1000.0
+        elif getattr(self, '_logit_normal_sampler', None) is not None:
+            # Z-exclusive: Logit-Normal sampling for straight-path training
+            u = self._logit_normal_sampler.sample(batch_size)
         else:
             u = self._sample_flow_timesteps(batch_size)
 
@@ -320,6 +327,13 @@ class ZImageBackend(TrainBackendBase):
             ).sample
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
+
+        # Z-exclusive: straight-path velocity weighting
+        # Up-weights mid-range timesteps where the flow velocity changes most
+        if getattr(self, '_velocity_weighting', False):
+            vel_weights = 1.0 / (t * (1 - t) + 1e-5)
+            vel_weights = vel_weights / vel_weights.mean()  # Normalize to mean=1
+            loss = loss * vel_weights.view(-1, *([1] * (loss.dim() - 1)))
 
         if config.debiased_estimation:
             # Clamp denominator to prevent extreme weights when t → 1.0

@@ -217,6 +217,15 @@ EXTREME_SPEED_OPTS = {
     "cuda_graph_training": "CUDA Graph Training — Eliminate kernel launch overhead",
 }
 
+# Z-Image (S3-DiT) exclusive optimizations.
+ZIMAGE_EXCLUSIVE_OPTS = {
+    "zimage_unified_attention":  "Unified Stream Flash Attention — single kernel for text+image",
+    "zimage_fused_rope":         "Fused 3D Unified RoPE — Triton kernel, fp32 trig (no FP8 drift)",
+    "zimage_fat_cache":          "Fat Latent Cache — pre-baked unified stream tensors",
+    "zimage_logit_normal":       "Logit-Normal Timestep Sampling — ~40% fewer steps to convergence",
+    "zimage_velocity_weighting": "Straight-Path Velocity Weighting — emphasize informative timesteps",
+}
+
 # ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
 MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"

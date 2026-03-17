@@ -197,6 +197,15 @@ class TrainingConfig:
     # ── Zero-Bottleneck DataLoader ───────────────────────────────
     zero_bottleneck_loader: bool = False  # Replace DataLoader with mmap+pinned+DMA pipeline
 
+    # ── Z-Image Exclusive Optimizations ────────────────────────────
+    zimage_unified_attention: bool = False  # Single-kernel flash_attn for unified text+image stream
+    zimage_fused_rope: bool = False         # Fused 3D Unified RoPE Triton kernel (fp32 trig)
+    zimage_fat_cache: bool = False          # Pre-tokenized unified stream caching
+    zimage_logit_normal: bool = False       # Logit-normal timestep sampling for flow matching
+    logit_normal_mu: float = 0.0           # Logit-normal location (0=centered at t=0.5)
+    logit_normal_sigma: float = 1.0        # Logit-normal scale (0.5=aggressive, 1.0=standard)
+    zimage_velocity_weighting: bool = False # Straight-path velocity loss weighting
+
     # ── Curriculum Learning ──────────────────────────────────────────
     curriculum_learning: bool = False       # Loss-based adaptive image sampling
     curriculum_temperature: float = 1.0    # Sharpness of loss-based sampling (0=uniform, >1=aggressive)
