@@ -30,11 +30,21 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import logging
+
+# Configure root logger early so startup diagnostics are captured
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+from dataset_sorter.startup_log import print_startup_log
 from dataset_sorter.ui.main_window import run
 
 
 def main():
     """Console script entry point."""
+    print_startup_log()
     run()
 
 
