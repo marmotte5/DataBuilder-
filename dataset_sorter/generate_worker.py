@@ -366,17 +366,20 @@ class GenerateWorker(QThread):
         try:
             if is_single_file:
                 kwargs.pop("safety_checker", None)
-                if hasattr(pipe_cls, "from_single_file"):
-                    pipe = pipe_cls.from_single_file(model_path, **kwargs)
-                elif model_type in TRUST_REMOTE_CODE_MODELS:
+                if model_type in TRUST_REMOTE_CODE_MODELS:
                     # Custom models (Z-Image, Flux2, etc.): load the base pipeline
                     # from HuggingFace, then swap in fine-tuned weights from the
-                    # single .safetensors file.
+                    # single .safetensors file.  Must be checked BEFORE
+                    # from_single_file() because the generic loader cannot
+                    # reconstruct components like Qwen3 that are missing from
+                    # the checkpoint.
                     pipe = self._load_single_file_custom(
                         model_path, model_type, dtype, kwargs
                     )
                     if pipe is None:
                         return None
+                elif hasattr(pipe_cls, "from_single_file"):
+                    pipe = pipe_cls.from_single_file(model_path, **kwargs)
                 else:
                     # Try standard pipeline classes as fallback
                     pipe = self._load_single_file_fallback(
