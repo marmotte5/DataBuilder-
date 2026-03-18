@@ -109,9 +109,17 @@ class ToastNotification(QLabel):
 _active_toasts: list[ToastNotification] = []
 
 
+def _is_toast_alive(t: ToastNotification) -> bool:
+    """Return True if the underlying C++ object is still valid."""
+    try:
+        return t.parent() is not None
+    except RuntimeError:
+        return False
+
+
 def _cleanup_dead_toasts():
     """Remove toasts that have been deleted."""
-    _active_toasts[:] = [t for t in _active_toasts if t.parent() is not None]
+    _active_toasts[:] = [t for t in _active_toasts if _is_toast_alive(t)]
 
 
 def show_toast(
