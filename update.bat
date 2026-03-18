@@ -26,10 +26,10 @@ echo [0/7] Pulling latest code from git...
 git --version >nul 2>&1
 if %errorlevel% equ 0 (
     git pull 2>nul
-    if %errorlevel% equ 0 (
+    if !errorlevel! equ 0 (
         echo        Code updated.
     ) else (
-        echo        Git pull failed (offline or no remote). Continuing with local files.
+        echo        Git pull failed ^(offline or no remote^). Continuing with local files.
     )
 ) else (
     echo        Git not found. Skipping code update.
@@ -98,7 +98,7 @@ if "%VCREDIST_FOUND%"=="0" (
 :: Check NVIDIA driver
 nvidia-smi >nul 2>&1
 if %errorlevel% equ 0 (
-    for /f "tokens=9" %%v in ('nvidia-smi --query-gpu^=driver_version --format^=csv^,noheader 2^>nul') do (
+    for /f "tokens=*" %%v in ('nvidia-smi --query-gpu^=driver_version --format^=csv^,noheader 2^>nul') do (
         echo   NVIDIA driver: %%v
     )
     for /f "tokens=*" %%g in ('nvidia-smi --query-gpu^=name --format^=csv^,noheader 2^>nul') do (
@@ -153,11 +153,11 @@ if exist "venv\Lib\site-packages\torch" (
 
 echo        Installing fresh PyTorch (this may take a few minutes)...
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo.
     echo WARNING: CUDA 12.8 PyTorch failed. Trying CUDA 12.6...
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo.
         echo WARNING: CUDA 12.6 failed too. Installing CPU-only PyTorch...
         pip install torch torchvision torchaudio
@@ -207,7 +207,7 @@ echo.
 echo [7/7] Verifying PyTorch...
 echo.
 
-python -c "import torch; print(f'  PyTorch:     {torch.__version__}'); print(f'  CUDA:        {torch.version.cuda if torch.cuda.is_available() else \"Not available\"}'); print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}'); print(f'  VRAM:        {round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)} GB' if torch.cuda.is_available() else ''); print(f'  bf16:        {torch.cuda.is_bf16_supported()}' if torch.cuda.is_available() else ''); print(f'  cuDNN:       {torch.backends.cudnn.version()}' if torch.backends.cudnn.is_available() else '')"
+python -c "import torch; print(f'  PyTorch:     {torch.__version__}'); print(f'  CUDA:        {torch.version.cuda if torch.cuda.is_available() else \"Not available\"}'); print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}'); print(f'  VRAM:        {round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)} GB' if torch.cuda.is_available() else ''); print(f'  bf16:        {torch.cuda.is_bf16_supported()}' if torch.cuda.is_available() else ''); print(f'  cuDNN:       {torch.backends.cudnn.version()}' if torch.backends.cudnn.is_available() else '')"
 
 if %errorlevel% neq 0 (
     echo.
