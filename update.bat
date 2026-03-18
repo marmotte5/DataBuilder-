@@ -16,13 +16,29 @@ color 0B
 echo.
 echo  =============================================================
 echo     DataBuilder - Updater ^& Diagnostic
-echo     Fix DLL errors, reinstall PyTorch
+echo     Pull latest code, fix DLL errors, reinstall PyTorch
 echo  =============================================================
 echo.
 
-:: ── Step 0: Diagnostics ─────────────────────────────────────────────
+:: ── Step 0: Pull latest code ──────────────────────────────────────────
 
-echo [0/6] Running diagnostics...
+echo [0/7] Pulling latest code from git...
+git --version >nul 2>&1
+if %errorlevel% equ 0 (
+    git pull 2>nul
+    if %errorlevel% equ 0 (
+        echo        Code updated.
+    ) else (
+        echo        Git pull failed (offline or no remote). Continuing with local files.
+    )
+) else (
+    echo        Git not found. Skipping code update.
+)
+echo.
+
+:: ── Step 1: Diagnostics ─────────────────────────────────────────────
+
+echo [1/7] Running diagnostics...
 echo.
 
 :: Check Python source (Microsoft Store Python causes DLL issues)
@@ -97,9 +113,9 @@ if %errorlevel% equ 0 (
 
 echo.
 
-:: ── Step 1: Activate venv ───────────────────────────────────────────
+:: ── Step 2: Activate venv ───────────────────────────────────────────
 
-echo [1/6] Activating virtual environment...
+echo [2/7] Activating virtual environment...
 if not exist "venv\Scripts\activate.bat" (
     echo ERROR: Virtual environment not found.
     echo        Run install.bat first to create it.
@@ -115,17 +131,17 @@ if %errorlevel% neq 0 (
 )
 echo        venv activated.
 
-:: ── Step 2: Upgrade pip ─────────────────────────────────────────────
+:: ── Step 3: Upgrade pip ─────────────────────────────────────────────
 
 echo.
-echo [2/6] Upgrading pip...
+echo [3/7] Upgrading pip...
 python -m pip install --upgrade pip setuptools wheel >nul 2>&1
 echo        pip upgraded.
 
-:: ── Step 3: Reinstall PyTorch ───────────────────────────────────────
+:: ── Step 4: Reinstall PyTorch ───────────────────────────────────────
 
 echo.
-echo [3/6] Reinstalling PyTorch with CUDA 12.8...
+echo [4/7] Reinstalling PyTorch with CUDA 12.8...
 echo        Uninstalling old version first...
 pip uninstall -y torch torchvision torchaudio >nul 2>&1
 
@@ -148,36 +164,47 @@ if %errorlevel% neq 0 (
     )
 )
 
-:: ── Step 4: Upgrade core dependencies ───────────────────────────────
+:: ── Step 5: Upgrade core dependencies ───────────────────────────────
 
 echo.
-echo [4/6] Upgrading core dependencies...
-pip install --upgrade PyQt6>=6.5 numpy>=1.24 Pillow>=10.0
+echo [5/7] Upgrading core dependencies...
+pip install --upgrade "PyQt6>=6.5" "numpy>=1.24" "Pillow>=10.0"
 if %errorlevel% neq 0 (
     echo WARNING: Some core dependencies failed to upgrade.
 )
 
-:: ── Step 5: Upgrade training dependencies ───────────────────────────
+:: ── Step 6: Upgrade training dependencies ───────────────────────────
 
 echo.
-echo [5/6] Upgrading training dependencies...
-pip install --upgrade diffusers>=0.28 transformers>=4.38 accelerate>=0.27 safetensors>=0.4 peft>=0.10
+echo [6/7] Upgrading training dependencies...
+pip install --upgrade "diffusers>=0.28" "transformers>=4.38" "accelerate>=0.27" "safetensors>=0.4" "peft>=0.10"
 if %errorlevel% neq 0 (
     echo WARNING: Some training dependencies failed to upgrade.
 )
 
+:: Verify from_single_file support (needed for .safetensors model loading)
+python -c "from diffusers import DiffusionPipeline; assert hasattr(DiffusionPipeline, 'from_single_file')" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo        WARNING: diffusers from_single_file not available.
+    echo        Force-upgrading diffusers for .safetensors model support...
+    pip install --upgrade --force-reinstall "diffusers>=0.28"
+)
+
 :: Optional optimizers
 echo.
-echo [5b/6] Upgrading optional optimizers...
+echo [6b/7] Upgrading optional optimizers...
 pip install --upgrade bitsandbytes >nul 2>&1 && echo        bitsandbytes - OK || echo        bitsandbytes - skipped
 pip install --upgrade prodigyopt >nul 2>&1 && echo        prodigyopt - OK || echo        prodigyopt - skipped
 pip install --upgrade lion-pytorch >nul 2>&1 && echo        lion-pytorch - OK || echo        lion-pytorch - skipped
 pip install --upgrade dadaptation >nul 2>&1 && echo        dadaptation - OK || echo        dadaptation - skipped
+pip install --upgrade came-pytorch >nul 2>&1 && echo        came-pytorch - OK || echo        came-pytorch - skipped
+pip install --upgrade schedulefree >nul 2>&1 && echo        schedulefree - OK || echo        schedulefree - skipped
 
-:: ── Step 6: Verify PyTorch ──────────────────────────────────────────
+:: ── Step 7: Verify PyTorch ──────────────────────────────────────────
 
 echo.
-echo [6/6] Verifying PyTorch...
+echo [7/7] Verifying PyTorch...
 echo.
 
 python -c "import torch; print(f'  PyTorch:     {torch.__version__}'); print(f'  CUDA:        {torch.version.cuda if torch.cuda.is_available() else \"Not available\"}'); print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}'); print(f'  VRAM:        {round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1)} GB' if torch.cuda.is_available() else ''); print(f'  bf16:        {torch.cuda.is_bf16_supported()}' if torch.cuda.is_available() else ''); print(f'  cuDNN:       {torch.backends.cudnn.version()}' if torch.backends.cudnn.is_available() else '')"
@@ -199,6 +226,7 @@ if %errorlevel% neq 0 (
 )
 
 python -c "import diffusers; print(f'  Diffusers:   {diffusers.__version__}')" 2>nul
+python -c "from diffusers import DiffusionPipeline; ok='Yes' if hasattr(DiffusionPipeline,'from_single_file') else 'NO - .safetensors loading will fail!'; print(f'  SingleFile:  {ok}')" 2>nul
 python -c "import transformers; print(f'  Transformers:{transformers.__version__}')" 2>nul
 python -c "import peft; print(f'  PEFT:        {peft.__version__}')" 2>nul
 python -c "import PyQt6.QtCore; print(f'  PyQt6:       {PyQt6.QtCore.PYQT_VERSION_STR}')" 2>nul
