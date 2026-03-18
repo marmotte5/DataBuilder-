@@ -62,12 +62,91 @@ CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
 FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
 
+def _detect_model_type_from_keys(model_path: str) -> str:
+    """Detect model architecture by reading safetensors file header keys.
+
+    Reads only the JSON header (no tensor data) to inspect weight key names.
+    Different architectures have distinctive key patterns that allow reliable
+    identification even when the filename gives no hints.
+
+    Returns an empty string if detection fails or the file is not safetensors.
+    """
+    import json
+    import struct
+
+    if not model_path.lower().endswith(".safetensors"):
+        return ""
+
+    try:
+        with open(model_path, "rb") as f:
+            raw = f.read(8)
+            if len(raw) < 8:
+                return ""
+            header_size = struct.unpack("<Q", raw)[0]
+            # Sanity: header > 50 MB is suspicious
+            if header_size > 50_000_000:
+                return ""
+            header = json.loads(f.read(header_size))
+    except Exception:
+        return ""
+
+    keys = set(header.keys())
+    keys.discard("__metadata__")
+
+    # Helper: check if any key starts with a prefix
+    def _any(prefix: str) -> bool:
+        return any(k.startswith(prefix) for k in keys)
+
+    # ── Full-pipeline checkpoints (contain UNet + VAE + TE) ──────────
+    # Standard SD / SDXL / Pony (A1111 format)
+    if _any("model.diffusion_model."):
+        if _any("conditioner.embedders."):
+            return "sdxl"  # dual CLIP → SDXL/Pony
+        return "sd15"  # single CLIP → SD 1.x / 2.x
+
+    # ── Transformer-based architectures ──────────────────────────────
+    # Flux / Flux2: distinctive double_blocks + single_blocks
+    has_double = _any("double_blocks.") or _any("transformer.double_blocks.")
+    has_single = _any("single_blocks.") or _any("transformer.single_blocks.")
+    if has_double and has_single:
+        return "flux"
+
+    # SD3 / SD3.5: joint_blocks
+    if _any("joint_blocks.") or _any("transformer.joint_blocks."):
+        return "sd3"
+
+    # Z-Image: Qwen3 text encoder keys or text_encoder with embed_tokens
+    if _any("text_encoder.model.embed_tokens.") or _any("text_encoder.model.layers."):
+        # LLM-based text encoder (Qwen3) → Z-Image
+        return "zimage"
+
+    # PixArt / Sana: caption_projection is distinctive
+    if _any("caption_projection.") or _any("transformer.caption_projection."):
+        if _any("linear_1.") or _any("transformer.adaln_single."):
+            return "pixart"
+
+    # HiDream: typically has llm-related keys
+    if _any("llm.") or _any("transformer.llm."):
+        return "hidream"
+
+    # ── Component-only checkpoints (just transformer/unet weights) ───
+    # These are fine-tuned checkpoints that need _load_single_file_custom.
+    # Check for transformer-only patterns that indicate the architecture.
+    if _any("transformer_blocks.") or _any("blocks.") or _any("pos_embed"):
+        # Generic transformer checkpoint -- could be Z-Image, Chroma, etc.
+        # Can't reliably distinguish without more context; return empty
+        # so the caller can fall through to other detection methods.
+        pass
+
+    return ""
+
+
 def _detect_model_type(model_path: str) -> str:
     """Auto-detect model type by searching for known keywords in the path name.
 
     Checks keywords in a specific order so that 'flux2' matches before 'flux',
-    'sd35' before 'sd3', etc. Returns 'sdxl' as a safe default because SDXL
-    pipelines are the most common and broadly compatible.
+    'sd35' before 'sd3', etc. Falls back to inspecting safetensors file header
+    keys when filename matching fails. Returns 'sdxl' as a last resort.
     """
     p = model_path.lower()
     for key in ["flux2", "flux", "sdxl", "sd35", "sd3", "pony", "sd15",
@@ -75,6 +154,13 @@ def _detect_model_type(model_path: str) -> str:
                 "auraflow", "zimage", "hidream", "chroma"]:
         if key in p:
             return key
+
+    # Filename didn't match — try inspecting safetensors header keys
+    detected = _detect_model_type_from_keys(model_path)
+    if detected:
+        log.info(f"Auto-detected model type '{detected}' from safetensors keys")
+        return detected
+
     return "sdxl"  # Reasonable default
 
 
@@ -378,6 +464,18 @@ class GenerateWorker(QThread):
                     )
                     if pipe is None:
                         return None
+                elif self._is_component_only_checkpoint(model_path):
+                    # Checkpoint contains only transformer/unet weights (no VAE,
+                    # no text encoder).  from_single_file will hang trying to
+                    # download missing components.  Route through the custom
+                    # loader or fail with a clear message.
+                    self.error.emit(
+                        f"This checkpoint appears to contain only model weights "
+                        f"(no VAE or text encoder).  Please select the correct "
+                        f"model type manually instead of 'Auto-detect', or use "
+                        f"a full-pipeline checkpoint / diffusers folder."
+                    )
+                    return None
                 elif hasattr(pipe_cls, "from_single_file"):
                     pipe = pipe_cls.from_single_file(model_path, **kwargs)
                 else:
@@ -398,6 +496,80 @@ class GenerateWorker(QThread):
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
 
         return pipe
+
+    @staticmethod
+    def _is_component_only_checkpoint(model_path: str) -> bool:
+        """Check if a safetensors file contains only a single component.
+
+        Returns True when the checkpoint has transformer/unet weights but is
+        missing VAE and text-encoder weights.  Such files cannot be loaded via
+        from_single_file() because diffusers will hang trying to download the
+        missing components from HuggingFace.
+        """
+        if not model_path.lower().endswith(".safetensors"):
+            return False  # Can't inspect non-safetensors files cheaply
+
+        import json
+        import struct
+
+        try:
+            with open(model_path, "rb") as f:
+                raw = f.read(8)
+                if len(raw) < 8:
+                    return False
+                header_size = struct.unpack("<Q", raw)[0]
+                if header_size > 50_000_000:
+                    return False
+                header = json.loads(f.read(header_size))
+        except Exception:
+            return False
+
+        keys = set(header.keys())
+        keys.discard("__metadata__")
+
+        # Full-pipeline checkpoints have recognizable multi-component patterns:
+        # A1111 format: model.diffusion_model.* + first_stage_model.* (or conditioner.*)
+        # Diffusers merged: unet.* + vae.* + text_encoder.*
+        has_unet_a1111 = any(k.startswith("model.diffusion_model.") for k in keys)
+        has_vae_a1111 = any(k.startswith("first_stage_model.") for k in keys)
+        has_vae_diffusers = any(k.startswith("vae.") for k in keys)
+        has_te = any(
+            k.startswith(p)
+            for k in keys
+            for p in ("cond_stage_model.", "conditioner.", "text_encoder.", "text_encoders.")
+        )
+
+        # If it looks like a full pipeline, let from_single_file handle it
+        if has_unet_a1111 and (has_vae_a1111 or has_te):
+            return False
+        if has_vae_diffusers and has_te:
+            return False
+
+        # Check for component-only patterns (transformer/unet weights only)
+        has_transformer = any(
+            k.startswith(p)
+            for k in keys
+            for p in ("transformer.", "double_blocks.", "single_blocks.",
+                       "joint_blocks.", "blocks.", "transformer_blocks.")
+        )
+        # Keys with no component prefix at all (raw transformer weights)
+        sample_keys = list(keys)[:20]
+        has_no_prefix = all(
+            not any(k.startswith(p) for p in (
+                "model.", "vae.", "text_encoder.", "first_stage_model.",
+                "cond_stage_model.", "conditioner.",
+            ))
+            for k in sample_keys
+        )
+
+        if has_transformer and not has_te and not has_vae_a1111 and not has_vae_diffusers:
+            return True
+
+        # If no known prefix at all, it's likely a raw component dump
+        if has_no_prefix and not has_unet_a1111:
+            return True
+
+        return False
 
     def _load_single_file_custom(self, model_path: str, model_type: str, dtype, kwargs: dict):
         """Load a single-file checkpoint for custom trust_remote_code models.
