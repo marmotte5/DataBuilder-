@@ -89,6 +89,45 @@ class ZImageBackend(TrainBackendBase):
                 log.warning("bitsandbytes not installed; skipping INT4 TE quantization")
         return {}
 
+    def _load_single_file_pipeline(self, model_path: str):
+        """Try multiple methods to load a single .safetensors/.ckpt file.
+
+        Attempts in order:
+        1. DiffusionPipeline.from_single_file (diffusers >= 0.25)
+        2. StableDiffusion3Pipeline.from_single_file (SD3-compatible)
+        Raises if none work.
+        """
+        errors = []
+
+        # Try DiffusionPipeline.from_single_file
+        try:
+            from diffusers import DiffusionPipeline
+            if hasattr(DiffusionPipeline, 'from_single_file'):
+                return DiffusionPipeline.from_single_file(
+                    model_path, torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
+            errors.append("DiffusionPipeline has no from_single_file method")
+        except Exception as e:
+            errors.append(f"DiffusionPipeline.from_single_file: {e}")
+
+        # Try StableDiffusion3Pipeline.from_single_file (Z-Image is SD3-like)
+        try:
+            from diffusers import StableDiffusion3Pipeline
+            if hasattr(StableDiffusion3Pipeline, 'from_single_file'):
+                return StableDiffusion3Pipeline.from_single_file(
+                    model_path, torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
+            errors.append("StableDiffusion3Pipeline has no from_single_file method")
+        except Exception as e:
+            errors.append(f"StableDiffusion3Pipeline.from_single_file: {e}")
+
+        raise RuntimeError(
+            f"All single-file loading methods failed for '{model_path}':\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
+
     def load_model(self, model_path: str):
         """Load all Z-Image model components from *model_path*.
 
@@ -111,13 +150,10 @@ class ZImageBackend(TrainBackendBase):
         try:
             if use_quantized_te:
                 raise RuntimeError("Skip pipeline path for quantized TE loading")
-            from diffusers import DiffusionPipeline
             if is_single_file:
-                pipe = DiffusionPipeline.from_single_file(
-                    model_path, torch_dtype=self.dtype,
-                    trust_remote_code=True,
-                )
+                pipe = self._load_single_file_pipeline(model_path)
             else:
+                from diffusers import DiffusionPipeline
                 pipe = DiffusionPipeline.from_pretrained(
                     model_path, torch_dtype=self.dtype,
                     trust_remote_code=True,
@@ -128,8 +164,18 @@ class ZImageBackend(TrainBackendBase):
             self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
             self.vae = pipe.vae
             self.noise_scheduler = pipe.scheduler
-        except Exception:
-            # Manual component loading for custom Z-Image models
+        except Exception as exc:
+            if is_single_file:
+                raise RuntimeError(
+                    f"Cannot load single-file model '{model_path}'. "
+                    f"Z-Image single-file loading requires diffusers >= 0.25.0 "
+                    f"with from_single_file support. Either:\n"
+                    f"  1. Upgrade diffusers:  pip install --upgrade diffusers\n"
+                    f"  2. Use a diffusers-format model directory instead of a "
+                    f"single .safetensors/.ckpt file"
+                ) from exc
+
+            # Manual component loading for diffusers-format directories
             from transformers import AutoTokenizer, AutoModelForCausalLM
             from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
 
