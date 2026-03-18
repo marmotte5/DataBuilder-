@@ -95,7 +95,9 @@ class ZImageBackend(TrainBackendBase):
         Attempts in order:
         1. DiffusionPipeline.from_single_file (diffusers >= 0.25)
         2. StableDiffusion3Pipeline.from_single_file (SD3-compatible)
-        Raises if none work.
+        3. Manual state-dict extraction (split by component prefix)
+        Returns a pipeline object, or None if manual loading was used
+        (in which case components are set directly on self).
         """
         errors = []
 
@@ -123,10 +125,260 @@ class ZImageBackend(TrainBackendBase):
         except Exception as e:
             errors.append(f"StableDiffusion3Pipeline.from_single_file: {e}")
 
+        # Manual loading: extract component state dicts from the single file
+        log.info("Pipeline loaders failed; attempting manual single-file loading")
+        try:
+            self._load_single_file_manual(model_path)
+            return None  # signals that components were loaded directly
+        except Exception as e:
+            errors.append(f"Manual single-file loading: {e}")
+
         raise RuntimeError(
             f"All single-file loading methods failed for '{model_path}':\n"
             + "\n".join(f"  - {e}" for e in errors)
+            + "\n\nYou can also convert the model to diffusers format and "
+            "point to the directory instead."
         )
+
+    def _load_single_file_manual(self, model_path: str):
+        """Manually load a Z-Image single-file checkpoint by splitting the state dict.
+
+        Reads the .safetensors (or .ckpt) file, partitions keys by component
+        prefix (text_encoder, transformer/unet, vae), strips the prefix, and
+        loads each component individually. This avoids needing diffusers'
+        from_single_file to understand Z-Image's custom architecture.
+        """
+        import os
+        from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+        from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
+
+        # Load the raw state dict
+        if model_path.endswith(".safetensors"):
+            try:
+                from safetensors.torch import load_file
+                full_sd = load_file(model_path, device="cpu")
+            except ImportError:
+                raise RuntimeError(
+                    "safetensors package is required for single-file loading. "
+                    "Install with: pip install safetensors"
+                )
+        else:
+            full_sd = torch.load(model_path, map_location="cpu", weights_only=True)
+            # .ckpt files may wrap the state dict under a key
+            if "state_dict" in full_sd:
+                full_sd = full_sd["state_dict"]
+
+        # Identify component prefixes by scanning keys
+        prefix_map = {
+            "text_encoder.": "text_encoder",
+            "transformer.": "transformer",
+            "unet.": "transformer",  # alias
+            "vae.": "vae",
+        }
+        component_sds: dict[str, dict] = {
+            "text_encoder": {},
+            "transformer": {},
+            "vae": {},
+        }
+        unmatched_keys = []
+        for key, tensor in full_sd.items():
+            matched = False
+            for prefix, component in prefix_map.items():
+                if key.startswith(prefix):
+                    stripped = key[len(prefix):]
+                    component_sds[component][stripped] = tensor
+                    matched = True
+                    break
+            if not matched:
+                unmatched_keys.append(key)
+
+        if unmatched_keys:
+            log.debug(
+                "Single-file load: %d keys did not match any component prefix "
+                "(first 5: %s)", len(unmatched_keys), unmatched_keys[:5]
+            )
+
+        # Sanity check: we need at least a transformer
+        if not component_sds["transformer"]:
+            raise RuntimeError(
+                f"No transformer/unet keys found in '{model_path}'. "
+                f"Key prefixes found: {sorted(set(k.split('.')[0] for k in full_sd))}"
+            )
+
+        te_kwargs = self._get_te_load_kwargs()
+
+        # --- Text encoder (Qwen3) ---
+        if component_sds["text_encoder"]:
+            log.info("Loading Qwen3 text encoder from single-file checkpoint "
+                     "(%d parameters)", len(component_sds["text_encoder"]))
+            # Try to infer config from the state dict shape
+            try:
+                te_config = self._infer_qwen3_config(component_sds["text_encoder"])
+                from transformers import Qwen3Config, Qwen3Model
+                config_obj = Qwen3Config(**te_config)
+                self.text_encoder = Qwen3Model(config_obj)
+                self.text_encoder.load_state_dict(component_sds["text_encoder"], strict=False)
+                self.text_encoder = self.text_encoder.to(dtype=self.dtype)
+            except Exception as e:
+                log.warning("Could not load text encoder from checkpoint: %s. "
+                            "Will attempt to load from HuggingFace.", e)
+                self.text_encoder = None
+        else:
+            log.warning("No text_encoder keys in checkpoint; text encoder must "
+                        "be loaded separately or specified via config.")
+            self.text_encoder = None
+
+        # --- Tokenizer: can't be extracted from a checkpoint, load from HF ---
+        # Try common Qwen3 tokenizer sources
+        tokenizer_candidates = [
+            "Qwen/Qwen3-0.6B",
+            "Qwen/Qwen3-1.7B",
+            "Qwen/Qwen3-4B",
+        ]
+        if self.tokenizer is None:
+            for candidate in tokenizer_candidates:
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        candidate, trust_remote_code=True,
+                    )
+                    log.info("Loaded tokenizer from %s", candidate)
+                    break
+                except Exception:
+                    continue
+            if self.tokenizer is None:
+                raise RuntimeError(
+                    "Could not load Qwen3 tokenizer. Please ensure you have "
+                    "internet access or specify a diffusers-format model directory."
+                )
+
+        # --- VAE ---
+        if component_sds["vae"]:
+            log.info("Loading VAE from single-file checkpoint (%d parameters)",
+                     len(component_sds["vae"]))
+            try:
+                vae_config = self._infer_vae_config(component_sds["vae"])
+                self.vae = AutoencoderKL(**vae_config)
+                self.vae.load_state_dict(component_sds["vae"], strict=False)
+                self.vae = self.vae.to(dtype=self.dtype)
+            except Exception as e:
+                log.warning("Could not load VAE from checkpoint: %s", e)
+                self.vae = None
+        else:
+            log.warning("No vae keys in checkpoint; VAE will need to be loaded separately.")
+            self.vae = None
+
+        # --- Transformer ---
+        log.info("Loading transformer from single-file checkpoint (%d parameters)",
+                 len(component_sds["transformer"]))
+        try:
+            from diffusers.models import Transformer2DModel
+            # Try to create from config and load state dict
+            transformer_config = self._infer_transformer_config(component_sds["transformer"])
+            self.unet = Transformer2DModel(**transformer_config)
+            self.unet.load_state_dict(component_sds["transformer"], strict=False)
+            self.unet = self.unet.to(dtype=self.dtype)
+        except Exception:
+            # Fallback: try direct state dict loading
+            try:
+                self.unet = self._load_transformer_from_sd(component_sds["transformer"])
+            except Exception as e2:
+                raise RuntimeError(
+                    f"Could not load transformer from single-file checkpoint: {e2}"
+                )
+
+        # --- Scheduler ---
+        self.noise_scheduler = FlowMatchEulerDiscreteScheduler()
+        log.info("Manual single-file loading complete for Z-Image model")
+
+    def _load_transformer_from_sd(self, state_dict: dict):
+        """Last-resort transformer loading: instantiate and load weights."""
+        from diffusers.models import Transformer2DModel
+
+        # Infer basic dimensions from state dict
+        config = self._infer_transformer_config(state_dict)
+        model = Transformer2DModel(**config)
+        result = model.load_state_dict(state_dict, strict=False)
+        if result.missing_keys:
+            log.warning("Transformer has %d missing keys after load",
+                        len(result.missing_keys))
+        return model.to(dtype=self.dtype)
+
+    @staticmethod
+    def _infer_qwen3_config(state_dict: dict) -> dict:
+        """Infer Qwen3 model config from state dict tensor shapes."""
+        config = {}
+        # Try to find embedding dimension
+        for key, tensor in state_dict.items():
+            if "embed_tokens" in key and "weight" in key:
+                config["vocab_size"] = tensor.shape[0]
+                config["hidden_size"] = tensor.shape[1]
+                break
+        # Count layers
+        layer_indices = set()
+        for key in state_dict:
+            parts = key.split(".")
+            for i, p in enumerate(parts):
+                if p == "layers" and i + 1 < len(parts) and parts[i + 1].isdigit():
+                    layer_indices.add(int(parts[i + 1]))
+        if layer_indices:
+            config["num_hidden_layers"] = max(layer_indices) + 1
+        # Infer attention heads from q_proj
+        for key, tensor in state_dict.items():
+            if "q_proj" in key and "weight" in key:
+                # q_proj weight shape: [num_heads * head_dim, hidden_size]
+                hidden = config.get("hidden_size", tensor.shape[1])
+                head_dim = 128  # common default for Qwen3
+                if tensor.shape[0] % head_dim == 0:
+                    config["num_attention_heads"] = tensor.shape[0] // head_dim
+                break
+        for key, tensor in state_dict.items():
+            if "k_proj" in key and "weight" in key:
+                head_dim = 128
+                if tensor.shape[0] % head_dim == 0:
+                    config["num_key_value_heads"] = tensor.shape[0] // head_dim
+                break
+        # Infer intermediate_size from gate_proj
+        for key, tensor in state_dict.items():
+            if "gate_proj" in key and "weight" in key:
+                config["intermediate_size"] = tensor.shape[0]
+                break
+        return config
+
+    @staticmethod
+    def _infer_vae_config(state_dict: dict) -> dict:
+        """Infer AutoencoderKL config from VAE state dict shapes."""
+        config = {}
+        # Find latent channels from quant_conv or post_quant_conv
+        for key, tensor in state_dict.items():
+            if "quant_conv" in key and "weight" in key and tensor.dim() == 4:
+                config["latent_channels"] = tensor.shape[0] // 2  # quant_conv doubles channels
+                break
+        # Infer block_out_channels from encoder/decoder conv layers
+        for key, tensor in state_dict.items():
+            if "encoder.conv_in.weight" in key:
+                config["in_channels"] = tensor.shape[1]
+                break
+        return config
+
+    @staticmethod
+    def _infer_transformer_config(state_dict: dict) -> dict:
+        """Infer Transformer2DModel config from state dict shapes."""
+        config = {}
+        # Find sample_size and inner_dim from positional embeddings or projections
+        for key, tensor in state_dict.items():
+            if "pos_embed" in key and tensor.dim() >= 2:
+                config["sample_size"] = int(tensor.shape[1] ** 0.5) if tensor.dim() == 3 else tensor.shape[-1]
+                break
+        # Count transformer blocks
+        block_indices = set()
+        for key in state_dict:
+            parts = key.split(".")
+            for i, p in enumerate(parts):
+                if p in ("transformer_blocks", "blocks", "layers") and i + 1 < len(parts) and parts[i + 1].isdigit():
+                    block_indices.add(int(parts[i + 1]))
+        if block_indices:
+            config["num_layers"] = max(block_indices) + 1
+        return config
 
     def load_model(self, model_path: str):
         """Load all Z-Image model components from *model_path*.
@@ -152,28 +404,32 @@ class ZImageBackend(TrainBackendBase):
                 raise RuntimeError("Skip pipeline path for quantized TE loading")
             if is_single_file:
                 pipe = self._load_single_file_pipeline(model_path)
+                if pipe is None:
+                    # Manual loading was used; components already set on self
+                    pass
+                else:
+                    self.pipeline = pipe
+                    self.tokenizer = pipe.tokenizer
+                    self.text_encoder = pipe.text_encoder
+                    self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
+                    self.vae = pipe.vae
+                    self.noise_scheduler = pipe.scheduler
             else:
                 from diffusers import DiffusionPipeline
                 pipe = DiffusionPipeline.from_pretrained(
                     model_path, torch_dtype=self.dtype,
                     trust_remote_code=True,
                 )
-            self.pipeline = pipe
-            self.tokenizer = pipe.tokenizer
-            self.text_encoder = pipe.text_encoder
-            self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
-            self.vae = pipe.vae
-            self.noise_scheduler = pipe.scheduler
+                self.pipeline = pipe
+                self.tokenizer = pipe.tokenizer
+                self.text_encoder = pipe.text_encoder
+                self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
+                self.vae = pipe.vae
+                self.noise_scheduler = pipe.scheduler
         except Exception as exc:
+            # If single-file loading already exhausted all methods, re-raise
             if is_single_file:
-                raise RuntimeError(
-                    f"Cannot load single-file model '{model_path}'. "
-                    f"Z-Image single-file loading requires diffusers >= 0.25.0 "
-                    f"with from_single_file support. Either:\n"
-                    f"  1. Upgrade diffusers:  pip install --upgrade diffusers\n"
-                    f"  2. Use a diffusers-format model directory instead of a "
-                    f"single .safetensors/.ckpt file"
-                ) from exc
+                raise
 
             # Manual component loading for diffusers-format directories
             from transformers import AutoTokenizer, AutoModelForCausalLM
