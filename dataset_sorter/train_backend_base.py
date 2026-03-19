@@ -687,6 +687,162 @@ class TrainBackendBase(ABC):
             latents = latents * self.vae.config.scaling_factor
         return latents
 
+    # ── Single-file loading helpers ──────────────────────────────────
+
+    @staticmethod
+    def _is_single_file(model_path: str) -> bool:
+        """Return True if the model path points to a single checkpoint file."""
+        return model_path.endswith((".safetensors", ".ckpt", ".pt", ".bin"))
+
+    def _load_single_file_or_pretrained(
+        self,
+        model_path: str,
+        pipeline_cls,
+        *,
+        fallback_repo: str = "",
+        trust_remote_code: bool = False,
+        extra_kwargs: dict | None = None,
+    ):
+        """Try to load a model from a single file, with multiple fallback strategies.
+
+        Attempts in order:
+        1. pipeline_cls.from_single_file() if available
+        2. Load base pipeline from fallback_repo + swap transformer/unet weights
+        3. DiffusionPipeline.from_single_file() as a generic fallback
+
+        For directory paths, uses pipeline_cls.from_pretrained() directly.
+
+        Returns the loaded pipeline object.
+        """
+        from diffusers import DiffusionPipeline
+
+        kwargs = {"torch_dtype": self.dtype}
+        if trust_remote_code:
+            kwargs["trust_remote_code"] = True
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+
+        is_single = self._is_single_file(model_path)
+
+        if not is_single:
+            return pipeline_cls.from_pretrained(model_path, **kwargs)
+
+        errors = []
+
+        # Strategy 1: pipeline_cls.from_single_file()
+        if hasattr(pipeline_cls, "from_single_file"):
+            try:
+                return pipeline_cls.from_single_file(model_path, **kwargs)
+            except Exception as e:
+                errors.append(f"{pipeline_cls.__name__}.from_single_file: {e}")
+                log.debug("from_single_file failed: %s", e)
+
+        # Strategy 2: DiffusionPipeline.from_single_file()
+        if pipeline_cls is not DiffusionPipeline and hasattr(DiffusionPipeline, "from_single_file"):
+            try:
+                return DiffusionPipeline.from_single_file(model_path, **kwargs)
+            except Exception as e:
+                errors.append(f"DiffusionPipeline.from_single_file: {e}")
+                log.debug("DiffusionPipeline.from_single_file failed: %s", e)
+
+        # Strategy 3: Load base pipeline from HF and swap fine-tuned weights
+        if fallback_repo:
+            try:
+                pipe = self._load_base_and_swap_weights(
+                    model_path, fallback_repo, pipeline_cls,
+                    trust_remote_code=trust_remote_code,
+                )
+                return pipe
+            except Exception as e:
+                errors.append(f"Base repo swap ({fallback_repo}): {e}")
+                log.debug("Base repo swap failed: %s", e)
+
+        raise RuntimeError(
+            f"All loading methods failed for '{model_path}':\n"
+            + "\n".join(f"  - {e}" for e in errors)
+            + "\n\nConvert to diffusers format and point to the directory instead."
+        )
+
+    def _load_base_and_swap_weights(
+        self,
+        checkpoint_path: str,
+        base_repo: str,
+        pipeline_cls=None,
+        *,
+        trust_remote_code: bool = False,
+    ):
+        """Load a base pipeline from HuggingFace and swap in fine-tuned weights.
+
+        Reads the checkpoint file, strips known prefixes (transformer., unet.,
+        model.), and loads the weights into the pipeline's transformer or unet.
+        Falls back to treating all keys as unprefixed transformer weights if
+        no known prefix is found.
+        """
+        import torch as _torch
+        from diffusers import DiffusionPipeline
+
+        load_cls = pipeline_cls or DiffusionPipeline
+        load_kwargs = {"torch_dtype": self.dtype}
+        if trust_remote_code:
+            load_kwargs["trust_remote_code"] = True
+
+        log.info("Loading base pipeline from %s and swapping weights from %s",
+                 base_repo, checkpoint_path)
+
+        pipe = load_cls.from_pretrained(base_repo, **load_kwargs)
+
+        # Load checkpoint weights
+        if checkpoint_path.endswith(".safetensors"):
+            from safetensors.torch import load_file
+            state_dict = load_file(checkpoint_path, device="cpu")
+        else:
+            state_dict = _torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            if "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
+
+        # Find the trainable component
+        model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
+        if model_component is None:
+            raise RuntimeError("Cannot find transformer/unet in pipeline")
+
+        # Strip known prefixes
+        stripped = self._strip_state_dict_prefix(state_dict)
+
+        result = model_component.load_state_dict(stripped, strict=False)
+        if result.missing_keys:
+            log.warning("Swap weights: %d missing keys", len(result.missing_keys))
+        if result.unexpected_keys:
+            log.warning("Swap weights: %d unexpected keys", len(result.unexpected_keys))
+        log.info("Swapped fine-tuned weights into base pipeline (%d keys loaded)",
+                 len(stripped) - len(result.unexpected_keys))
+
+        return pipe
+
+    @staticmethod
+    def _strip_state_dict_prefix(state_dict: dict) -> dict:
+        """Strip common component prefixes from a state dict.
+
+        Handles prefixed checkpoints (transformer.*, unet.*, model.diffusion_model.*)
+        and unprefixed checkpoints (raw transformer weights).
+        """
+        # Check if all keys share a common component prefix
+        prefixes_to_try = [
+            "model.diffusion_model.",
+            "transformer.",
+            "unet.",
+            "model.",
+        ]
+        for prefix in prefixes_to_try:
+            prefixed_keys = [k for k in state_dict if k.startswith(prefix)]
+            if len(prefixed_keys) > len(state_dict) * 0.5:
+                # Most keys have this prefix — strip it
+                return {
+                    k[len(prefix):] if k.startswith(prefix) else k: v
+                    for k, v in state_dict.items()
+                }
+        # No dominant prefix found — return as-is (unprefixed weights)
+        return state_dict
+
     def cleanup(self):
         """Free all resources."""
         for attr in ("pipeline", "unet", "vae", "text_encoder",

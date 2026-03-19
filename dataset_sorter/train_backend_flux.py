@@ -31,11 +31,14 @@ class FluxBackend(TrainBackendBase):
     supports_dual_te = True
     prediction_type = "flow"
 
+    _HF_FALLBACK_REPO = "black-forest-labs/FLUX.1-dev"
+
     def load_model(self, model_path: str):
         from diffusers import FluxPipeline
 
-        pipe = FluxPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, FluxPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

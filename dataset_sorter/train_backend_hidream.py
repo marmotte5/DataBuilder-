@@ -51,16 +51,20 @@ class HiDreamBackend(TrainBackendBase):
         self.tokenizer_4 = None
         self.text_encoder_4 = None
 
+    _HF_FALLBACK_REPO = "HiDream-ai/HiDream-I1-Full"
+
     def load_model(self, model_path: str):
         """Load the HiDream pipeline and assign all 4 text encoders, VAE, and transformer.
 
         Extracts CLIP-L, CLIP-G, T5-XXL, and Llama components from the pipeline,
         freezes the VAE, and moves it to the target device.
+        Supports both diffusers directories and single-file .safetensors/.ckpt.
         """
         from diffusers import DiffusionPipeline
 
-        pipe = DiffusionPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, DiffusionPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
             trust_remote_code=True,
         )
 

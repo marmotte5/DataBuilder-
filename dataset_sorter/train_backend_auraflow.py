@@ -33,11 +33,14 @@ class AuraFlowBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "flow"
 
+    _HF_FALLBACK_REPO = "fal/AuraFlow-v0.3"
+
     def load_model(self, model_path: str):
         from diffusers import AuraFlowPipeline
 
-        pipe = AuraFlowPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, AuraFlowPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

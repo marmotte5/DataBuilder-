@@ -32,11 +32,14 @@ class StableCascadeBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "epsilon"
 
+    _HF_FALLBACK_REPO = "stabilityai/stable-cascade-prior"
+
     def load_model(self, model_path: str):
         from diffusers import StableCascadePriorPipeline
 
-        pipe = StableCascadePriorPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, StableCascadePriorPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

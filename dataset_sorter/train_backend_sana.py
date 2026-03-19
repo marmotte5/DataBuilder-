@@ -35,11 +35,14 @@ class SanaBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "flow"
 
+    _HF_FALLBACK_REPO = "Efficient-Large-Model/Sana_1600M_1024px_diffusers"
+
     def load_model(self, model_path: str):
         from diffusers import SanaPipeline
 
-        pipe = SanaPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, SanaPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

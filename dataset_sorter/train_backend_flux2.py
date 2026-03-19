@@ -38,11 +38,14 @@ class Flux2Backend(TrainBackendBase):
     # Layer indices to extract hidden states from the LLM encoder
     _hidden_state_layers = [10, 20, 30]
 
+    _HF_FALLBACK_REPO = "black-forest-labs/FLUX.1-dev"  # Flux2 base
+
     def load_model(self, model_path: str):
         from diffusers import DiffusionPipeline
 
-        pipe = DiffusionPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, DiffusionPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
             trust_remote_code=True,
         )
 

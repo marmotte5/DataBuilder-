@@ -34,11 +34,14 @@ class KolorsBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "epsilon"
 
+    _HF_FALLBACK_REPO = "Kwai-Kolors/Kolors-diffusers"
+
     def load_model(self, model_path: str):
         from diffusers import KolorsPipeline
 
-        pipe = KolorsPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, KolorsPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

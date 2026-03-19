@@ -31,11 +31,15 @@ class SD3Backend(TrainBackendBase):
     supports_triple_te = True
     prediction_type = "flow"
 
+    # HuggingFace repo for loading base pipeline when using single-file checkpoints.
+    _HF_FALLBACK_REPO = "stabilityai/stable-diffusion-3-medium-diffusers"
+
     def load_model(self, model_path: str):
         from diffusers import StableDiffusion3Pipeline
 
-        pipe = StableDiffusion3Pipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, StableDiffusion3Pipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

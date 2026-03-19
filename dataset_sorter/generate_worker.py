@@ -135,6 +135,21 @@ def _detect_model_type_from_keys(model_path: str) -> str:
     if _any("llm.") or _any("transformer.llm."):
         return "hidream"
 
+    # ── Z-Image unprefixed transformer weights ─────────────────────
+    # Z-Image single-file checkpoints often lack a 'transformer.' prefix.
+    _ZIMAGE_PREFIXES = {
+        "all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
+        "context_refiner", "noise_refiner", "t_embedder", "x_pad_token",
+    }
+    top_level = {k.split(".")[0] for k in list(keys)[:200]}
+    if top_level & _ZIMAGE_PREFIXES:
+        return "zimage"
+
+    # ── Hunyuan DiT unprefixed keys ──────────────────────────────
+    _HUNYUAN_PREFIXES = {"pooler", "text_states_proj", "t_block"}
+    if top_level & _HUNYUAN_PREFIXES:
+        return "hunyuan"
+
     # ── Component-only checkpoints (just transformer/unet weights) ───
     # These are fine-tuned checkpoints that need _load_single_file_custom.
     # Check for transformer-only patterns that indicate the architecture.
@@ -487,32 +502,51 @@ class GenerateWorker(QThread):
                         return None
                 elif self._is_component_only_checkpoint(model_path):
                     # Checkpoint contains only transformer/unet weights (no VAE,
-                    # no text encoder).  from_single_file will hang trying to
-                    # download missing components.  Route through the custom
-                    # loader or fail with a clear message.
-                    self.error.emit(
-                        f"This checkpoint appears to contain only model weights "
-                        f"(no VAE or text encoder).  Please select the correct "
-                        f"model type manually instead of 'Auto-detect', or use "
-                        f"a full-pipeline checkpoint / diffusers folder."
-                    )
-                    return None
-                elif hasattr(pipe_cls, "from_single_file"):
-                    pipe = pipe_cls.from_single_file(model_path, **kwargs)
-                else:
-                    # Try standard pipeline classes as fallback
-                    pipe = self._load_single_file_fallback(
-                        model_path, dtype, kwargs
+                    # no text encoder).  Route through the custom loader which
+                    # can download missing components from HuggingFace.
+                    pipe = self._load_single_file_custom(
+                        model_path, model_type, dtype, kwargs
                     )
                     if pipe is None:
                         return None
+                elif hasattr(pipe_cls, "from_single_file"):
+                    try:
+                        pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                    except Exception as e:
+                        log.warning(
+                            "%s.from_single_file failed: %s. "
+                            "Trying base repo fallback...", pipe_cls.__name__, e,
+                        )
+                        pipe = self._load_single_file_custom(
+                            model_path, model_type, dtype, kwargs
+                        )
+                        if pipe is None:
+                            return None
+                else:
+                    # No from_single_file — try custom loader, then fallback
+                    pipe = self._load_single_file_custom(
+                        model_path, model_type, dtype, kwargs
+                    )
+                    if pipe is None:
+                        pipe = self._load_single_file_fallback(
+                            model_path, dtype, kwargs
+                        )
+                        if pipe is None:
+                            return None
             else:
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
         except TypeError:
             # Some pipelines don't accept safety_checker
             kwargs.pop("safety_checker", None)
             if is_single_file and hasattr(pipe_cls, "from_single_file"):
-                pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                try:
+                    pipe = pipe_cls.from_single_file(model_path, **kwargs)
+                except Exception:
+                    pipe = self._load_single_file_custom(
+                        model_path, model_type, dtype, kwargs
+                    )
+                    if pipe is None:
+                        return None
             else:
                 pipe = pipe_cls.from_pretrained(model_path, **kwargs)
 
@@ -593,24 +627,32 @@ class GenerateWorker(QThread):
         return False
 
     def _load_single_file_custom(self, model_path: str, model_type: str, dtype, kwargs: dict):
-        """Load a single-file checkpoint for custom trust_remote_code models.
+        """Load a single-file checkpoint by loading a base pipeline and swapping weights.
 
-        Uses BASE_REPOS to map model types (zimage, flux2, chroma, hidream) to
-        their HuggingFace base repositories. Loads the full base pipeline from
-        the repo, then swaps the transformer/unet weights with the fine-tuned
-        weights from the .safetensors file. Key prefixes (e.g. 'transformer.')
-        are auto-stripped before loading the state dict.
+        Uses BASE_REPOS to map model types to their HuggingFace base repositories.
+        Loads the full base pipeline from the repo, then swaps the transformer/unet
+        weights with the fine-tuned weights from the .safetensors file. Key prefixes
+        (e.g. 'transformer.') are auto-stripped before loading the state dict.
         """
         import torch
         import diffusers
         from safetensors.torch import load_file
 
-        # Base model repos for custom architectures
+        # Base model repos for all architectures
         BASE_REPOS = {
-            "zimage":  "Tongyi-MAI/Z-Image",
-            "flux2":   "black-forest-labs/FLUX.1-dev",
-            "chroma":  "lodestone-horizon/chroma",
-            "hidream": "HiDream-ai/HiDream-I1-Full",
+            "zimage":   "Tongyi-MAI/Z-Image",
+            "flux2":    "black-forest-labs/FLUX.1-dev",
+            "chroma":   "lodestone-horizon/chroma",
+            "hidream":  "HiDream-ai/HiDream-I1-Full",
+            "sd3":      "stabilityai/stable-diffusion-3-medium-diffusers",
+            "sd35":     "stabilityai/stable-diffusion-3.5-medium",
+            "flux":     "black-forest-labs/FLUX.1-dev",
+            "pixart":   "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
+            "kolors":   "Kwai-Kolors/Kolors-diffusers",
+            "cascade":  "stabilityai/stable-cascade-prior",
+            "auraflow": "fal/AuraFlow-v0.3",
+            "sana":     "Efficient-Large-Model/Sana_1600M_1024px_diffusers",
+            "hunyuan":  "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers",
         }
 
         base_repo = BASE_REPOS.get(model_type)
@@ -645,19 +687,22 @@ class GenerateWorker(QThread):
         try:
             state_dict = load_file(model_path)
 
-            # Check if weights are prefixed (e.g. "transformer.") and strip
-            first_key = next(iter(state_dict), "")
-            prefix = ""
-            for candidate in ("transformer.", "unet.", "model."):
-                if first_key.startswith(candidate):
-                    prefix = candidate
+            # Strip known component prefixes (transformer., unet., model.diffusion_model., etc.)
+            prefixes_to_try = [
+                "model.diffusion_model.",
+                "transformer.",
+                "unet.",
+                "model.",
+            ]
+            for prefix in prefixes_to_try:
+                prefixed_keys = [k for k in state_dict if k.startswith(prefix)]
+                if len(prefixed_keys) > len(state_dict) * 0.5:
+                    state_dict = {
+                        k[len(prefix):] if k.startswith(prefix) else k: v
+                        for k, v in state_dict.items()
+                    }
+                    log.info(f"Stripped prefix '{prefix}' from {len(prefixed_keys)} keys")
                     break
-
-            if prefix:
-                state_dict = {
-                    k[len(prefix):]: v for k, v in state_dict.items()
-                    if k.startswith(prefix)
-                }
 
             missing, unexpected = model_component.load_state_dict(state_dict, strict=False)
             if missing:

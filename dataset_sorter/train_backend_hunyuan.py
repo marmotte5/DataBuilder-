@@ -31,11 +31,14 @@ class HunyuanDiTBackend(TrainBackendBase):
     supports_dual_te = True
     prediction_type = "epsilon"
 
+    _HF_FALLBACK_REPO = "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers"
+
     def load_model(self, model_path: str):
         from diffusers import HunyuanDiTPipeline
 
-        pipe = HunyuanDiTPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, HunyuanDiTPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe

@@ -32,11 +32,14 @@ class ChromaBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "flow"
 
+    _HF_FALLBACK_REPO = "lodestone-horizon/chroma"
+
     def load_model(self, model_path: str):
         from diffusers import DiffusionPipeline
 
-        pipe = DiffusionPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, DiffusionPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
             trust_remote_code=True,
         )
 

@@ -33,11 +33,14 @@ class PixArtBackend(TrainBackendBase):
     supports_dual_te = False
     prediction_type = "flow"
 
+    _HF_FALLBACK_REPO = "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS"
+
     def load_model(self, model_path: str):
         from diffusers import PixArtSigmaPipeline
 
-        pipe = PixArtSigmaPipeline.from_pretrained(
-            model_path, torch_dtype=self.dtype,
+        pipe = self._load_single_file_or_pretrained(
+            model_path, PixArtSigmaPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
         )
 
         self.pipeline = pipe
