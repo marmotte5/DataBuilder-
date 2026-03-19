@@ -490,38 +490,77 @@ class ZImageBackend(TrainBackendBase):
     def load_model(self, model_path: str):
         """Load all Z-Image model components from *model_path*.
 
-        Attempts to load via DiffusionPipeline first (supports both
-        single-file .safetensors/.ckpt and pretrained directories).
-        Falls back to manual per-subfolder loading when the pipeline
-        approach fails. Sets self.tokenizer, text_encoder, unet, vae,
-        and noise_scheduler. The VAE is frozen and moved to device
-        immediately; its shift_factor and scaling_factor are cached
-        for use in prepare_latents().
-        """
-        # Handle single-file .safetensors / .ckpt models
-        is_single_file = model_path.endswith((".safetensors", ".ckpt"))
+        For single-file .safetensors/.ckpt:
+          1. Try base class helper (download Z-Image pipeline from HF + swap weights)
+          2. Fall back to _load_single_file_pipeline (from_single_file attempts)
+          3. Fall back to _load_single_file_manual (component-by-component)
 
-        # Check if quantized TE loading is requested — forces manual path
+        For directories:
+          1. Try DiffusionPipeline.from_pretrained
+          2. Fall back to manual component loading
+
+        Sets self.tokenizer, text_encoder, unet, vae, and noise_scheduler.
+        The VAE is frozen and moved to device immediately; its shift_factor
+        and scaling_factor are cached for use in prepare_latents().
+        """
+        is_single_file = self._is_single_file(model_path)
         te_kwargs = self._get_te_load_kwargs()
         use_quantized_te = bool(te_kwargs)
+        pipe = None
 
-        # Try loading as a diffusers pipeline first (unless quantized TE requested)
-        try:
-            if use_quantized_te:
-                raise RuntimeError("Skip pipeline path for quantized TE loading")
-            if is_single_file:
-                pipe = self._load_single_file_pipeline(model_path)
-                if pipe is None:
-                    # Manual loading was used; components already set on self
-                    pass
-                else:
-                    self.pipeline = pipe
-                    self.tokenizer = pipe.tokenizer
-                    self.text_encoder = pipe.text_encoder
-                    self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
-                    self.vae = pipe.vae
-                    self.noise_scheduler = pipe.scheduler
-            else:
+        if is_single_file:
+            errors = []
+
+            # Strategy 1: Load full Z-Image pipeline from HF and swap
+            # fine-tuned transformer weights from the checkpoint.
+            # This is the most reliable method because it downloads all
+            # components (Qwen3 TE, VAE, scheduler) from the official repo.
+            if not use_quantized_te:
+                for repo in (self._HF_BASE_REPO, self._HF_TURBO_REPO):
+                    try:
+                        log.info("Trying base pipeline from %s + weight swap", repo)
+                        pipe = self._load_base_and_swap_weights(
+                            model_path, repo,
+                            trust_remote_code=True,
+                        )
+                        log.info("Z-Image loaded via base pipeline swap from %s", repo)
+                        break
+                    except Exception as e:
+                        errors.append(f"Base swap ({repo}): {e}")
+                        log.debug("Base swap from %s failed: %s", repo, e)
+
+            # Strategy 2: Try from_single_file methods
+            if pipe is None and not use_quantized_te:
+                try:
+                    pipe = self._load_single_file_pipeline(model_path)
+                    if pipe is None:
+                        # Manual loading was used; components already set on self
+                        pass
+                except Exception as e:
+                    errors.append(f"Pipeline loading: {e}")
+                    log.debug("_load_single_file_pipeline failed: %s", e)
+
+            # If all strategies failed, raise with combined errors
+            if pipe is None and self.unet is None:
+                raise RuntimeError(
+                    f"All loading methods failed for '{model_path}':\n"
+                    + "\n".join(f"  - {e}" for e in errors)
+                    + "\n\nConvert to diffusers format and point to the "
+                    "directory instead."
+                )
+
+            if pipe is not None:
+                self.pipeline = pipe
+                self.tokenizer = getattr(pipe, 'tokenizer', None)
+                self.text_encoder = getattr(pipe, 'text_encoder', None)
+                self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
+                self.vae = getattr(pipe, 'vae', None)
+                self.noise_scheduler = getattr(pipe, 'scheduler', None)
+        else:
+            # Directory path — try DiffusionPipeline first, then manual
+            try:
+                if use_quantized_te:
+                    raise RuntimeError("Skip pipeline path for quantized TE")
                 from diffusers import DiffusionPipeline
                 pipe = DiffusionPipeline.from_pretrained(
                     model_path, torch_dtype=self.dtype,
@@ -533,52 +572,44 @@ class ZImageBackend(TrainBackendBase):
                 self.unet = getattr(pipe, 'transformer', getattr(pipe, 'unet', None))
                 self.vae = pipe.vae
                 self.noise_scheduler = pipe.scheduler
-        except Exception as exc:
-            # If single-file loading already exhausted all methods, re-raise
-            if is_single_file:
-                raise
-
-            # Manual component loading for diffusers-format directories
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
-
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_path, subfolder="tokenizer",
-                trust_remote_code=True,
-            )
-            self.text_encoder = AutoModelForCausalLM.from_pretrained(
-                model_path, subfolder="text_encoder",
-                torch_dtype=self.dtype, trust_remote_code=True,
-                **te_kwargs,
-            )
-            self.vae = AutoencoderKL.from_pretrained(
-                model_path, subfolder="vae",
-                torch_dtype=self.dtype,
-            )
-
-            # Try to load the transformer
-            try:
-                from diffusers.models import Transformer2DModel
-                self.unet = Transformer2DModel.from_pretrained(
-                    model_path, subfolder="transformer",
-                    torch_dtype=self.dtype, trust_remote_code=True,
-                )
             except Exception:
-                from diffusers import DiffusionPipeline
-                # Fallback: load full pipeline with trust_remote_code
-                pipe = DiffusionPipeline.from_pretrained(
-                    model_path, torch_dtype=self.dtype,
+                # Manual component loading for diffusers-format directories
+                from transformers import AutoTokenizer, AutoModelForCausalLM
+                from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
+
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_path, subfolder="tokenizer",
                     trust_remote_code=True,
                 )
-                self.pipeline = pipe
-                self.unet = getattr(pipe, 'transformer', pipe.unet)
+                self.text_encoder = AutoModelForCausalLM.from_pretrained(
+                    model_path, subfolder="text_encoder",
+                    torch_dtype=self.dtype, trust_remote_code=True,
+                    **te_kwargs,
+                )
+                self.vae = AutoencoderKL.from_pretrained(
+                    model_path, subfolder="vae",
+                    torch_dtype=self.dtype,
+                )
+                try:
+                    from diffusers.models import Transformer2DModel
+                    self.unet = Transformer2DModel.from_pretrained(
+                        model_path, subfolder="transformer",
+                        torch_dtype=self.dtype, trust_remote_code=True,
+                    )
+                except Exception:
+                    from diffusers import DiffusionPipeline
+                    pipe = DiffusionPipeline.from_pretrained(
+                        model_path, torch_dtype=self.dtype,
+                        trust_remote_code=True,
+                    )
+                    self.pipeline = pipe
+                    self.unet = getattr(pipe, 'transformer', pipe.unet)
 
-            self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-                model_path, subfolder="scheduler",
-            )
-            # Keep pipeline reference if the fallback loaded one (needed for sample gen)
-            if self.pipeline is None:
-                log.info("Z-Image loaded in manual mode (sample generation unavailable)")
+                self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+                    model_path, subfolder="scheduler",
+                )
+                if self.pipeline is None:
+                    log.info("Z-Image loaded in manual mode (sample generation unavailable)")
 
         if self.vae is not None:
             self.vae.to(self.device, dtype=self.dtype)
