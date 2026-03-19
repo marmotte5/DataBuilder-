@@ -32,6 +32,51 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 
+def training_collate_fn(batch: list[dict]) -> dict:
+    """Custom collate that handles variable keys and None values in tuples.
+
+    The dataset returns dicts with different keys depending on caching state
+    (e.g. 'latent' vs 'pixel_values', optional 'te_cache'/'token_ids').
+    PyTorch's default_collate fails on mismatched keys and None in tuples.
+    This collate only batches keys present in ALL samples and handles None.
+    """
+    if not batch:
+        return {}
+
+    # Only collate keys present in every sample
+    common_keys = set(batch[0].keys())
+    for sample in batch[1:]:
+        common_keys &= set(sample.keys())
+
+    result = {}
+    for key in common_keys:
+        values = [sample[key] for sample in batch]
+        elem = values[0]
+
+        if isinstance(elem, torch.Tensor):
+            result[key] = torch.stack(values)
+        elif isinstance(elem, (int, float)):
+            result[key] = torch.tensor(values)
+        elif isinstance(elem, str):
+            result[key] = values  # keep as list
+        elif isinstance(elem, tuple):
+            # Recursively collate each position, preserving None
+            collated_tuple = []
+            for pos in range(len(elem)):
+                pos_values = [v[pos] for v in values]
+                if pos_values[0] is None:
+                    collated_tuple.append(None)
+                elif isinstance(pos_values[0], torch.Tensor):
+                    collated_tuple.append(torch.stack(pos_values))
+                else:
+                    collated_tuple.append(pos_values)
+            result[key] = tuple(collated_tuple)
+        else:
+            result[key] = values  # fallback: keep as list
+
+    return result
+
+
 class CachedTrainDataset(Dataset):
     """Training dataset with latent/TE caching for efficient multi-epoch training.
 

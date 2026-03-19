@@ -752,6 +752,8 @@ class Trainer:
                 te_cached=config.cache_text_encoder,
             )
 
+            from dataset_sorter.train_dataset import training_collate_fn
+
             if self._bucket_sampler is not None:
                 # Aspect ratio bucketing: use custom batch sampler (handles shuffle + grouping)
                 dataloader = DataLoader(
@@ -761,6 +763,7 @@ class Trainer:
                     pin_memory=True,
                     persistent_workers=use_workers > 0,
                     prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+                    collate_fn=training_collate_fn,
                 )
                 log.info("DataLoader using BucketBatchSampler for multi-aspect training")
             else:
@@ -773,6 +776,7 @@ class Trainer:
                     drop_last=True,
                     persistent_workers=use_workers > 0,
                     prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
+                    collate_fn=training_collate_fn,
                 )
 
             # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
