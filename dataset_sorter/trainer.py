@@ -456,8 +456,8 @@ class Trainer:
                 from dataset_sorter.mmap_dataset import MMapCacheBuilder, SafetensorsMMapDataset
                 mmap_dir = output_dir / ".cache" / "mmap"
                 builder = MMapCacheBuilder(mmap_dir, dtype=self.dtype)
-                latents = [self.dataset[i].get("latents") for i in range(len(self.dataset))]
-                te_outs = [self.dataset[i].get("te_out", ()) for i in range(len(self.dataset))]
+                latents = [self.dataset[i].get("latent") for i in range(len(self.dataset))]
+                te_outs = [self.dataset[i].get("te_cache", ()) for i in range(len(self.dataset))]
                 caps = [self.dataset[i].get("caption", "") for i in range(len(self.dataset))]
                 builder.build_safetensors_cache(latents, te_outs, caps)
                 mmap_ds = SafetensorsMMapDataset(

@@ -23,6 +23,7 @@ This provides:
 
 import logging
 import mmap
+import random
 import struct
 from pathlib import Path
 
@@ -249,10 +250,11 @@ class SafetensorsMMapDataset(Dataset):
         self.keep_first_n_tags = keep_first_n_tags
         self.caption_dropout_rate = caption_dropout_rate
         self._handles: dict[str, any] = {}
+        self._captions: list[str] = []
         self._opened = False
 
     def open(self):
-        """Open safetensors files for mmap reading."""
+        """Open safetensors files for mmap reading and load captions."""
         if not _SAFETENSORS_AVAILABLE:
             log.warning("safetensors not available; falling back to standard loading")
             return
@@ -269,9 +271,16 @@ class SafetensorsMMapDataset(Dataset):
             handle = safe_open(str(sf), framework="pt", device="cpu")
             self._handles[sf.stem] = handle
 
+        # Load captions from JSON metadata
+        import json
+        caption_path = self.cache_path / "captions.json"
+        if caption_path.exists():
+            with open(caption_path, "r") as f:
+                self._captions = json.load(f)
+
         self._opened = len(self._handles) > 0
         if self._opened:
-            log.info(f"SafetensorsMMap: opened {len(self._handles)} shard(s)")
+            log.info(f"SafetensorsMMap: opened {len(self._handles)} shard(s), {len(self._captions)} captions")
 
     def __len__(self):
         return self.num_samples
@@ -279,20 +288,36 @@ class SafetensorsMMapDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         """Load a sample via memory-mapped safetensors.
 
-        Returns dict with 'latents', 'te_out', 'caption' keys.
+        Returns dict with 'latent', 'te_cache', 'caption', 'index' keys
+        matching CachedTrainDataset's key convention for _training_step().
         """
-        
-        result = {}
+        result = {"index": idx}
 
-        # Try mmap path first
+        # Load caption with optional tag shuffle / dropout
+        if idx < len(self._captions):
+            caption = self._captions[idx]
+            if self.caption_dropout_rate > 0 and random.random() < self.caption_dropout_rate:
+                caption = ""
+            elif self.tag_shuffle:
+                tags = [t.strip() for t in caption.split(",") if t.strip()]
+                if len(tags) > self.keep_first_n_tags:
+                    fixed = tags[:self.keep_first_n_tags]
+                    rest = tags[self.keep_first_n_tags:]
+                    random.shuffle(rest)
+                    caption = ", ".join(fixed + rest)
+            result["caption"] = caption
+        else:
+            result["caption"] = ""
+
+        # Load tensors from mmap shards
         if self._opened:
             for handle in self._handles.values():
                 lat_key = f"latent_{idx}"
                 if lat_key in handle.keys():
-                    result["latents"] = handle.get_tensor(lat_key).to(
+                    result["latent"] = handle.get_tensor(lat_key).to(
                         self.device, dtype=self.dtype, non_blocking=True
                     )
-                    # Load TE outputs
+                    # Load TE outputs as te_cache tuple (matches _training_step)
                     te_parts = []
                     for j in range(10):  # max 10 TE outputs
                         te_key = f"te_{idx}_{j}"
@@ -304,7 +329,7 @@ class SafetensorsMMapDataset(Dataset):
                             )
                         else:
                             break
-                    result["te_out"] = tuple(te_parts)
+                    result["te_cache"] = tuple(te_parts)
                     break
 
         return result
@@ -358,7 +383,12 @@ class MMapCacheBuilder:
         shard_limit = shard_size_mb * 1024 * 1024
 
         for i in range(len(latents)):
-            # Latent
+            # Latent (skip if None — key mismatch or missing cache)
+            if latents[i] is None:
+                raise ValueError(
+                    f"Latent at index {i} is None — dataset may not have "
+                    f"cached latents or key names are mismatched"
+                )
             lat = latents[i].to(self.dtype).cpu().contiguous()
             tensors[f"latent_{i}"] = lat
             current_size += lat.nelement() * lat.element_size()
