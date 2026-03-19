@@ -149,10 +149,12 @@ def _detect_model_type(model_path: str) -> str:
     keys when filename matching fails. Returns 'sdxl' as a last resort.
     """
     p = model_path.lower()
+    # Normalise separators so "Z-Image", "z_image", "z-image" all match "zimage"
+    p_normalised = p.replace("-", "").replace("_", "")
     for key in ["flux2", "flux", "sdxl", "sd35", "sd3", "pony", "sd15",
                 "sd2", "pixart", "sana", "kolors", "cascade", "hunyuan",
                 "auraflow", "zimage", "hidream", "chroma"]:
-        if key in p:
+        if key in p_normalised:
             return key
 
     # Filename didn't match — try inspecting safetensors header keys
@@ -586,7 +588,7 @@ class GenerateWorker(QThread):
 
         # Base model repos for custom architectures
         BASE_REPOS = {
-            "zimage":  "Freepik/z-image",
+            "zimage":  "Tongyi-MAI/Z-Image",
             "flux2":   "black-forest-labs/FLUX.1-dev",
             "chroma":  "lodestone-horizon/chroma",
             "hidream": "HiDream-ai/HiDream-I1-Full",

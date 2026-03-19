@@ -140,6 +140,10 @@ class ZImageBackend(TrainBackendBase):
             "point to the directory instead."
         )
 
+    # Official HuggingFace repos for Z-Image (Alibaba Tongyi Lab).
+    _HF_BASE_REPO = "Tongyi-MAI/Z-Image"
+    _HF_TURBO_REPO = "Tongyi-MAI/Z-Image-Turbo"
+
     def _load_single_file_manual(self, model_path: str):
         """Manually load a Z-Image single-file checkpoint by splitting the state dict.
 
@@ -224,16 +228,39 @@ class ZImageBackend(TrainBackendBase):
                             "Will attempt to load from HuggingFace.", e)
                 self.text_encoder = None
         else:
-            log.warning("No text_encoder keys in checkpoint; text encoder must "
-                        "be loaded separately or specified via config.")
+            log.info("No text_encoder keys in checkpoint; will load from HuggingFace.")
             self.text_encoder = None
 
+        # If text encoder wasn't in the checkpoint or failed to load,
+        # try loading from the official Z-Image repo or a standalone Qwen3 repo.
+        if self.text_encoder is None:
+            te_candidates = [
+                (self._HF_BASE_REPO, "text_encoder"),
+                ("Qwen/Qwen3-4B", None),
+            ]
+            for repo, subfolder in te_candidates:
+                try:
+                    sf_kwargs = {"subfolder": subfolder} if subfolder else {}
+                    self.text_encoder = AutoModelForCausalLM.from_pretrained(
+                        repo, torch_dtype=self.dtype,
+                        trust_remote_code=True, **te_kwargs, **sf_kwargs,
+                    )
+                    log.info("Loaded Qwen3 text encoder from %s", repo)
+                    break
+                except Exception:
+                    continue
+            if self.text_encoder is None:
+                log.warning("Could not load text encoder from HuggingFace. "
+                            "Training will fail unless a text encoder is provided.")
+
         # --- Tokenizer: can't be extracted from a checkpoint, load from HF ---
-        # Try common Qwen3 tokenizer sources
+        # Z-Image uses Qwen3-4B; try it first, then fall back to other sizes
+        # and the official Z-Image repo (which bundles the tokenizer).
         tokenizer_candidates = [
-            "Qwen/Qwen3-0.6B",
-            "Qwen/Qwen3-1.7B",
             "Qwen/Qwen3-4B",
+            self._HF_BASE_REPO,
+            "Qwen/Qwen3-1.7B",
+            "Qwen/Qwen3-0.6B",
         ]
         if self.tokenizer is None:
             for candidate in tokenizer_candidates:
@@ -264,8 +291,19 @@ class ZImageBackend(TrainBackendBase):
                 log.warning("Could not load VAE from checkpoint: %s", e)
                 self.vae = None
         else:
-            log.warning("No vae keys in checkpoint; VAE will need to be loaded separately.")
+            log.info("No vae keys in checkpoint; will load VAE from HuggingFace.")
             self.vae = None
+
+        # If VAE wasn't in the checkpoint, load from the official Z-Image repo.
+        if self.vae is None:
+            try:
+                self.vae = AutoencoderKL.from_pretrained(
+                    self._HF_BASE_REPO, subfolder="vae",
+                    torch_dtype=self.dtype,
+                )
+                log.info("Loaded VAE from %s", self._HF_BASE_REPO)
+            except Exception as e:
+                log.warning("Could not load VAE from %s: %s", self._HF_BASE_REPO, e)
 
         # --- Transformer ---
         log.info("Loading transformer from single-file checkpoint (%d parameters)",
