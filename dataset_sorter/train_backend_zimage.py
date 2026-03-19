@@ -761,13 +761,21 @@ class ZImageBackend(TrainBackendBase):
         encoder_hidden = te_out[0]
 
         # Forward pass with autocast for mixed precision speed
+        # ZImageTransformer2DModel.forward() expects:
+        #   x: list of tensors (one per batch item, unbounded from dim 0)
+        #   t: timestep tensor
+        #   cap_feats: list of tensors (one per batch item)
         _act = autocast_device_type()
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             noise_pred = self.unet(
-                hidden_states=noisy_latents,
-                timestep=t,
-                encoder_hidden_states=encoder_hidden,
-            ).sample
+                x=list(noisy_latents.unbind(dim=0)),
+                t=t,
+                cap_feats=list(encoder_hidden.unbind(dim=0)),
+                return_dict=False,
+            )[0]
+            # Reconstruct batch tensor from list of per-sample outputs
+            if isinstance(noise_pred, (list, tuple)):
+                noise_pred = torch.stack(noise_pred)
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
