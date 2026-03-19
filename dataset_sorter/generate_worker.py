@@ -34,6 +34,12 @@ SCHEDULER_MAP = {
     "unipc":       "UniPCMultistepScheduler",
 }
 
+# Flow-matching models must keep their native scheduler (FlowMatchEulerDiscrete
+# or similar) because standard schedulers lack the `mu`/`shift` parameters
+# required by the flow-matching timestep schedule.
+FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
+                        "auraflow", "hidream"}
+
 # ── Model type → pipeline class ────────────────────────────────────────────
 PIPELINE_MAP = {
     "sd15":     ("diffusers", "StableDiffusionPipeline"),
@@ -166,13 +172,26 @@ def _detect_model_type(model_path: str) -> str:
     return "sdxl"  # Reasonable default
 
 
-def _load_scheduler(pipe, scheduler_name: str):
+def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):
     """Replace the pipeline's scheduler using SCHEDULER_MAP lookup.
 
-    Applies Karras sigmas when the scheduler name contains 'karras'.
-    Falls back to EulerAncestralDiscreteScheduler for unknown names.
+    Flow-matching models (Flux, Z-Image, SD3, etc.) keep their native
+    scheduler because standard schedulers lack the ``mu``/``shift``
+    parameters required by the flow-matching timestep schedule.
+
+    For non-flow-matching models, applies Karras sigmas when the scheduler
+    name contains 'karras'.  Falls back to EulerAncestralDiscreteScheduler
+    for unknown names.
     """
     import diffusers
+
+    # Flow-matching models must use their native scheduler
+    if model_type in FLOW_MATCHING_MODELS:
+        log.info(
+            f"Keeping native scheduler for flow-matching model '{model_type}' "
+            f"(requested '{scheduler_name}' is not compatible)"
+        )
+        return
 
     cls_name = SCHEDULER_MAP.get(scheduler_name, "EulerAncestralDiscreteScheduler")
     scheduler_cls = getattr(diffusers, cls_name, None)
@@ -875,7 +894,7 @@ class GenerateWorker(QThread):
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
-        _load_scheduler(self.pipe, scheduler_name)
+        _load_scheduler(self.pipe, scheduler_name, model_type)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
         active_pipe = self._get_pipeline_for_mode()
