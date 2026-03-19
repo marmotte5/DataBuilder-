@@ -654,11 +654,13 @@ class ZImageBackend(TrainBackendBase):
         """Encode with Qwen3 using chat template.
 
         Z-Image uses Qwen3ForCausalLM which requires chat-style
-        tokenization. Hidden states from the last layer are
-        used as the text conditioning.
+        tokenization. The second-to-last hidden state layer is used
+        as text conditioning (matching the official pipeline).
 
-        Captions are batched together in a single forward pass
-        for efficiency (Qwen3 supports batch inference).
+        Returns a tuple of (list_of_embeddings, attention_masks) where
+        each embedding contains only non-padded tokens — the
+        ZImageTransformer2DModel expects variable-length per-sample
+        caption features without padding.
         """
         # Format all captions through chat template
         texts = [_apply_chat_template(self.tokenizer, c) for c in captions]
@@ -671,14 +673,22 @@ class ZImageBackend(TrainBackendBase):
         ).to(self.device)
 
         with torch.no_grad():
+            attention_mask = tokens["attention_mask"]
             out = self.text_encoder(
                 **tokens,
                 output_hidden_states=True,
             )
-            # Use the last hidden state as conditioning
-            encoder_hidden = out.hidden_states[-1]
+            # Use second-to-last hidden state (matches official pipeline)
+            encoder_hidden = out.hidden_states[-2]
 
-        return (encoder_hidden,)
+            # Mask out padding tokens per sample — the transformer expects
+            # variable-length caption features, not padded sequences.
+            embeddings_list = []
+            for i in range(encoder_hidden.shape[0]):
+                mask = attention_mask[i].bool()
+                embeddings_list.append(encoder_hidden[i][mask])
+
+        return (embeddings_list,)
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values into latent space using the frozen VAE.
@@ -758,24 +768,40 @@ class ZImageBackend(TrainBackendBase):
             )
         noisy_latents = self._flow_interpolate(latents, noise, t)
 
-        encoder_hidden = te_out[0]
+        # te_out[0] is either:
+        # - A list of variable-length 2D tensors (from live encode_text_batch)
+        # - A batched 3D tensor [B, seq_len, dim] (from cached TE outputs)
+        # The transformer expects a list of 2D tensors per sample.
+        cap_feats_raw = te_out[0]
+        if isinstance(cap_feats_raw, torch.Tensor) and cap_feats_raw.dim() == 3:
+            cap_feats = list(cap_feats_raw.unbind(dim=0))
+        elif isinstance(cap_feats_raw, torch.Tensor) and cap_feats_raw.dim() == 2:
+            # Single sample (no batch dim)
+            cap_feats = [cap_feats_raw]
+        else:
+            cap_feats = cap_feats_raw
 
         # Forward pass with autocast for mixed precision speed
         # ZImageTransformer2DModel.forward() expects:
-        #   x: list of tensors (one per batch item, unbounded from dim 0)
-        #   t: timestep tensor
-        #   cap_feats: list of tensors (one per batch item)
+        #   x: list of 4-D tensors [C, 1, H, W] (frame dim required)
+        #   t: timestep tensor [batch_size]
+        #   cap_feats: list of 2-D tensors [seq_len, dim] (no padding)
         _act = autocast_device_type()
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            # Add frame dimension: [B, C, H, W] -> [B, C, 1, H, W] -> unbind
+            x_list = list(noisy_latents.unsqueeze(2).unbind(dim=0))
             noise_pred = self.unet(
-                x=list(noisy_latents.unbind(dim=0)),
+                x=x_list,
                 t=t,
-                cap_feats=list(encoder_hidden.unbind(dim=0)),
+                cap_feats=cap_feats,
                 return_dict=False,
             )[0]
             # Reconstruct batch tensor from list of per-sample outputs
             if isinstance(noise_pred, (list, tuple)):
                 noise_pred = torch.stack(noise_pred)
+            # Remove frame dimension: [B, C, 1, H, W] -> [B, C, H, W]
+            if noise_pred.dim() == 5:
+                noise_pred = noise_pred.squeeze(2)
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
