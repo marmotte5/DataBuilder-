@@ -770,16 +770,25 @@ class ZImageBackend(TrainBackendBase):
 
         # te_out[0] is either:
         # - A list of variable-length 2D tensors (from live encode_text_batch)
-        # - A batched 3D tensor [B, seq_len, dim] (from cached TE outputs)
-        # The transformer expects a list of 2D tensors per sample.
+        # - A batched tensor from cached TE outputs, possibly with extra dims:
+        #   [B, seq_len, dim] (3D) or [B, 1, seq_len, dim] (4D if caching
+        #   preserved the per-sample batch dim of 1)
+        # The transformer expects a list of 2D tensors [seq_len, dim].
         cap_feats_raw = te_out[0]
-        if isinstance(cap_feats_raw, torch.Tensor) and cap_feats_raw.dim() == 3:
-            cap_feats = list(cap_feats_raw.unbind(dim=0))
-        elif isinstance(cap_feats_raw, torch.Tensor) and cap_feats_raw.dim() == 2:
-            # Single sample (no batch dim)
-            cap_feats = [cap_feats_raw]
-        else:
+        if isinstance(cap_feats_raw, (list, tuple)):
+            # Already a list (from live encode_text_batch)
             cap_feats = cap_feats_raw
+        elif isinstance(cap_feats_raw, torch.Tensor):
+            # Squeeze singleton dims until we have [B, seq_len, dim] or [seq_len, dim]
+            while cap_feats_raw.dim() > 3:
+                cap_feats_raw = cap_feats_raw.squeeze(1)
+            if cap_feats_raw.dim() == 3:
+                cap_feats = list(cap_feats_raw.unbind(dim=0))
+            else:
+                # 2D: single sample
+                cap_feats = [cap_feats_raw]
+        else:
+            cap_feats = [cap_feats_raw]
 
         # Forward pass with autocast for mixed precision speed
         # ZImageTransformer2DModel.forward() expects:
