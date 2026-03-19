@@ -20,7 +20,7 @@ from PyQt6.QtGui import QFont, QPixmap, QImage
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QTextEdit, QFileDialog, QGroupBox,
+    QTextEdit, QFileDialog, QGroupBox, QCheckBox,
     QScrollArea, QFrame, QProgressBar, QSplitter,
     QToolButton,
 )
@@ -441,6 +441,34 @@ class GenerateTab(QWidget):
         gen_row.addWidget(self.btn_stop)
         left.addLayout(gen_row)
 
+        # -- Auto-save output folder --
+        save_grp = QGroupBox("Auto-Save")
+        save_layout = QGridLayout(save_grp)
+        save_layout.setSpacing(6)
+
+        self.autosave_check = QCheckBox("Auto-save generated images")
+        self.autosave_check.setChecked(True)
+        self.autosave_check.setToolTip("Automatically save each generated image to the output folder")
+        save_layout.addWidget(self.autosave_check, 0, 0, 1, 3)
+
+        save_layout.addWidget(QLabel("Output folder:"), 1, 0)
+        self.output_folder_edit = QLineEdit()
+        default_output = str(Path.home() / "DataBuilder_outputs")
+        self.output_folder_edit.setText(default_output)
+        self.output_folder_edit.setToolTip("Folder where generated images are automatically saved")
+        save_layout.addWidget(self.output_folder_edit, 1, 1)
+        btn_browse_output = QPushButton("Browse")
+        btn_browse_output.setToolTip("Choose output folder for generated images")
+        btn_browse_output.clicked.connect(self._browse_output_folder)
+        save_layout.addWidget(btn_browse_output, 1, 2)
+
+        btn_open_output = QPushButton("Open Folder")
+        btn_open_output.setToolTip("Open the output folder in your file manager")
+        btn_open_output.clicked.connect(self._open_output_folder)
+        save_layout.addWidget(btn_open_output, 2, 1, 1, 2)
+
+        left.addWidget(save_grp)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -563,6 +591,44 @@ class GenerateTab(QWidget):
                 if data["path"]:
                     adapters.append(data)
         return adapters
+
+    # ── Output folder ──────────────────────────────────────────────────
+
+    def _browse_output_folder(self):
+        """Open a folder dialog to select the auto-save output folder."""
+        folder = QFileDialog.getExistingDirectory(self, "Select output folder")
+        if folder:
+            self.output_folder_edit.setText(folder)
+
+    def _open_output_folder(self):
+        """Open the output folder in the system file manager."""
+        import subprocess, sys
+        folder = self.output_folder_edit.text().strip()
+        if not folder:
+            return
+        p = Path(folder)
+        if not p.exists():
+            p.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", str(p)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+
+    def _auto_save_image(self, pil_image):
+        """Save an image to the output folder if auto-save is enabled. Returns the save path or None."""
+        if not self.autosave_check.isChecked():
+            return None
+        folder = self.output_folder_edit.text().strip()
+        if not folder:
+            return None
+        p = Path(folder)
+        p.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        save_path = p / f"generated_{timestamp}.png"
+        self._save_with_metadata(pil_image, str(save_path))
+        return str(save_path)
 
     # ── Model loading ───────────────────────────────────────────────────
 
@@ -714,6 +780,11 @@ class GenerateTab(QWidget):
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         """Add a newly generated image to the gallery, evicting old ones if over capacity."""
+        # Auto-save to output folder
+        save_path = self._auto_save_image(pil_image)
+        if save_path:
+            info += f" | Saved: {save_path}"
+
         self._generated_images.append((pil_image, info))
         # Evict oldest images AND their thumbnails when gallery exceeds cap
         while len(self._generated_images) > self._max_gallery_images:
@@ -743,6 +814,10 @@ class GenerateTab(QWidget):
 
     def _on_finished(self, success: bool, message: str):
         """Handle generation completion: update status and re-enable controls."""
+        if success and self.autosave_check.isChecked():
+            folder = self.output_folder_edit.text().strip()
+            if folder:
+                message += f"  |  Saved to: {folder}"
         self.status_label.setText(message)
         self.btn_generate.setEnabled(self._worker is not None and self._worker.is_loaded)
         self.btn_stop.setEnabled(False)

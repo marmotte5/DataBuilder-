@@ -989,6 +989,16 @@ class GenerateWorker(QThread):
                 log.error(f"Generation failed for image {i + 1}: {e}")
                 self.error.emit(f"Image {i + 1} failed: {e}")
 
+        # Free intermediate GPU memory so subsequent generations stay fast
+        gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
+
         self.progress.emit(total, total, "Generation complete!")
         if succeeded == 0 and total > 0:
             self.finished_generating.emit(False, f"All {total} image(s) failed to generate.")
