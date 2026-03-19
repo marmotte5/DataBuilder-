@@ -202,6 +202,30 @@ class ZImageBackend(TrainBackendBase):
                 "(first 5: %s)", len(unmatched_keys), unmatched_keys[:5]
             )
 
+        # If no prefixed transformer keys were found, check whether the
+        # unmatched keys look like unprefixed Z-Image transformer weights.
+        # Z-Image single-file checkpoints often store the transformer
+        # without a "transformer." prefix — the keys start directly with
+        # layer/embedder names like 'layers', 't_embedder', 'cap_embedder',
+        # 'x_pad_token', 'noise_refiner', 'context_refiner', etc.
+        _ZIMAGE_TRANSFORMER_PREFIXES = {
+            "layers", "t_embedder", "x_embedder", "all_x_embedder",
+            "cap_embedder", "cap_pad_token", "x_pad_token",
+            "noise_refiner", "context_refiner", "all_final_layer",
+            "final_layer", "pos_embed", "adaln", "norm_out",
+        }
+        if not component_sds["transformer"] and unmatched_keys:
+            top_level = {k.split(".")[0] for k in unmatched_keys}
+            if top_level & _ZIMAGE_TRANSFORMER_PREFIXES:
+                log.info(
+                    "Detected unprefixed Z-Image transformer keys (%s); "
+                    "treating all unmatched keys as transformer weights.",
+                    sorted(top_level & _ZIMAGE_TRANSFORMER_PREFIXES),
+                )
+                for key in unmatched_keys:
+                    component_sds["transformer"][key] = full_sd[key]
+                unmatched_keys = []
+
         # Sanity check: we need at least a transformer
         if not component_sds["transformer"]:
             raise RuntimeError(
@@ -308,38 +332,83 @@ class ZImageBackend(TrainBackendBase):
         # --- Transformer ---
         log.info("Loading transformer from single-file checkpoint (%d parameters)",
                  len(component_sds["transformer"]))
-        try:
-            from diffusers.models import Transformer2DModel
-            # Try to create from config and load state dict
-            transformer_config = self._infer_transformer_config(component_sds["transformer"])
-            self.unet = Transformer2DModel(**transformer_config)
-            self.unet.load_state_dict(component_sds["transformer"], strict=False)
-            self.unet = self.unet.to(dtype=self.dtype)
-        except Exception:
-            # Fallback: try direct state dict loading
-            try:
-                self.unet = self._load_transformer_from_sd(component_sds["transformer"])
-            except Exception as e2:
-                raise RuntimeError(
-                    f"Could not load transformer from single-file checkpoint: {e2}"
-                )
+        self.unet = self._load_transformer_weights(component_sds["transformer"])
 
         # --- Scheduler ---
         self.noise_scheduler = FlowMatchEulerDiscreteScheduler()
         log.info("Manual single-file loading complete for Z-Image model")
 
-    def _load_transformer_from_sd(self, state_dict: dict):
-        """Last-resort transformer loading: instantiate and load weights."""
-        from diffusers.models import Transformer2DModel
+    def _load_transformer_weights(self, state_dict: dict):
+        """Load Z-Image transformer weights, trying multiple model classes.
 
-        # Infer basic dimensions from state dict
-        config = self._infer_transformer_config(state_dict)
-        model = Transformer2DModel(**config)
-        result = model.load_state_dict(state_dict, strict=False)
-        if result.missing_keys:
-            log.warning("Transformer has %d missing keys after load",
-                        len(result.missing_keys))
-        return model.to(dtype=self.dtype)
+        Attempts in order:
+        1. Load transformer config from the official HF Z-Image repo and
+           instantiate + load weights (handles unprefixed checkpoint keys).
+        2. Diffusers Transformer2DModel with inferred config.
+        3. Direct state dict loading as final fallback.
+        """
+        errors = []
+
+        # Strategy 1: Load config from official Z-Image HF repo, instantiate,
+        # then load the state dict from the checkpoint.
+        for repo in (self._HF_BASE_REPO, self._HF_TURBO_REPO):
+            try:
+                from diffusers.models import Transformer2DModel
+                model = Transformer2DModel.from_pretrained(
+                    repo, subfolder="transformer",
+                    torch_dtype=self.dtype, trust_remote_code=True,
+                    low_cpu_mem_usage=False,  # need full model to load_state_dict
+                )
+                result = model.load_state_dict(state_dict, strict=False)
+                n_missing = len(result.missing_keys)
+                n_unexpected = len(result.unexpected_keys)
+                if n_missing > 0:
+                    log.warning(
+                        "Transformer loaded from %s config: %d missing keys, "
+                        "%d unexpected keys", repo, n_missing, n_unexpected,
+                    )
+                else:
+                    log.info("Transformer loaded via %s config (%d unexpected keys)",
+                             repo, n_unexpected)
+                return model.to(dtype=self.dtype)
+            except Exception as e:
+                errors.append(f"HF repo {repo}: {e}")
+                continue
+
+        # Strategy 2: Try any custom model class that might be registered
+        # for Z-Image in newer diffusers versions.
+        for cls_name in ("ZImageTransformer2DModel", "HunyuanDiT2DModel"):
+            try:
+                import diffusers.models
+                cls = getattr(diffusers.models, cls_name, None)
+                if cls is None:
+                    continue
+                config = self._infer_transformer_config(state_dict)
+                model = cls(**config)
+                model.load_state_dict(state_dict, strict=False)
+                log.info("Transformer loaded via %s with inferred config", cls_name)
+                return model.to(dtype=self.dtype)
+            except Exception as e:
+                errors.append(f"{cls_name}: {e}")
+
+        # Strategy 3: Generic Transformer2DModel
+        try:
+            from diffusers.models import Transformer2DModel
+            config = self._infer_transformer_config(state_dict)
+            model = Transformer2DModel(**config)
+            result = model.load_state_dict(state_dict, strict=False)
+            if result.missing_keys:
+                log.warning("Transformer has %d missing keys after load",
+                            len(result.missing_keys))
+            log.info("Transformer loaded via generic Transformer2DModel")
+            return model.to(dtype=self.dtype)
+        except Exception as e:
+            errors.append(f"Transformer2DModel: {e}")
+
+        raise RuntimeError(
+            "Could not load transformer from single-file checkpoint. "
+            "Tried:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
 
     @staticmethod
     def _infer_qwen3_config(state_dict: dict) -> dict:
