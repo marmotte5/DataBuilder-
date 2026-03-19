@@ -101,7 +101,6 @@ def _load_bucket_cache(
 
     Returns None if the cache is stale or missing.
     """
-    import json
     cache_path = _bucket_cache_path(cache_dir)
     if not cache_path.exists():
         return None
@@ -131,7 +130,6 @@ def _save_bucket_cache(
     assignments: list[tuple[int, int]],
 ):
     """Save pre-computed bucket assignments to disk."""
-    import json
     cache_path = _bucket_cache_path(cache_dir)
     try:
         dir_mtime = cache_dir.stat().st_mtime

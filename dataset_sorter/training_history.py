@@ -212,11 +212,17 @@ class TrainingHistory:
                FROM training_runs"""
         ).fetchone()
 
+        diverged = row['diverged'] or 0
+        ooms = row['ooms'] or 0
+        avg_loss = row['avg_loss']
+        best_loss = row['best_loss']
+        avg_time = row['avg_time']
         return (
             f"Training History: {row['total']} runs, "
-            f"{row['diverged']} diverged, {row['ooms']} OOMs, "
-            f"avg loss={row['avg_loss']:.4f}, best={row['best_loss']:.4f}, "
-            f"avg time={row['avg_time']:.0f}s"
+            f"{diverged} diverged, {ooms} OOMs, "
+            f"avg loss={avg_loss:.4f if avg_loss is not None else 'N/A'}, "
+            f"best={best_loss:.4f if best_loss is not None else 'N/A'}, "
+            f"avg time={avg_time:.0f if avg_time is not None else 'N/A'}s"
         )
 
     def close(self):

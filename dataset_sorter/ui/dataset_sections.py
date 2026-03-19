@@ -82,11 +82,6 @@ class HistogramWidget(QWidget):
 
             # Label
             painter.setPen(QPen(text_color))
-            label_rect = painter.boundingRect(
-                0, y, label_width - 8, bar_height,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                label,
-            )
             painter.drawText(
                 0, y, label_width - 8, bar_height,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,

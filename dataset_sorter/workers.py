@@ -244,12 +244,13 @@ class ScanWorker(QThread):
             batch = []
             for entry in entries:
                 if entry is not None and entry.image_path is not None:
-                    batch.append({
-                        "path": str(entry.image_path),
-                        "filename": entry.image_path.name,
-                        "tags": ", ".join(entry.tags) if entry.tags else "",
-                        "bucket": entry.assigned_bucket,
-                    })
+                    batch.append((
+                        entry.image_path,
+                        {
+                            "tags": ", ".join(entry.tags) if entry.tags else "",
+                            "bucket": entry.assigned_bucket,
+                        },
+                    ))
             if batch:
                 cache.put_batch(batch)
                 log.debug(f"Metadata cache: {len(batch)} entries written")

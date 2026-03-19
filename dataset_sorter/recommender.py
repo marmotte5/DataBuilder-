@@ -162,7 +162,8 @@ def recommend(
 
     is_lora = model_type.endswith("_lora")
     is_flux = "flux" in model_type
-    is_sd3 = "sd3" in model_type
+    is_sd3 = "sd3" in model_type and "sd35" not in model_type
+    is_sd35 = "sd35" in model_type
     is_sdxl = "sdxl" in model_type
     is_pony = "pony" in model_type
     is_sd15 = "sd15" in model_type
@@ -195,8 +196,6 @@ def recommend(
     else:
         config.resolution_min = 512
         config.resolution_max = config.resolution
-        if vram_gb >= 24:
-            config.resolution_max = config.resolution  # Native resolution
 
     # --- Clip skip ---
     config.clip_skip = MODEL_CLIP_SKIP.get(model_type, 0)
@@ -257,7 +256,7 @@ def recommend(
             config.train_text_encoder = vram_gb >= 96
             config.train_text_encoder_2 = False
             config.text_encoder_lr = config.learning_rate * 0.05 if vram_gb >= 96 else 0.0
-    elif is_sd3:
+    elif is_sd3 or is_sd35:
         config.train_text_encoder = vram_gb >= 24 if is_lora else vram_gb >= 24
         config.train_text_encoder_2 = False
         config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
@@ -377,7 +376,7 @@ def recommend(
     else:
         if is_sd15:
             epoch_map = {"small": 8, "medium": 5, "large": 2, "very_large": 1}
-        elif is_sd3:
+        elif is_sd3 or is_sd35:
             epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
         else:
             epoch_map = {"small": 5, "medium": 3, "large": 2, "very_large": 1}
@@ -453,7 +452,7 @@ def recommend(
         config.sample_every_n_steps = 500
 
     config.sample_sampler = "euler_a"
-    if is_flux or is_sd3 or is_zimage:
+    if is_flux or is_sd3 or is_sd35 or is_zimage:
         config.sample_sampler = "euler"
         config.sample_cfg_scale = 1.0  # Flow models use low/no CFG
         config.sample_steps = 28
@@ -498,14 +497,14 @@ def recommend(
     config.noise_offset = 0.05
     config.adaptive_noise_scale = 0.0
 
-    if is_flux or is_sd3:
+    if is_flux or is_sd3 or is_sd35:
         config.min_snr_gamma = 0
         config.debiased_estimation = True
     else:
         config.min_snr_gamma = 5
         config.debiased_estimation = False
 
-    if is_lora and not (is_flux or is_sd3):
+    if is_lora and not (is_flux or is_sd3 or is_sd35):
         config.ip_noise_gamma = 0.1
 
     if is_flux:
@@ -534,7 +533,7 @@ def recommend(
     # --- Contextual notes ---
     config.notes = _build_notes(
         model_type, vram_gb, total_images, diversity, size_cat,
-        is_lora, is_flux, is_sd3, is_pony, is_zimage,
+        is_lora, is_flux, is_sd3, is_sd35, is_pony, is_zimage,
         max_bucket_images, num_active_buckets,
         optimizer, network_type, config, used_fallback,
     )
@@ -549,7 +548,7 @@ def recommend(
 def _build_notes(
     model_type: str, vram_gb: int, total_images: int,
     diversity: float, size_cat: str, is_lora: bool,
-    is_flux: bool, is_sd3: bool, is_pony: bool, is_zimage: bool,
+    is_flux: bool, is_sd3: bool, is_sd35: bool, is_pony: bool, is_zimage: bool,
     max_bucket_images: int, num_active_buckets: int,
     optimizer: str, network_type: str,
     config: TrainingConfig, used_fallback: bool,
@@ -679,7 +678,7 @@ def _build_notes(
             if vram_gb < 48:
                 notes.append("WARNING: Flux full finetune not viable below 48 GB. Use LoRA.")
 
-    if is_sd3:
+    if is_sd3 or is_sd35:
         notes.append("SD3: T5 frozen, CLIP trainable. Flow matching with logit-normal timesteps.")
 
     if is_pony:

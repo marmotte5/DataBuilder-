@@ -13,6 +13,35 @@ from dataset_sorter.models import TrainingConfig
 log = logging.getLogger(__name__)
 
 
+class _CombinedOptimizer:
+    """Wraps multiple optimizers so they behave like a single optimizer.
+
+    Used for Muon (2D+ params) + AdamW (1D params) combination.
+    """
+
+    def __init__(self, optimizers: list):
+        self.optimizers = optimizers
+        # Expose param_groups from all sub-optimizers
+        self.param_groups = []
+        for opt in self.optimizers:
+            self.param_groups.extend(opt.param_groups)
+
+    def zero_grad(self, set_to_none: bool = True):
+        for opt in self.optimizers:
+            opt.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
+        for opt in self.optimizers:
+            opt.step(closure)
+
+    def state_dict(self):
+        return [opt.state_dict() for opt in self.optimizers]
+
+    def load_state_dict(self, state_dicts):
+        for opt, sd in zip(self.optimizers, state_dicts):
+            opt.load_state_dict(sd)
+
+
 def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     """Create optimizer with proper parameter groups for different LR."""
     lr = config.learning_rate
@@ -125,10 +154,17 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                 momentum=0.95,
             )
             if adamw_params:
+                # 1D params (biases, norms, embeddings) need a separate AdamW
+                adamw_opt = torch.optim.AdamW(
+                    [{"params": adamw_params, "lr": lr}],
+                    lr=lr,
+                    weight_decay=config.weight_decay,
+                )
                 log.info(
                     f"Muon: {len(muon_params)} 2D+ params with Muon, "
-                    f"{len(adamw_params)} 1D params excluded (use separate AdamW)"
+                    f"{len(adamw_params)} 1D params with AdamW"
                 )
+                return _CombinedOptimizer([muon_opt, adamw_opt])
             return muon_opt
         else:
             log.warning("Muon: no 2D+ params found, falling back to AdamW")
@@ -194,6 +230,10 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
             num_training_steps=num_training_steps,
         )
 
+    # Handle REX scheduler (reciprocal decay, not built into diffusers)
+    if config.lr_scheduler == "rex":
+        return _RexScheduler(optimizer, config.warmup_steps, num_training_steps)
+
     # Supported scheduler names in diffusers
     supported = {
         "linear", "cosine", "cosine_with_restarts", "polynomial",
@@ -214,3 +254,38 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
         num_warmup_steps=config.warmup_steps,
         num_training_steps=num_training_steps,
     )
+
+
+class _RexScheduler:
+    """REX (Reciprocal EXponential) LR scheduler.
+
+    LR decays as 1 / (1 + t/T) after warmup, providing a smooth reciprocal
+    decay that spends more time at higher learning rates than cosine.
+    """
+
+    def __init__(self, optimizer, warmup_steps: int, total_steps: int):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = max(total_steps, 1)
+        self.base_lrs = [pg["lr"] for pg in optimizer.param_groups]
+        self._step_count = 0
+
+    def step(self):
+        self._step_count += 1
+        for pg, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
+            if self._step_count <= self.warmup_steps:
+                pg["lr"] = base_lr * self._step_count / max(self.warmup_steps, 1)
+            else:
+                progress = (self._step_count - self.warmup_steps) / max(
+                    self.total_steps - self.warmup_steps, 1
+                )
+                pg["lr"] = base_lr / (1.0 + progress)
+
+    def get_last_lr(self):
+        return [pg["lr"] for pg in self.optimizer.param_groups]
+
+    def state_dict(self):
+        return {"step_count": self._step_count}
+
+    def load_state_dict(self, state_dict):
+        self._step_count = state_dict["step_count"]

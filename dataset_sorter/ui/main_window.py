@@ -1350,8 +1350,8 @@ class MainWindow(QMainWindow):
         applied = 0
         for tag, bucket in bucket_map.items():
             if tag in self.tag_to_entries:
+                self.manual_overrides[tag] = bucket
                 for idx in self.tag_to_entries[tag]:
-                    self.manual_overrides[idx] = bucket
                     self.entries[idx].assigned_bucket = bucket
                 applied += 1
         self._refresh_all_ui()

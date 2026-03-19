@@ -131,6 +131,10 @@ def apply_noise_rescaling(
 
     if zero_terminal_snr:
         original_betas = noise_scheduler.betas.clone()
+        original_snr = (
+            noise_scheduler.alphas_cumprod[-1]
+            / (1.0 - noise_scheduler.alphas_cumprod[-1])
+        )
         new_betas = enforce_zero_terminal_snr(noise_scheduler.betas)
 
         # Update scheduler state
@@ -147,7 +151,7 @@ def apply_noise_rescaling(
         )
         log.info(
             f"Noise rescaling applied: terminal SNR = {final_snr:.6f} "
-            f"(was {original_betas[-1]:.4f})"
+            f"(was {original_snr:.6f})"
         )
         return True
 

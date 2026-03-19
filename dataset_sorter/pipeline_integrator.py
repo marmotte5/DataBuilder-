@@ -133,12 +133,14 @@ def _try_auto_fix(config, error, report: IntegrationReport) -> bool:
     # Fix resolution out of range
     if f == "resolution":
         if config.resolution < 128:
+            old_res = config.resolution
             config.resolution = 512
-            report.config_auto_fixes.append(f"Resolution was {config.resolution}, set to 512")
+            report.config_auto_fixes.append(f"Resolution was {old_res}, set to 512")
             return True
         elif config.resolution > 4096:
+            old_res = config.resolution
             config.resolution = 1024
-            report.config_auto_fixes.append(f"Resolution was {config.resolution}, capped to 1024")
+            report.config_auto_fixes.append(f"Resolution was {old_res}, capped to 1024")
             return True
 
     # Fix min > max resolution

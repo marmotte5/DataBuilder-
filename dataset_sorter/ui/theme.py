@@ -325,11 +325,6 @@ def get_stylesheet() -> str:
     """
 
 
-def _style_const(template: str) -> str:
-    """Generate a style string from COLORS — always uses current theme."""
-    return template.format(**COLORS)
-
-
 # --- Reusable style functions (re-evaluated on theme change) ---
 
 def card_style() -> str:

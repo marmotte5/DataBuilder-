@@ -643,10 +643,8 @@ class TimestepBandit:
         # Clamp for safety
         t = t.clamp(min=1e-5, max=1.0 - 1e-5)
 
-        self._total_samples += batch_size
-        self._bucket_samples.scatter_add_(
-            0, selected_buckets, torch.ones_like(selected_buckets, dtype=torch.long)
-        )
+        # Note: _total_samples and _bucket_samples are updated in update(),
+        # not here, to avoid double-counting.
 
         return t
 
@@ -683,7 +681,7 @@ class TimestepBandit:
                 # "Easy" sample: model already learned this → penalize
                 self._beta[b] += 1.0
 
-            # Track per-bucket loss
+            # Track per-bucket loss and sample counts
             self._loss_history[b] = 0.95 * self._loss_history[b] + 0.05 * loss_val
             self._loss_count[b] += 1
             self._bucket_samples[b] += 1
