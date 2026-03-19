@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest tests/)",
+      "Bash(python -m dataset_sorter --help)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(pip install*)"
+    ],
+    "deny": [
+      "Bash(*API_KEY*)",
+      "Bash(*SECRET*)",
+      "Bash(*TOKEN*)",
+      "Bash(*PASSWORD*)",
+      "Bash(rm -rf /)",
+      "Bash(git push --force*)"
+    ]
+  }
+}
