@@ -962,7 +962,7 @@ class GenerateWorker(QThread):
                 pnginfo = self._build_png_metadata(current_seed)
                 img.info["pnginfo"] = pnginfo
                 # Store parameters string for UI display
-                for chunk_type, chunk_data in pnginfo.chunks:
+                for chunk_type, chunk_data, *_ in pnginfo.chunks:
                     if chunk_type == "tEXt" and chunk_data.startswith(b"parameters\x00"):
                         img.info["parameters"] = chunk_data.split(b"\x00", 1)[1].decode("latin-1")
                         break
