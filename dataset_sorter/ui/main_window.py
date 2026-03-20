@@ -522,13 +522,15 @@ class MainWindow(QMainWindow):
             if hasattr(tt, '_stop_vram_monitor'):
                 tt._stop_vram_monitor()
 
-        # Stop generate worker
+        # Stop generate worker — GenerateWorker overrides run() directly
+        # (no Qt event loop), so quit() is a no-op.  Use stop() to set the
+        # cancellation flag and wait() for the thread to finish naturally.
         if hasattr(self, 'generate_tab'):
             gt = self.generate_tab
             if hasattr(gt, '_worker') and gt._worker is not None:
-                gt._worker.stop()  # Signal the run()-based thread to stop
-                gt._worker.quit()
-                gt._worker.wait(3000)
+                gt._worker.stop()
+                if gt._worker.isRunning():
+                    gt._worker.wait(5000)
 
         # Shutdown shared async I/O executor
         try:
@@ -1351,9 +1353,12 @@ class MainWindow(QMainWindow):
         for tag, bucket in bucket_map.items():
             if tag in self.tag_to_entries:
                 self.manual_overrides[tag] = bucket
-                for idx in self.tag_to_entries[tag]:
-                    self.entries[idx].assigned_bucket = bucket
                 applied += 1
+        # Delegate to _assign_entries_to_buckets which correctly resolves
+        # multi-tag conflicts by taking the max bucket across all active tags.
+        # Previously, directly setting assigned_bucket per-tag caused the last
+        # processed tag to win, ignoring higher-priority bucket assignments.
+        self._assign_entries_to_buckets()
         self._refresh_all_ui()
         self.statusBar().showMessage(
             f"Smart buckets applied: {applied} tags re-bucketed by importance."
