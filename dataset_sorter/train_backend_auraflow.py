@@ -88,9 +88,7 @@ class AuraFlowBackend(TrainBackendBase):
     ) -> torch.Tensor:
         """Compute a single flow-matching training step and return the loss.
 
-        Uses raw integer timesteps (no normalization) as expected by AuraFlow.
+        AuraFlow expects normalized float timesteps in [0, 1]. The official
+        AuraFlowPipeline explicitly divides by 1000 (``timestep / 1000``).
         """
-        # AuraFlow passes raw integer timesteps
-        return self.flow_training_step(
-            latents, te_out, batch_size, normalize_timestep=False,
-        )
+        return self.flow_training_step(latents, te_out, batch_size)

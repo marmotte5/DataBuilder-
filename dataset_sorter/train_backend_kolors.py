@@ -91,22 +91,16 @@ class KolorsBackend(TrainBackendBase):
         ).to(self.device)
 
         with self._te_no_grad():
-            out = self.text_encoder(**tokens)
-            encoder_hidden = out.last_hidden_state
+            out = self.text_encoder(**tokens, output_hidden_states=True)
+            encoder_hidden = out.hidden_states[-2]
 
-        # ChatGLM doesn't produce pooled embeddings like CLIP. Use the first
-        # token (analogous to [CLS]) as a proxy pooled representation, then
-        # project to 1280-dim to match what the SDXL UNet expects.
-        first_token = encoder_hidden[:, 0, :]  # (batch, hidden_dim)
-        if not hasattr(self, '_pool_proj'):
-            # Lazy-init a frozen linear projection from ChatGLM hidden_dim → 1280
-            # Uses mean-preserving init so initial training steps aren't disrupted
-            hidden_dim = first_token.shape[-1]
-            self._pool_proj = torch.nn.Linear(
-                hidden_dim, 1280, bias=False,
-            ).to(device=self.device, dtype=self.dtype)
-            self._pool_proj.requires_grad_(False)
-        pooled = self._pool_proj(first_token)
+        # ChatGLM doesn't produce pooled embeddings like CLIP. The official
+        # KolorsPipeline uses the last token from the last hidden layer as
+        # the pooled representation (output.hidden_states[-1][-1, :, :]).
+        # ChatGLM may output in sequence-first [seq, batch, hidden] format,
+        # matching the official pipeline's indexing convention.
+        last_layer = out.hidden_states[-1]
+        pooled = last_layer[-1, :, :].clone()
 
         return (encoder_hidden, pooled)
 
