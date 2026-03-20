@@ -79,7 +79,7 @@ class SD3Backend(TrainBackendBase):
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             clip_l_hidden = out_1.hidden_states[-2]
-            clip_l_pooled = out_1.pooler_output
+            clip_l_pooled = out_1.text_embeds
 
         # OpenCLIP-G
         tokens_2 = self.tokenizer_2(
@@ -91,7 +91,7 @@ class SD3Backend(TrainBackendBase):
         with self._te_no_grad():
             out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
             clip_g_hidden = out_2.hidden_states[-2]
-            clip_g_pooled = out_2.pooler_output
+            clip_g_pooled = out_2.text_embeds
 
         # T5-XXL
         t5_hidden = None
