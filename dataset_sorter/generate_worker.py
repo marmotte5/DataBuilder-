@@ -38,7 +38,7 @@ SCHEDULER_MAP = {
 # or similar) because standard schedulers lack the `mu`/`shift` parameters
 # required by the flow-matching timestep schedule.
 FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
-                        "auraflow", "hidream"}
+                        "auraflow", "hidream", "sana", "pixart"}
 
 # ── Model type → pipeline class ────────────────────────────────────────────
 PIPELINE_MAP = {
@@ -385,6 +385,12 @@ class GenerateWorker(QThread):
 
         self.progress.emit(0, 100, "Loading model...")
 
+        # Unload any previously loaded pipeline to free GPU memory before
+        # allocating the new one. Without this, switching models (e.g. Flux
+        # after SDXL) holds both pipelines in VRAM simultaneously, causing OOM.
+        if self.pipe is not None:
+            self.unload_model()
+
         # Determine device
         if torch.cuda.is_available():
             self._device = torch.device("cuda")
@@ -414,7 +420,9 @@ class GenerateWorker(QThread):
         # Load pipeline
         pipe = self._load_pipeline(model_path, model_type, dtype)
         if pipe is None:
-            self.error.emit(f"Failed to load pipeline for model type: {model_type}")
+            msg = f"Failed to load pipeline for model type: {model_type}"
+            self.error.emit(msg)
+            self.finished_generating.emit(False, msg)
             return
 
         self.progress.emit(50, 100, "Applying optimizations...")
