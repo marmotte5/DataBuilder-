@@ -331,11 +331,14 @@ class SafetensorsMMapDataset(Dataset):
                     for j in range(te_len):
                         te_key = f"te_{idx}_{j}"
                         if te_key in handle.keys():
-                            te_parts.append(
-                                handle.get_tensor(te_key).to(
-                                    self.device, dtype=self.dtype, non_blocking=True
-                                )
-                            )
+                            _t = handle.get_tensor(te_key)
+                            # Preserve integer dtypes (e.g. attention masks for
+                            # Z-Image/LLM encoders) — only cast float tensors.
+                            if _t.is_floating_point():
+                                _t = _t.to(self.device, dtype=self.dtype, non_blocking=True)
+                            else:
+                                _t = _t.to(self.device, non_blocking=True)
+                            te_parts.append(_t)
                         else:
                             te_parts.append(None)
                     result["te_cache"] = tuple(te_parts)
@@ -409,7 +412,9 @@ class MMapCacheBuilder:
             for j, te_t in enumerate(te_tuple):
                 if te_t is None:
                     continue
-                te = te_t.to(self.dtype).cpu().contiguous()
+                # Preserve integer dtypes (e.g. attention masks for LLM
+                # encoders) — only cast float tensors to training dtype.
+                te = te_t.to(self.dtype).cpu().contiguous() if te_t.is_floating_point() else te_t.cpu().contiguous()
                 tensors[f"te_{i}_{j}"] = te
                 current_size += te.nelement() * te.element_size()
 
@@ -468,7 +473,7 @@ class MMapCacheBuilder:
             for j, te_t in enumerate(te_outputs[i]):
                 if te_t is None:
                     continue
-                te = te_t.to(self.dtype).cpu().contiguous()
+                te = te_t.to(self.dtype).cpu().contiguous() if te_t.is_floating_point() else te_t.cpu().contiguous()
                 all_tensors.append(te)
                 metadata.append({
                     "key": f"te_{i}_{j}",

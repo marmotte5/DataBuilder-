@@ -1554,6 +1554,16 @@ class Trainer:
 
         if is_lora:
             self.backend.save_lora(save_dir)
+            # Save fine-tuned text encoder weights alongside LoRA adapter.
+            # Without this, TE training progress is lost on resume.
+            if config.train_text_encoder and self.backend.text_encoder is not None:
+                te_path = save_dir / "text_encoder"
+                te_path.mkdir(exist_ok=True)
+                self.backend.text_encoder.save_pretrained(str(te_path))
+            if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
+                te2_path = save_dir / "text_encoder_2"
+                te2_path.mkdir(exist_ok=True)
+                self.backend.text_encoder_2.save_pretrained(str(te2_path))
         elif self.backend.pipeline is not None:
             self.backend.pipeline.save_pretrained(str(save_dir))
         else:
@@ -1881,6 +1891,63 @@ class Trainer:
         log.info(f"Backup saved to {backup_dir}")
         self.state.phase = "training"
 
+    def _check_lora_compatibility(self, adapter_config_path: Path):
+        """Warn if the saved LoRA adapter targets different modules than the current model.
+
+        This catches the case where a user resumes training with a different
+        model architecture (e.g. SDXL checkpoint resumed on Flux model).
+        """
+        import json
+        try:
+            with open(adapter_config_path) as f:
+                saved_config = json.load(f)
+            saved_modules = set(saved_config.get("target_modules", []))
+            if not saved_modules:
+                return
+            current_modules = set(self.backend._get_lora_target_modules())
+            if saved_modules != current_modules:
+                log.warning(
+                    f"LoRA adapter target_modules mismatch! "
+                    f"Checkpoint targets: {sorted(saved_modules)}, "
+                    f"current model targets: {sorted(current_modules)}. "
+                    f"This may indicate the checkpoint was saved for a different model architecture."
+                )
+        except Exception as e:
+            log.debug(f"Could not check LoRA compatibility: {e}")
+
+    def _resume_text_encoders(self, checkpoint_dir: Path):
+        """Restore fine-tuned text encoder weights from a checkpoint directory.
+
+        Looks for text_encoder/ and text_encoder_2/ subdirectories saved
+        by _save_checkpoint when train_text_encoder was enabled.
+        """
+        config = self.config
+        for attr_name, dir_name, train_flag in [
+            ("text_encoder", "text_encoder", config.train_text_encoder),
+            ("text_encoder_2", "text_encoder_2", getattr(config, "train_text_encoder_2", False)),
+        ]:
+            te_dir = checkpoint_dir / dir_name
+            if not te_dir.exists() or not train_flag:
+                continue
+            encoder = getattr(self.backend, attr_name, None)
+            if encoder is None:
+                continue
+            try:
+                from safetensors.torch import load_file
+                weight_files = list(te_dir.glob("*.safetensors"))
+                if weight_files:
+                    te_state = {}
+                    for wf in weight_files:
+                        te_state.update(load_file(str(wf)))
+                    missing, unexpected = encoder.load_state_dict(te_state, strict=False)
+                    if missing:
+                        log.warning(f"TE resume ({dir_name}): {len(missing)} missing keys")
+                    log.info(f"Restored fine-tuned {dir_name} weights from checkpoint")
+                else:
+                    log.debug(f"No .safetensors in {te_dir}, skipping TE restore")
+            except Exception as e:
+                log.warning(f"Could not restore {dir_name} weights: {e}")
+
     def resume_from_checkpoint(self, checkpoint_dir: Path):
         """Resume training from a saved checkpoint."""
         state_path = checkpoint_dir / "training_state.pt"
@@ -1919,6 +1986,8 @@ class Trainer:
             # Check for LoRA adapter files
             adapter_config = checkpoint_dir / "adapter_config.json"
             if adapter_config.exists() and self.backend.unet is not None:
+                # Validate adapter compatibility with current model
+                self._check_lora_compatibility(adapter_config)
                 try:
                     if isinstance(self.backend.unet, PeftModel):
                         self.backend.unet.load_adapter(str(checkpoint_dir), "default")
@@ -1932,6 +2001,9 @@ class Trainer:
                     log.info("Restored LoRA weights from checkpoint")
                 except Exception as e:
                     log.warning(f"Could not restore LoRA weights: {e}")
+
+            # Restore fine-tuned text encoder weights saved alongside LoRA
+            self._resume_text_encoders(checkpoint_dir)
         else:
             # Full finetune — reload updated weights from checkpoint.
             # pipeline.save_pretrained saves the full model structure;
