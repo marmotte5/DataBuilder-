@@ -854,13 +854,21 @@ class Trainer:
         # ── Fused Backward Pass ──
         fused_backward = None
         if config.fused_backward_pass:
-            from dataset_sorter.speed_optimizations import FusedBackwardPass
-            fused_backward = FusedBackwardPass(
-                self.optimizer, self.scheduler, self.grad_scaler,
-                max_grad_norm=config.max_grad_norm,
-            )
-            fused_backward.install_hooks(self.backend.unet.parameters())
-            log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
+            if config.gradient_accumulation > 1:
+                log.warning(
+                    "Fused backward pass is incompatible with gradient accumulation > 1 "
+                    f"(grad_accum={config.gradient_accumulation}). The optimizer hooks "
+                    "fire on every backward() call, stepping per micro-batch instead of "
+                    "per accumulation window. Disabling fused backward pass."
+                )
+            else:
+                from dataset_sorter.speed_optimizations import FusedBackwardPass
+                fused_backward = FusedBackwardPass(
+                    self.optimizer, self.scheduler, self.grad_scaler,
+                    max_grad_norm=config.max_grad_norm,
+                )
+                fused_backward.install_hooks(self.backend.unet.parameters())
+                log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
 
         # ── Stochastic Rounding for BF16 ──
         sr_hook = None
