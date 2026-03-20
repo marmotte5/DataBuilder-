@@ -71,14 +71,16 @@ class AuraFlowBackend(TrainBackendBase):
 
         Returns a 1-tuple of encoder hidden states (no pooled output for AuraFlow).
         """
-        tokens = self.tokenizer(
+        tok_out = self.tokenizer(
             captions, padding="max_length",
             max_length=256,
             truncation=True, return_tensors="pt",
-        ).input_ids.to(self.device)
+        )
+        input_ids = tok_out.input_ids.to(self.device)
+        attention_mask = tok_out.attention_mask.to(self.device)
 
         with self._te_no_grad():
-            out = self.text_encoder(tokens)
+            out = self.text_encoder(input_ids, attention_mask=attention_mask)
             encoder_hidden = out.last_hidden_state
 
         return (encoder_hidden,)
