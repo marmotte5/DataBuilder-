@@ -649,7 +649,7 @@ class CachedTrainDataset(Dataset):
                     ).input_ids.to(device)
 
                     encoder_output_3 = text_encoder_3(tokens_3)
-                    hidden_states_3 = encoder_output_3.last_hidden_state.cpu()
+                    hidden_states_3 = encoder_output_3.last_hidden_state.squeeze(0).cpu()
 
                     te_result = (hidden_states, pooled, hidden_states_2, pooled_2, hidden_states_3)
                     token_id_result = (tokens.cpu(), tokens_2.cpu() if tokens_2 is not None else None, tokens_3.cpu())

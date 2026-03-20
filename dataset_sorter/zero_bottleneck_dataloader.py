@@ -354,8 +354,13 @@ class PinnedRingBuffer:
         """Fill TE output buffer for a specific component."""
         if buffer_idx < 0:
             buffer_idx = self._active_idx
-        # Map component index to buffer index (handles None gaps)
-        buf_idx = self._te_component_map.get(component, component)
+        # Map component index to buffer index (handles None gaps).
+        # If the component is not in the map, it was a None gap during setup
+        # and has no allocated buffer — skip it to avoid overwriting another
+        # component's buffer.
+        if component not in self._te_component_map:
+            return
+        buf_idx = self._te_component_map[component]
         if buf_idx < len(self._te_buffers):
             buf = self._te_buffers[buf_idx][buffer_idx]
             for i, t in enumerate(tensors):
@@ -587,6 +592,12 @@ class BackgroundPrefetcher:
         # Check for end of epoch
         if self._current_batch_size == 0:
             return None
+
+        # Ensure any previous async DMA has completed before we allow
+        # the prefetch thread to overwrite the *other* pinned buffer.
+        # Without this, the prefetch thread could start filling buffer X
+        # while a non_blocking DMA from buffer X is still in flight.
+        self.ring.sync_transfer()
 
         # Initiate async GPU transfer from the filled buffer
         result = self.ring.transfer_to_gpu(
