@@ -953,12 +953,17 @@ class Trainer:
                     _speculative_predictor.speculate()
 
                 # ── Forward + loss ──
+                _fp8_ctx = self._fp8_wrapper.fp8_context() if self._fp8_wrapper is not None else None
                 if _zero_loader is not None:
                     # Zero-bottleneck path: data already on GPU, skip _training_step
                     latents = batch["latents"]
                     te_out = batch.get("te_out", ())
                     bsz = latents.shape[0]
-                    loss = self.backend.training_step(latents, te_out, bsz)
+                    if _fp8_ctx is not None:
+                        with _fp8_ctx:
+                            loss = self.backend.training_step(latents, te_out, bsz)
+                    else:
+                        loss = self.backend.training_step(latents, te_out, bsz)
                 else:
                     # ── Track last caption for sample generation ──
                     if "caption" in batch:
@@ -968,7 +973,7 @@ class Trainer:
                         elif isinstance(cap, str):
                             self._last_batch_caption = cap
 
-                    loss = self._training_step(batch)
+                    loss = self._training_step(batch, _fp8_ctx)
                 loss = loss / grad_accum_steps
 
                 # ── NaN guard: skip backward if loss is NaN/Inf ──
@@ -1273,7 +1278,7 @@ class Trainer:
         if progress_fn:
             progress_fn(self.total_steps, self.total_steps, "Training complete!")
 
-    def _training_step(self, batch) -> torch.Tensor:
+    def _training_step(self, batch, fp8_ctx=None) -> torch.Tensor:
         """Single training step — delegates loss to backend."""
         config = self.config
 
@@ -1435,7 +1440,11 @@ class Trainer:
         # Removed redundant outer autocast that caused double nesting and confused
         # precision semantics (loss .float() casts ran under outer autocast).
         bsz = latents.shape[0]
-        loss = self.backend.training_step(latents, te_out, bsz)
+        if fp8_ctx is not None:
+            with fp8_ctx:
+                loss = self.backend.training_step(latents, te_out, bsz)
+        else:
+            loss = self.backend.training_step(latents, te_out, bsz)
 
         # ── Apply adaptive sample weights to loss ──
         if hasattr(self.backend, '_adaptive_sample_weights') and self.backend._adaptive_sample_weights is not None:
