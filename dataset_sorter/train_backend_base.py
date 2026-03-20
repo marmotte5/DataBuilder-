@@ -571,6 +571,16 @@ class TrainBackendBase(ABC):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None  # Clear after use
 
+        # Adaptive per-sample weights (set by trainer's tag weighter).
+        # Must be applied BEFORE .mean() so each sample gets its own
+        # weight. Applying after .mean() collapses to weights.mean()
+        # which makes per-sample weighting completely ineffective.
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 
     def _compute_snr_weights(self, timesteps: torch.Tensor, gamma: int) -> torch.Tensor:
@@ -687,6 +697,16 @@ class TrainBackendBase(ABC):
                     sample_weight = sample_weight.unsqueeze(-1)
                 loss = loss * sample_weight
             self._token_weight_mask = None  # Consumed
+
+        # Adaptive per-sample weights (set by trainer's tag weighter).
+        # Must be applied BEFORE .mean() so each sample gets its own
+        # weight. Applying after .mean() collapses to weights.mean()
+        # which makes per-sample weighting completely ineffective.
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
 
         return loss.mean()
 

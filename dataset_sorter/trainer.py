@@ -921,6 +921,11 @@ class Trainer:
             # Determine how many batches to skip (resume within epoch)
             _skip_batches = _resume_epoch_step if epoch == _resume_epoch else 0
 
+            # Counter for actually-processed batches (excludes skipped/NaN).
+            # Used for gradient accumulation boundaries instead of raw
+            # dataloader index, which misaligns after resume or NaN skips.
+            _accum_count = 0
+
             # Choose iteration source: zero-bottleneck loader or standard DataLoader
             if _zero_loader is not None:
                 _batch_iter = enumerate(_zero_loader.epoch_iterator(shuffle=True))
@@ -998,9 +1003,10 @@ class Trainer:
                     _speculative_predictor.correct(self.optimizer)
 
                 running_loss += loss.item()
+                _accum_count += 1
 
                 # ── Optimizer step (on accumulation boundary) ──
-                if (step + 1) % grad_accum_steps == 0:
+                if _accum_count % grad_accum_steps == 0:
                     if fused_backward is not None:
                         # Fused backward: optimizer stepped during backward via hooks
                         fused_backward.finish_step()
@@ -1446,14 +1452,10 @@ class Trainer:
         else:
             loss = self.backend.training_step(latents, te_out, bsz)
 
-        # ── Apply adaptive sample weights to loss ──
-        if hasattr(self.backend, '_adaptive_sample_weights') and self.backend._adaptive_sample_weights is not None:
-            weights = self.backend._adaptive_sample_weights
-            if loss.dim() == 0:
-                loss = loss * weights.mean()
-            elif loss.shape[0] == weights.shape[0]:
-                loss = (loss * weights).mean()
-            self.backend._adaptive_sample_weights = None
+        # NOTE: Adaptive sample weights are now applied inside the backend's
+        # training_step/flow_training_step BEFORE .mean(), so each sample
+        # gets its own weight. Previously they were applied here after
+        # .mean() which collapsed per-sample weights to a single average.
 
         # ── Curriculum learning: update per-image loss tracking ──
         if self._curriculum_sampler is not None and "index" in batch:
@@ -1522,8 +1524,22 @@ class Trainer:
                     self.device, dtype=self.dtype
                 )
 
+                # Ensure VAE is on device (it may have been offloaded after
+                # latent caching). Move it back temporarily for DPO encoding.
+                vae_was_offloaded = False
+                if hasattr(self.backend, 'vae') and self.backend.vae is not None:
+                    vae_device = next(self.backend.vae.parameters()).device
+                    if vae_device != self.device:
+                        self.backend.vae.to(self.device)
+                        vae_was_offloaded = True
+
                 chosen_latents = self.backend.prepare_latents(chosen_tensor)
                 rejected_latents = self.backend.prepare_latents(rejected_tensor)
+
+                # Offload VAE again to free VRAM
+                if vae_was_offloaded:
+                    self.backend.vae.to("cpu")
+                    empty_cache()
 
                 # Encode prompt
                 te_out = self.backend.encode_text_batch([pair.prompt])
@@ -1542,8 +1558,27 @@ class Trainer:
 
             if dpo_losses:
                 total_dpo_loss = sum(dpo_losses) / len(dpo_losses)
-                total_dpo_loss.backward()
-                self.optimizer.step()
+
+                # Use GradScaler if active (fp16 training) to avoid
+                # unscaled gradients that may underflow.
+                if self.grad_scaler is not None:
+                    self.grad_scaler.scale(total_dpo_loss).backward()
+                    self.grad_scaler.unscale_(self.optimizer)
+                    if config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
+                            config.max_grad_norm,
+                        )
+                    self.grad_scaler.step(self.optimizer)
+                    self.grad_scaler.update()
+                else:
+                    total_dpo_loss.backward()
+                    if config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
+                            config.max_grad_norm,
+                        )
+                    self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 log.info(
                     f"DPO step applied: {len(dpo_losses)} pairs, "
