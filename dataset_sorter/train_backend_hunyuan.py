@@ -261,5 +261,12 @@ class HunyuanDiTBackend(TrainBackendBase):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None
 
+        # Adaptive per-sample weights (set by trainer's tag weighter)
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 

@@ -871,6 +871,13 @@ class ZImageBackend(TrainBackendBase):
                 loss = loss * sample_weight
             self._token_weight_mask = None
 
+        # Adaptive per-sample weights (set by trainer's tag weighter)
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         # Z-exclusive: update timestep bandit with observed losses
         if getattr(self, '_timestep_bandit', None) is not None:
             per_sample = loss.detach()

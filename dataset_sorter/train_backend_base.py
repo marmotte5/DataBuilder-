@@ -152,8 +152,10 @@ class TrainBackendBase(ABC):
             target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
         else:
             target = noise
-        # Use Triton fused MSE+cast kernel when available (~15% faster)
-        if self.config.triton_fused_loss:
+        # Use Triton fused MSE+cast kernel when available (~15% faster).
+        # Fall back to standard path when spatial masks are active (fused
+        # kernel returns per-sample means, but masking needs unreduced loss).
+        if self.config.triton_fused_loss and self._training_mask is None:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
@@ -186,7 +188,7 @@ class TrainBackendBase(ABC):
     ) -> torch.Tensor:
         """Flow matching loss: target = noise - latents."""
         target = noise.float() - latents.float()
-        if self.config.triton_fused_loss:
+        if self.config.triton_fused_loss and self._training_mask is None:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
