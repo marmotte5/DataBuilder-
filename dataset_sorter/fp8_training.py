@@ -153,6 +153,10 @@ class FP8LinearWrapper(nn.Module):
             # 3D tensors (batch, seq_len, hidden). Reshape to 2D for the
             # matmul, then restore the original batch dimensions.
             orig_shape = x.shape
+            # Save original input for fallback — subsequent operations rebind
+            # `x` to reshaped/quantized tensors, so the except handler needs
+            # the untouched original to pass to self.linear().
+            x_orig = x
             if x.dim() > 2:
                 x = x.reshape(-1, x.shape[-1])
 
@@ -169,12 +173,15 @@ class FP8LinearWrapper(nn.Module):
             x_inv = torch.tensor(1.0 / x_scale, device=x.device, dtype=torch.float32)
             w_inv = torch.tensor(1.0 / w_scale, device=x.device, dtype=torch.float32)
 
-            # FP8 matmul
+            # FP8 matmul — some PyTorch versions (2.4-2.5) return
+            # (output, amax) tuple instead of a bare tensor.
             out = torch._scaled_mm(
                 x_fp8, w_fp8.t(),
                 scale_a=x_inv, scale_b=w_inv,
                 out_dtype=x.dtype,
             )
+            if isinstance(out, tuple):
+                out = out[0]
 
             # Restore original batch dimensions
             if len(orig_shape) > 2:
@@ -186,8 +193,9 @@ class FP8LinearWrapper(nn.Module):
             return out
 
         except (RuntimeError, TypeError):
-            # Fallback for unsupported shapes or hardware
-            return self.linear(x.reshape(orig_shape) if x.shape != orig_shape else x)
+            # Fallback for unsupported shapes or hardware — use the saved
+            # original input, not the potentially mutated/quantized `x`.
+            return self.linear(x_orig)
 
 
 class FP8TrainingWrapper:

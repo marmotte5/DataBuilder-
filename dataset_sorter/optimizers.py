@@ -534,6 +534,11 @@ class SOAP(Optimizer):
                             self._rotate(self._rotate(exp_avg_sq, old_Q, forward=False),
                                          new_Q, forward=True)
                         )
+                        # Rotation of second moments (element-wise variances) can
+                        # produce negative values because the linear transform does
+                        # not preserve non-negativity. Clamp to zero to prevent
+                        # NaN from sqrt() on line below.
+                        exp_avg_sq.clamp_(min=0)
 
                 # Rotate gradient into eigenbasis
                 rotated_grad = self._rotate(grad, state["Q"], forward=True)

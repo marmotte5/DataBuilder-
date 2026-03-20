@@ -392,8 +392,8 @@ def fused_mse_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         target_c = target.contiguous()
 
         _fused_mse_loss_kernel[grid](
-            pred_c.data_ptr(), target_c.data_ptr(),
-            output.data_ptr(),
+            pred_c, target_c,
+            output,
             inner_size, batch_size,
             BLOCK_SIZE=BLOCK_SIZE,
         )
@@ -426,10 +426,10 @@ def fused_flow_interpolate(
         t_c = t.contiguous().float()
 
         _fused_flow_interpolate_kernel[grid](
-            latents_c.data_ptr(),
-            noise_c.data_ptr(),
-            output.data_ptr(),
-            t_c.data_ptr(),
+            latents_c,
+            noise_c,
+            output,
+            t_c,
             inner_size, batch_size,
             BLOCK_SIZE=BLOCK_SIZE,
         )
