@@ -207,7 +207,10 @@ class TrainBackendBase(ABC):
                 self._speed_sampler = SpeedTimestepSampler(device=self.device)
             return self._speed_sampler.sample_flow_timesteps(batch_size)
 
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
+        # Use float32 for timestep sampling — bfloat16 has only 8 bits of
+        # mantissa (~256 distinct values in [0,1]), severely quantizing the
+        # timestep distribution and reducing training diversity.
+        u = torch.rand(batch_size, device=self.device, dtype=torch.float32)
         if sampling == "logit_normal":
             # Configurable logit-normal: sigmoid(N(mu, sigma^2))
             mu = getattr(self.config, 'logit_normal_mu', 0.0)
@@ -725,7 +728,7 @@ class TrainBackendBase(ABC):
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
-                pixel_values.to(memory_format=torch.channels_last)
+                pixel_values.to(device=self.device, memory_format=torch.channels_last)
             ).latent_dist.sample()
             # Some VAEs (e.g. Z-Image) have a shift_factor that must be
             # subtracted before scaling. Must match train_dataset.py caching.
@@ -741,7 +744,7 @@ class TrainBackendBase(ABC):
     @staticmethod
     def _is_single_file(model_path: str) -> bool:
         """Return True if the model path points to a single checkpoint file."""
-        return model_path.endswith((".safetensors", ".ckpt", ".pt", ".bin"))
+        return model_path.lower().endswith((".safetensors", ".ckpt", ".pt", ".bin"))
 
     def _load_single_file_or_pretrained(
         self,

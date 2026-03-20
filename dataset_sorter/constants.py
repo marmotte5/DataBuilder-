@@ -174,7 +174,7 @@ MODEL_PREDICTION_TYPE: dict[str, str] = _expand_variants({
     "hunyuan":  "epsilon",
     "kolors":   "epsilon",
     "sd2":      "v_prediction",
-    "flux":     "raw",
+    "flux":     "flow",
     "sd3":      "flow",
     "sd35":     "flow",
     "zimage":   "flow",
