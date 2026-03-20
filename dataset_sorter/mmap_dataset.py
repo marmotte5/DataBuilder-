@@ -317,9 +317,18 @@ class SafetensorsMMapDataset(Dataset):
                     result["latent"] = handle.get_tensor(lat_key).to(
                         self.device, dtype=self.dtype, non_blocking=True
                     )
-                    # Load TE outputs as te_cache tuple (matches _training_step)
+                    # Load TE outputs as te_cache tuple (matches _training_step).
+                    # Use stored tuple length to reconstruct None positions.
+                    te_len_key = f"te_{idx}_len"
+                    if te_len_key in handle.keys():
+                        te_len = int(handle.get_tensor(te_len_key).item())
+                    else:
+                        # Legacy cache without length marker — scan for keys
+                        te_len = 0
+                        while f"te_{idx}_{te_len}" in handle.keys():
+                            te_len += 1
                     te_parts = []
-                    for j in range(10):  # max 10 TE outputs
+                    for j in range(te_len):
                         te_key = f"te_{idx}_{j}"
                         if te_key in handle.keys():
                             te_parts.append(
@@ -328,7 +337,7 @@ class SafetensorsMMapDataset(Dataset):
                                 )
                             )
                         else:
-                            break
+                            te_parts.append(None)
                     result["te_cache"] = tuple(te_parts)
                     break
 
@@ -393,8 +402,11 @@ class MMapCacheBuilder:
             tensors[f"latent_{i}"] = lat
             current_size += lat.nelement() * lat.element_size()
 
-            # TE outputs (skip None entries)
-            for j, te_t in enumerate(te_outputs[i]):
+            # TE outputs — store the tuple length so the loader can
+            # reconstruct None positions correctly.
+            te_tuple = te_outputs[i]
+            tensors[f"te_{i}_len"] = torch.tensor([len(te_tuple)], dtype=torch.int32)
+            for j, te_t in enumerate(te_tuple):
                 if te_t is None:
                     continue
                 te = te_t.to(self.dtype).cpu().contiguous()

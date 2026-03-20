@@ -60,14 +60,20 @@ def training_collate_fn(batch: list[dict]) -> dict:
         elif isinstance(elem, str):
             result[key] = values  # keep as list
         elif isinstance(elem, tuple):
-            # Recursively collate each position, preserving None
+            # Recursively collate each position, preserving None.
+            # Use min length across samples to avoid IndexError when
+            # tuple lengths vary (e.g. some cached with mask, some without).
+            min_len = min(len(v) for v in values)
             collated_tuple = []
-            for pos in range(len(elem)):
+            for pos in range(min_len):
                 pos_values = [v[pos] for v in values]
-                if pos_values[0] is None:
+                if all(pv is None for pv in pos_values):
                     collated_tuple.append(None)
-                elif isinstance(pos_values[0], torch.Tensor):
+                elif all(isinstance(pv, torch.Tensor) for pv in pos_values):
                     collated_tuple.append(torch.stack(pos_values))
+                elif any(pv is None for pv in pos_values):
+                    # Mixed None/tensor — keep None (can't stack)
+                    collated_tuple.append(None)
                 else:
                     collated_tuple.append(pos_values)
             result[key] = tuple(collated_tuple)

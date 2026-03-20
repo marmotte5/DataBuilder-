@@ -684,7 +684,13 @@ class TrainBackendBase(ABC):
             latents = self.vae.encode(
                 pixel_values.to(memory_format=torch.channels_last)
             ).latent_dist.sample()
-            latents = latents * self.vae.config.scaling_factor
+            # Some VAEs (e.g. Z-Image) have a shift_factor that must be
+            # subtracted before scaling. Must match train_dataset.py caching.
+            shift = getattr(self.vae.config, 'shift_factor', 0.0)
+            if shift:
+                latents = (latents - shift) * self.vae.config.scaling_factor
+            else:
+                latents = latents * self.vae.config.scaling_factor
         return latents
 
     # ── Single-file loading helpers ──────────────────────────────────
