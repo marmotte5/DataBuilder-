@@ -281,6 +281,17 @@ class Trainer:
                 "Cascade Stage C trains on Stage B embeddings, not raw pixels."
             )
 
+        # Caching TE outputs + training the TE is contradictory: cached outputs
+        # are frozen snapshots so the TE forward pass never runs during training,
+        # making TE training silently ineffective.
+        if config.cache_text_encoder and (config.train_text_encoder or config.train_text_encoder_2):
+            log.warning(
+                "cache_text_encoder=True with train_text_encoder=True is "
+                "contradictory — the text encoder will NOT receive gradients "
+                "when cached outputs are used. Disabling text encoder caching."
+            )
+            config.cache_text_encoder = False
+
         if progress_fn:
             progress_fn(1, 8, "Applying speed optimizations...")
 

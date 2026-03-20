@@ -752,6 +752,9 @@ class ZImageBackend(TrainBackendBase):
             # Z-exclusive: Logit-Normal sampling for straight-path training
             u = self._logit_normal_sampler.sample(batch_size)
         else:
+            # Falls through to _sample_flow_timesteps which handles SpeeD
+            # (timestep_sampling="speed" or speed_asymmetric), logit-normal,
+            # sigmoid, or uniform sampling via config
             u = self._sample_flow_timesteps(batch_size)
 
         # Apply dynamic timestep shift (Z-Image specific)
