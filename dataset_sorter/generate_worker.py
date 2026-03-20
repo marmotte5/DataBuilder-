@@ -947,6 +947,10 @@ class GenerateWorker(QThread):
             if self.pipe is None:
                 self.error.emit("No model loaded. Load a model first.")
                 return
+            # Take a local reference under the lock so a concurrent
+            # unload_model() call cannot set self.pipe = None between
+            # the check above and the scheduler/pipeline access below.
+            pipe_ref = self.pipe
 
         # Snapshot all generation params so UI changes mid-batch are safe
         model_type = self._model_type
@@ -967,7 +971,7 @@ class GenerateWorker(QThread):
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
-        _load_scheduler(self.pipe, scheduler_name, model_type)
+        _load_scheduler(pipe_ref, scheduler_name, model_type)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
         active_pipe = self._get_pipeline_for_mode()
