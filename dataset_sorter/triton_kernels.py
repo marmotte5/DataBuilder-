@@ -436,7 +436,7 @@ def fused_flow_interpolate(
         return output
     else:
         # PyTorch fallback
-        t_view = t.view(-1, 1, 1, 1)
+        t_view = t.view(-1, *([1] * (latents.dim() - 1)))
         return (1 - t_view) * latents + t_view * noise
 
 

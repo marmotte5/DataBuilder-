@@ -530,15 +530,13 @@ class SOAP(Optimizer):
                             self._rotate(self._rotate(exp_avg, old_Q, forward=False),
                                          new_Q, forward=True)
                         )
-                        exp_avg_sq.data.copy_(
-                            self._rotate(self._rotate(exp_avg_sq, old_Q, forward=False),
-                                         new_Q, forward=True)
-                        )
-                        # Rotation of second moments (element-wise variances) can
-                        # produce negative values because the linear transform does
-                        # not preserve non-negativity. Clamp to zero to prevent
-                        # NaN from sqrt() on line below.
-                        exp_avg_sq.clamp_(min=0)
+                        # Second moments (element-wise variances) cannot be
+                        # meaningfully rotated: linear transforms don't preserve
+                        # non-negativity of diagonal variance entries, producing
+                        # corrupted adaptive LR estimates.  Instead, scale down
+                        # the old second moments so they decay quickly toward the
+                        # new basis statistics without a hard reset.
+                        exp_avg_sq.mul_(beta2)
 
                 # Rotate gradient into eigenbasis
                 rotated_grad = self._rotate(grad, state["Q"], forward=True)
