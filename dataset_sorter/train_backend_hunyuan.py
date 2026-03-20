@@ -65,13 +65,21 @@ class HunyuanDiTBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode with CLIP-L + mT5."""
+        """Encode with CLIP-L + mT5.
+
+        Returns:
+            (clip_hidden, pooled, t5_hidden, clip_mask, t5_mask) — the masks
+            are attention masks from the tokenizers (1 for real tokens, 0 for
+            padding) so get_added_cond can pass them to the transformer.
+        """
         # CLIP-L
-        tokens_1 = self.tokenizer(
+        tok_out_1 = self.tokenizer(
             captions, padding="max_length",
             max_length=self.tokenizer.model_max_length,
             truncation=True, return_tensors="pt",
-        ).input_ids.to(self.device)
+        )
+        tokens_1 = tok_out_1.input_ids.to(self.device)
+        clip_mask = tok_out_1.attention_mask.to(self.device)
 
         with torch.no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
@@ -79,26 +87,34 @@ class HunyuanDiTBackend(TrainBackendBase):
             pooled = out_1.pooler_output
 
         # mT5
-        tokens_2 = self.tokenizer_2(
+        tok_out_2 = self.tokenizer_2(
             captions, padding="max_length",
             max_length=256,
             truncation=True, return_tensors="pt",
-        ).input_ids.to(self.device)
+        )
+        tokens_2 = tok_out_2.input_ids.to(self.device)
+        t5_mask = tok_out_2.attention_mask.to(self.device)
 
         with torch.no_grad():
             out_2 = self.text_encoder_2(tokens_2)
             t5_hidden = out_2.last_hidden_state
 
-        # Return CLIP hidden, pooled, and T5 hidden separately.
+        # Return CLIP hidden, pooled, T5 hidden, and both masks.
         # HunyuanDiT takes encoder_hidden_states (CLIP) and
         # encoder_hidden_states_t5 (mT5) as separate inputs.
         # Cannot concatenate along seq dim because hidden sizes differ
         # (CLIP=1024, mT5=2048).
-        return (clip_hidden, pooled, t5_hidden)
+        return (clip_hidden, pooled, t5_hidden, clip_mask, t5_mask)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
-        """Hunyuan DiT conditioning."""
+        """Build Hunyuan DiT conditioning dict.
+
+        Uses actual attention masks from tokenizer output (te_out[3] and
+        te_out[4]) when available to correctly mask padding tokens. Falls
+        back to all-ones masks when masks are not in te_out (e.g. older
+        cached data without mask support).
+        """
         if pooled is None:
             return None
         # Use actual image dimensions when available (aspect ratio bucketing)
@@ -117,16 +133,32 @@ class HunyuanDiTBackend(TrainBackendBase):
             device=self.device, dtype=self.dtype,
         )
 
-        # Lazy-init cached mask tensors to avoid per-step allocations
-        if not hasattr(self, "_clip_mask"):
-            self._clip_mask = torch.ones(
-                1, clip_len, device=self.device, dtype=self.dtype,
-            )
-            self._t5_mask = torch.ones(
-                1, t5_len, device=self.device, dtype=self.dtype,
-            )
-            self._meta_cache: dict[tuple[int, int], torch.Tensor] = {}
+        # Use real attention masks from encode_text_batch when available.
+        # Indices 3 and 4 carry CLIP and T5 masks respectively.
+        clip_mask = te_out[3] if len(te_out) > 3 else None
+        t5_mask = te_out[4] if len(te_out) > 4 else None
 
+        if clip_mask is None:
+            # Lazy-init fallback all-ones mask
+            if not hasattr(self, "_clip_mask_fallback"):
+                self._clip_mask_fallback = torch.ones(
+                    1, clip_len, device=self.device, dtype=self.dtype,
+                )
+            clip_mask = self._clip_mask_fallback.expand(batch_size, -1)
+        else:
+            clip_mask = clip_mask.to(device=self.device, dtype=self.dtype)
+
+        if t5_mask is None:
+            if not hasattr(self, "_t5_mask_fallback"):
+                self._t5_mask_fallback = torch.ones(
+                    1, t5_len, device=self.device, dtype=self.dtype,
+                )
+            t5_mask = self._t5_mask_fallback.expand(batch_size, -1)
+        else:
+            t5_mask = t5_mask.to(device=self.device, dtype=self.dtype)
+
+        if not hasattr(self, "_meta_cache"):
+            self._meta_cache: dict[tuple[int, int], torch.Tensor] = {}
         meta_key = (img_h, img_w)
         if meta_key not in self._meta_cache:
             self._meta_cache[meta_key] = torch.tensor(
@@ -135,9 +167,9 @@ class HunyuanDiTBackend(TrainBackendBase):
             ).unsqueeze(0)
 
         added_cond = {
-            "text_embedding_mask": self._clip_mask.expand(batch_size, -1),
+            "text_embedding_mask": clip_mask,
             "encoder_hidden_states_t5": t5_hidden,
-            "text_embedding_mask_t5": self._t5_mask.expand(batch_size, -1),
+            "text_embedding_mask_t5": t5_mask,
             "image_meta_size": self._meta_cache[meta_key].expand(batch_size, -1),
             "style": torch.zeros(batch_size, dtype=torch.long, device=self.device),
         }
@@ -146,7 +178,13 @@ class HunyuanDiTBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Hunyuan DiT training step — uses keyword args for transformer forward."""
+        """Hunyuan DiT training step — uses keyword args for transformer forward.
+
+        Overrides base class because HunyuanDiT2DModel uses keyword arguments
+        (hidden_states=, timestep=, encoder_hidden_states=) and unpacks
+        added_cond directly into fwd_kwargs instead of wrapping in
+        added_cond_kwargs dict.
+        """
         config = self.config
 
         noise = torch.randn_like(latents)
@@ -156,10 +194,22 @@ class HunyuanDiTBackend(TrainBackendBase):
                 device=latents.device, dtype=latents.dtype,
             )
 
-        timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps,
-            (batch_size,), device=self.device,
-        ).long()
+        # Sample timesteps (per-timestep EMA, SpeeD asymmetric, or uniform)
+        if self._timestep_ema_sampler is not None:
+            timesteps = self._timestep_ema_sampler.sample_timesteps(batch_size)
+        elif config.timestep_sampling == "speed" or config.speed_asymmetric:
+            if self._speed_sampler is None:
+                from dataset_sorter.speed_optimizations import SpeedTimestepSampler
+                num_ts = self.noise_scheduler.config.num_train_timesteps
+                self._speed_sampler = SpeedTimestepSampler(
+                    num_train_timesteps=num_ts, device=self.device,
+                )
+            timesteps = self._speed_sampler.sample_timesteps(batch_size)
+        else:
+            timesteps = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps,
+                (batch_size,), device=self.device,
+            ).long()
 
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
 
@@ -190,6 +240,26 @@ class HunyuanDiTBackend(TrainBackendBase):
         if config.min_snr_gamma > 0:
             snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
             loss = loss * snr_weights
+
+        # SpeeD change-aware loss weighting (CVPR 2025)
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
+
+        # Per-timestep EMA: update tracker and apply adaptive weighting
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
+        # Token-level caption weighting
+        if config.token_weighting_enabled and hasattr(self, '_token_weight_mask') and self._token_weight_mask is not None:
+            from dataset_sorter.token_weighting import apply_token_weights_to_loss
+            loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
+            self._token_weight_mask = None
 
         return loss.mean()
 

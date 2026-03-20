@@ -273,6 +273,14 @@ class Trainer:
         self.backend.load_model(model_path)
         log.info(f"Backend: {self.backend.model_name} ({config.model_type})")
 
+        # Cascade Stage C operates on Stage B embeddings, not raw pixels.
+        # Training without latent caching would fail at runtime — catch early.
+        if self.backend.model_name == "cascade" and not config.cache_latents:
+            raise ValueError(
+                "Stable Cascade requires 'Cache Latents' to be enabled. "
+                "Cascade Stage C trains on Stage B embeddings, not raw pixels."
+            )
+
         if progress_fn:
             progress_fn(1, 8, "Applying speed optimizations...")
 
@@ -1324,7 +1332,12 @@ class Trainer:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
                 pooled = te_cache[1]
                 if pooled is not None:
-                    pooled = pooled.to(self.device, dtype=self.dtype, non_blocking=True)
+                    # Attention masks (Z-Image) are integer tensors — preserve
+                    # their dtype instead of casting to training float dtype.
+                    if pooled.is_floating_point():
+                        pooled = pooled.to(self.device, dtype=self.dtype, non_blocking=True)
+                    else:
+                        pooled = pooled.to(self.device, non_blocking=True)
                 te_out = (encoder_hidden, pooled)
             else:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
