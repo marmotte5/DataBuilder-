@@ -116,7 +116,7 @@ class HiDreamBackend(TrainBackendBase):
                 max_length=self.tokenizer.model_max_length,
                 truncation=True, return_tensors="pt",
             ).input_ids.to(self.device)
-            with torch.no_grad():
+            with self._te_no_grad():
                 out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
                 all_hidden.append(out_1.hidden_states[-2])
                 if hasattr(out_1, 'text_embeds'):
@@ -129,7 +129,7 @@ class HiDreamBackend(TrainBackendBase):
                 max_length=self.tokenizer_2.model_max_length,
                 truncation=True, return_tensors="pt",
             ).input_ids.to(self.device)
-            with torch.no_grad():
+            with self._te_no_grad():
                 out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
                 all_hidden.append(out_2.hidden_states[-2])
                 if hasattr(out_2, 'text_embeds'):
@@ -142,7 +142,7 @@ class HiDreamBackend(TrainBackendBase):
                 max_length=512,
                 truncation=True, return_tensors="pt",
             ).input_ids.to(self.device)
-            with torch.no_grad():
+            with self._te_no_grad():
                 out_3 = self.text_encoder_3(tokens_3)
                 all_hidden.append(out_3.last_hidden_state)
 
@@ -153,7 +153,7 @@ class HiDreamBackend(TrainBackendBase):
                 max_length=512,
                 truncation=True, return_tensors="pt",
             ).to(self.device)
-            with torch.no_grad():
+            with self._te_no_grad():
                 out_4 = self.text_encoder_4(**tokens_4, output_hidden_states=True)
                 all_hidden.append(out_4.hidden_states[-1])
 

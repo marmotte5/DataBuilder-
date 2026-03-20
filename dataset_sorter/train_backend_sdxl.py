@@ -82,7 +82,7 @@ class SDXLBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             # Respect clip_skip for TE1 (Pony uses clip_skip=2)
             skip = max(self.config.clip_skip, 1)
@@ -95,7 +95,7 @@ class SDXLBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
             hidden_2 = out_2.hidden_states[-2]  # TE2 always uses penultimate layer
             pooled = out_2.pooler_output

@@ -81,7 +81,7 @@ class HunyuanDiTBackend(TrainBackendBase):
         tokens_1 = tok_out_1.input_ids.to(self.device)
         clip_mask = tok_out_1.attention_mask.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             clip_hidden = out_1.hidden_states[-2]
             pooled = out_1.pooler_output
@@ -95,7 +95,7 @@ class HunyuanDiTBackend(TrainBackendBase):
         tokens_2 = tok_out_2.input_ids.to(self.device)
         t5_mask = tok_out_2.attention_mask.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_2 = self.text_encoder_2(tokens_2)
             t5_hidden = out_2.last_hidden_state
 

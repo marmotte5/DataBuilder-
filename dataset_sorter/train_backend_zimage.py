@@ -676,7 +676,7 @@ class ZImageBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             attention_mask = tokens["attention_mask"]
             out = self.text_encoder(
                 **tokens,

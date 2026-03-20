@@ -70,6 +70,7 @@ class TrainBackendBase(ABC):
         self._token_weight_mask: Optional[torch.Tensor] = None  # Per-step token weights
         self._timestep_ema_sampler = None  # Per-timestep EMA sampler (set by trainer)
         self._training_mask: Optional[torch.Tensor] = None  # Spatial mask [B,1,H,W] for masked training
+        self._training_te: bool = False  # Set True when TE is being trained (disables no_grad in encode_text_batch)
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -456,6 +457,18 @@ class TrainBackendBase(ABC):
             te.to(self.device, dtype=self.dtype)
             te.train()
             te.requires_grad_(True)
+            self._training_te = True
+
+    def _te_no_grad(self):
+        """Return torch.no_grad() when TE is frozen, or a no-op context when training TE.
+
+        All backends' encode_text_batch() should use ``with self._te_no_grad():``
+        instead of bare ``with torch.no_grad():`` so that gradients flow through
+        the text encoder when it is being trained.
+        """
+        if self._training_te:
+            return torch.enable_grad()
+        return torch.no_grad()
 
     def offload_vae(self):
         """Move VAE to CPU after latent caching to free VRAM."""

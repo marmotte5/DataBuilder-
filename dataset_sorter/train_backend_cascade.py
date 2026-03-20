@@ -65,7 +65,7 @@ class StableCascadeBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out = self.text_encoder(tokens, output_hidden_states=True)
             hidden_states = out.hidden_states[-2]
             pooled = out.pooler_output if hasattr(out, 'pooler_output') else out.last_hidden_state[:, 0]

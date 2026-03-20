@@ -74,7 +74,7 @@ class FluxBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             pooled = out_1.pooler_output
 
@@ -85,7 +85,7 @@ class FluxBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out_2 = self.text_encoder_2(tokens_2)
             t5_hidden = out_2.last_hidden_state
 

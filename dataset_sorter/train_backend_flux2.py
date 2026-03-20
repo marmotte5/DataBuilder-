@@ -99,7 +99,7 @@ class Flux2Backend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out = self.text_encoder(
                 **tokens,
                 output_hidden_states=True,

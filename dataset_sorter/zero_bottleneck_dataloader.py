@@ -113,7 +113,10 @@ class ChunkPacker:
                     te_out = te_cache[i]
                     for j, t in enumerate(te_out):
                         if t is not None and isinstance(t, torch.Tensor):
-                            tensors[f"te_{local_i}_{j}"] = t.to(self.dtype).cpu().contiguous()
+                            # Preserve integer dtypes (e.g. attention masks for
+                            # Z-Image/LLM encoders) — only cast float tensors.
+                            stored = t.to(self.dtype) if t.is_floating_point() else t
+                            tensors[f"te_{local_i}_{j}"] = stored.cpu().contiguous()
 
             if tensors:
                 chunk_path = self.output_dir / f"chunk_{chunk_idx:04d}.safetensors"
@@ -345,6 +348,10 @@ class PinnedRingBuffer:
                     break
                 if t is not None:
                     buf[i].copy_(t)
+                else:
+                    # Zero out positions with no data to prevent stale/
+                    # uninitialized values from leaking across batches.
+                    buf[i].zero_()
 
     def transfer_to_gpu(self, actual_batch_size: int, buffer_idx: int = -1) -> dict:
         """Async DMA transfer from pinned buffer to GPU.
@@ -524,7 +531,8 @@ class BackgroundPrefetcher:
                         try:
                             te_out = self.reader.get_te_output(idx)
                             if j < len(te_out) and te_out[j] is not None:
-                                te_tensors.append(te_out[j].to(self.dtype))
+                                _t = te_out[j]
+                                te_tensors.append(_t.to(self.dtype) if _t.is_floating_point() else _t)
                             else:
                                 te_tensors.append(None)
                         except (IndexError, KeyError):

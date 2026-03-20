@@ -79,7 +79,7 @@ class ChromaBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out = self.text_encoder(tokens)
             encoder_hidden = out.last_hidden_state
 
