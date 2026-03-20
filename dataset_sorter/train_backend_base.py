@@ -584,7 +584,12 @@ class TrainBackendBase(ABC):
         return loss.mean()
 
     def _compute_snr_weights(self, timesteps: torch.Tensor, gamma: int) -> torch.Tensor:
-        """Compute Min-SNR weighting (ICCV 2023)."""
+        """Compute Min-SNR weighting (ICCV 2023).
+
+        For epsilon prediction: weight = min(SNR, γ) / SNR
+        For v-prediction:       weight = min(SNR, γ) / (SNR + 1)
+        See Hang et al. "Efficient Diffusion Training via Min-SNR Weighting Strategy".
+        """
         if not hasattr(self.noise_scheduler, 'alphas_cumprod'):
             log.warning("Scheduler lacks alphas_cumprod; min_snr_gamma not supported.")
             return torch.ones_like(timesteps, dtype=torch.float32)
@@ -594,7 +599,10 @@ class TrainBackendBase(ABC):
         sqrt_alpha = alphas_cumprod[timesteps] ** 0.5
         sqrt_one_minus = (1.0 - alphas_cumprod[timesteps]).clamp(min=1e-8) ** 0.5
         snr = (sqrt_alpha / sqrt_one_minus) ** 2
-        return torch.clamp(snr, max=gamma) / snr.clamp(min=1e-8)
+        clamped_snr = torch.clamp(snr, max=gamma)
+        if self.prediction_type == "v_prediction":
+            return clamped_snr / (snr + 1.0)
+        return clamped_snr / snr.clamp(min=1e-8)
 
     def flow_training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
