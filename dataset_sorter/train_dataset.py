@@ -530,8 +530,9 @@ class CachedTrainDataset(Dataset):
                 # CLIP models use the penultimate layer [-2] by default,
                 # adjusted by clip_skip.
                 if caption_preprocessor is not None:
-                    # LLM path: second-to-last hidden state (matches pipeline)
-                    hidden_states = encoder_output.hidden_states[-2].cpu()
+                    # LLM path: second-to-last hidden state (matches pipeline).
+                    # Squeeze batch dim since caching runs with batch=1.
+                    hidden_states = encoder_output.hidden_states[-2].squeeze(0).cpu()
                     _skip = 1  # default for LLM path (used by TE2 below)
                     tokens = _tok_out.input_ids.to(device)  # needed for token_id_result
                 else:
@@ -543,8 +544,9 @@ class CachedTrainDataset(Dataset):
                 # instead — the transformer needs it to strip padding tokens.
                 if caption_preprocessor is not None:
                     # LLM path: store attention mask (used to strip padding
-                    # in training_step before passing to transformer)
-                    pooled = _tok_out["attention_mask"].cpu()
+                    # in training_step before passing to transformer).
+                    # Squeeze to [seq_len] since caching runs with batch=1.
+                    pooled = _tok_out["attention_mask"].squeeze(0).cpu()
                 else:
                     pooled = (
                         encoder_output.pooler_output.cpu()
