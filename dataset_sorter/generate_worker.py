@@ -877,11 +877,15 @@ class GenerateWorker(QThread):
 
         return pnginfo, parameters_str
 
-    def _get_pipeline_for_mode(self):
+    def _get_pipeline_for_mode(self, pipe_ref, init_img, mask_img):
         """Select the appropriate pipeline variant for the current generation mode.
 
-        If both init_image and mask_image are set, creates an inpaint pipeline
-        (supported for SD1.5/SD2/SDXL/Pony). If only init_image is set, creates
+        Uses the lock-protected ``pipe_ref`` snapshot instead of ``self.pipe``
+        so that a concurrent ``unload_model()`` call cannot cause an
+        ``AttributeError`` on a ``None`` pipeline.
+
+        If both init_img and mask_img are set, creates an inpaint pipeline
+        (supported for SD1.5/SD2/SDXL/Pony). If only init_img is set, creates
         an img2img pipeline (supported for SD1.5-Flux). Both are constructed
         from the loaded pipeline's components. Falls back to the base txt2img
         pipeline if the specialized variant is unavailable or fails to init.
@@ -890,7 +894,7 @@ class GenerateWorker(QThread):
 
         model_type = self._model_type
 
-        if self.mask_image is not None and self.init_image is not None:
+        if mask_img is not None and init_img is not None:
             # Inpainting mode
             inpaint_map = {
                 "sd15": "StableDiffusionInpaintPipeline",
@@ -902,12 +906,12 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**self.pipe.components)
+                    return cls(**pipe_ref.components)
                 except Exception as e:
                     log.warning(f"Could not create inpaint pipeline: {e}, falling back to txt2img")
-            return self.pipe
+            return pipe_ref
 
-        if self.init_image is not None:
+        if init_img is not None:
             # img2img mode
             img2img_map = {
                 "sd15": "StableDiffusionImg2ImgPipeline",
@@ -922,12 +926,12 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**self.pipe.components)
+                    return cls(**pipe_ref.components)
                 except Exception as e:
                     log.warning(f"Could not create img2img pipeline: {e}, falling back to txt2img")
-            return self.pipe
+            return pipe_ref
 
-        return self.pipe
+        return pipe_ref
 
     def _do_generate(self):
         """Run the image generation loop.
@@ -974,7 +978,7 @@ class GenerateWorker(QThread):
         _load_scheduler(pipe_ref, scheduler_name, model_type)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
-        active_pipe = self._get_pipeline_for_mode()
+        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
         succeeded = 0
         for i in range(total):

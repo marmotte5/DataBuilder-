@@ -900,18 +900,24 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _on_rlhf_candidates(self, candidates: list, round_idx: int):
         """Show the RLHF preference dialog when candidates are ready."""
+        # Capture a local reference before the modal dialog blocks the event
+        # loop.  If training finishes while the dialog is open, _on_finished
+        # sets self._training_worker = None, but we still need the worker to
+        # apply preferences.
+        worker = self._training_worker
+
         if not candidates:
             self._log("RLHF: No candidates generated.")
-            if self._training_worker:
-                self._training_worker.resume()
+            if worker:
+                worker.resume()
             return
 
         from dataset_sorter.ui.rlhf_dialog import RLHFPreferenceDialog
 
         step = 0
-        if self._training_worker and getattr(self._training_worker, 'trainer', None):
+        if worker and getattr(worker, 'trainer', None):
             try:
-                step = self._training_worker.trainer.state.global_step
+                step = worker.trainer.state.global_step
             except AttributeError:
                 pass  # Trainer not fully initialized yet
 
@@ -926,8 +932,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             selections = dlg.get_selections()
             self._log(f"RLHF: {len(selections)} preferences collected for round {round_idx + 1}.")
 
-            if self._training_worker:
-                self._training_worker.apply_rlhf_preferences(selections)
+            if worker:
+                worker.apply_rlhf_preferences(selections)
 
             # Update stats
             total_prefs = (round_idx + 1) * len(selections)
@@ -937,9 +943,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             )
         else:
             self._log("RLHF: Preferences skipped for this round.")
-            if self._training_worker:
+            if worker:
                 # Resume via worker (thread-safe), not trainer directly
-                self._training_worker.resume()
+                worker.resume()
 
     # ── VRAM Pre-Estimation ─────────────────────────────────────────
 
