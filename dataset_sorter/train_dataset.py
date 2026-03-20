@@ -433,6 +433,7 @@ class CachedTrainDataset(Dataset):
         caption_preprocessor=None,
         max_token_length: int = 0,
         max_token_length_2: int = 0,
+        encode_fn=None,
     ):
         """Pre-compute and cache text encoder outputs.
 
@@ -444,6 +445,11 @@ class CachedTrainDataset(Dataset):
                 Z-Image uses 512 while Qwen3's default is 32768.
             max_token_length_2: Override tokenizer_2.model_max_length if > 0.
                 Hunyuan uses 256 for mT5 while model default may be larger.
+            encode_fn: Optional callable(list[str]) -> tuple that replaces the
+                generic per-encoder caching logic. Used by backends with custom
+                encoding (Flux2 multi-layer extraction, HiDream 4-encoder
+                concatenation) that can't be reproduced by the generic path.
+                Must return a tuple of tensors on CPU.
 
         Speed optimizations:
         - Safetensors disk format (2-5x faster I/O)
@@ -501,6 +507,44 @@ class CachedTrainDataset(Dataset):
                     continue
 
             with torch.no_grad():
+                # Backend-provided encode function for models with custom
+                # encoding that the generic path can't reproduce (Flux2
+                # multi-layer extraction, HiDream 4-encoder concatenation).
+                if encode_fn is not None:
+                    te_result = tuple(
+                        t.cpu() if isinstance(t, torch.Tensor) else t
+                        for t in encode_fn([caption])
+                    )
+                    # Squeeze batch dim since we encode one caption at a time
+                    te_result = tuple(
+                        t.squeeze(0) if isinstance(t, torch.Tensor) and t.dim() > 1 else t
+                        for t in te_result
+                    )
+                    token_id_result = ()  # token IDs not available via encode_fn
+
+                    for idx in indices:
+                        self._te_cache[idx] = te_result
+                        self._token_id_cache[idx] = token_id_result
+
+                    if to_disk and self.cache_dir:
+                        try:
+                            from safetensors.torch import save_file
+                            sf_path = self.cache_dir / f"te_{cache_key}.safetensors"
+                            te_dict = {}
+                            for ti, t in enumerate(te_result):
+                                if t is not None and isinstance(t, torch.Tensor):
+                                    te_dict[f"t{ti:02d}"] = t
+                            if te_dict:
+                                save_file(te_dict, str(sf_path))
+                        except (ImportError, Exception):
+                            cache_path = self.cache_dir / f"te_{cache_key}.pt"
+                            torch.save(te_result, cache_path)
+
+                    processed += len(indices)
+                    if progress_fn:
+                        progress_fn(processed, len(self))
+                    continue
+
                 # Preprocess caption (e.g. Qwen3 chat template for Z-Image)
                 tok_input = caption_preprocessor(caption) if caption_preprocessor else caption
                 _max_len = max_token_length if max_token_length > 0 else tokenizer.model_max_length

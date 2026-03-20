@@ -423,6 +423,18 @@ class Trainer:
             if getattr(self.backend, 'model_name', '') == 'hunyuan':
                 _max_tok_len_2 = 256
 
+            # Backends with custom encoding (multi-layer extraction, 4+ encoders)
+            # that can't be reproduced by the generic per-encoder caching path.
+            _encode_fn = None
+            _model_name = getattr(self.backend, 'model_name', '')
+            if _model_name in ('flux2', 'hidream'):
+                _encode_fn = self.backend.encode_text_batch
+                # HiDream: ensure all 4 encoders are on device for caching
+                if _model_name == 'hidream':
+                    te4 = getattr(self.backend, 'text_encoder_4', None)
+                    if te4 is not None:
+                        te4.to(self.device)
+
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
                 self.device, self.dtype,
@@ -434,6 +446,7 @@ class Trainer:
                 caption_preprocessor=_caption_pp,
                 max_token_length=_max_tok_len,
                 max_token_length_2=_max_tok_len_2,
+                encode_fn=_encode_fn,
             )
 
             # Offload text encoders to free VRAM for training
