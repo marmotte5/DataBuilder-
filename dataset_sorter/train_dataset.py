@@ -343,6 +343,9 @@ class CachedTrainDataset(Dataset):
         # Encode each resolution group in batches with dynamic batch sizing.
         # Start with a larger batch and reduce on OOM for maximum throughput.
         vae_batch_size = self._estimate_vae_batch_size(device)
+        # Read shift_factor once before the loop so it's available in OOM
+        # fallback paths (where vae.encode() may fail before assigning it).
+        shift = getattr(vae.config, 'shift_factor', 0.0)
         encoded_count = len(self) - len(to_encode)  # already cached
         for (_w, _h), group in resolution_groups.items():
             for batch_start in range(0, len(group), vae_batch_size):
@@ -354,9 +357,6 @@ class CachedTrainDataset(Dataset):
                 try:
                     with torch.no_grad():
                         encoded = vae.encode(batch_tensor).latent_dist.sample()
-                        # Some VAEs (e.g. Z-Image) have a shift_factor that
-                        # must be subtracted before scaling.
-                        shift = getattr(vae.config, 'shift_factor', 0.0)
                         if shift:
                             encoded = (encoded - shift) * vae.config.scaling_factor
                         else:
@@ -484,8 +484,14 @@ class CachedTrainDataset(Dataset):
 
         processed = 0
         for caption, indices in unique_captions.items():
-            # Check disk cache (try safetensors first, then .pt)
-            cache_key = hashlib.md5(caption.encode()).hexdigest()
+            # Check disk cache (try safetensors first, then .pt).
+            # Include encoding params in key so changing clip_skip/max_length
+            # invalidates stale cached embeddings from a different config.
+            _cache_str = (
+                f"{caption}|cs={clip_skip}|ml={max_token_length}"
+                f"|ml2={max_token_length_2}|pp={caption_preprocessor is not None}"
+            )
+            cache_key = hashlib.md5(_cache_str.encode()).hexdigest()
             if to_disk and self.cache_dir:
                 cache_path = self.cache_dir / f"te_{cache_key}.pt"
                 sf_path = self.cache_dir / f"te_{cache_key}.safetensors"
@@ -589,7 +595,7 @@ class CachedTrainDataset(Dataset):
                 else:
                     _skip = max(clip_skip, 1)
                     _skip = min(_skip, len(encoder_output.hidden_states) - 2)
-                    hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
+                    hidden_states = encoder_output.hidden_states[-(_skip + 1)].squeeze(0).cpu()
                 # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state.
                 # For LLM text encoders (e.g. Qwen3), store the attention mask
                 # instead — the transformer needs it to strip padding tokens.
@@ -600,7 +606,7 @@ class CachedTrainDataset(Dataset):
                     pooled = _tok_out["attention_mask"].squeeze(0).cpu()
                 else:
                     pooled = (
-                        encoder_output.pooler_output.cpu()
+                        encoder_output.pooler_output.squeeze(0).cpu()
                         if hasattr(encoder_output, "pooler_output") and encoder_output.pooler_output is not None
                         else None
                     )
@@ -624,9 +630,9 @@ class CachedTrainDataset(Dataset):
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
                     _skip2 = min(_skip, len(encoder_output_2.hidden_states) - 2)
-                    hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].cpu()
+                    hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].squeeze(0).cpu()
                     pooled_2 = (
-                        encoder_output_2.pooler_output.cpu()
+                        encoder_output_2.pooler_output.squeeze(0).cpu()
                         if hasattr(encoder_output_2, "pooler_output") and encoder_output_2.pooler_output is not None
                         else None
                     )
