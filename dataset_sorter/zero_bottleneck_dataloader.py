@@ -199,11 +199,21 @@ class MMapChunkReader:
             handle = safe_open(str(cf), framework="pt", device="cpu")
             self._handles.append(handle)
 
-        # Detect number of TE components from first sample
+        # Detect number of TE components from first sample.
+        # Use the stored te_0_len tensor (which records the original tuple
+        # length including None positions) if available, otherwise count
+        # te_0_N keys — but exclude te_0_len which is a metadata key, not a
+        # component.
         if self._handles:
             keys = self._handles[0].keys()
-            te_keys = [k for k in keys if k.startswith("te_0_")]
-            self._num_te_components = len(te_keys)
+            if "te_0_len" in keys:
+                self._num_te_components = int(
+                    self._handles[0].get_tensor("te_0_len").item()
+                )
+            else:
+                te_keys = [k for k in keys if k.startswith("te_0_")
+                           and not k.endswith("_len")]
+                self._num_te_components = len(te_keys)
 
         log.info(
             f"MMapChunkReader: {len(self._handles)} chunks, "
@@ -286,12 +296,15 @@ class PinnedRingBuffer:
 
     def __init__(self, batch_size: int, latent_shape: tuple[int, ...],
                  te_shapes: list[tuple[int, ...]] = None,
+                 te_component_map: dict[int, int] | None = None,
                  dtype: torch.dtype = torch.bfloat16,
                  device: torch.device = None):
         self.batch_size = batch_size
         self.latent_shape = latent_shape
         self.dtype = dtype
         self.device = device or torch.device("cuda")
+        # Maps TE component index → buffer index (handles None gaps in TE outputs)
+        self._te_component_map = te_component_map or {}
 
         # Pin memory only when CUDA is available (pinned memory requires a GPU driver)
         _pin = torch.cuda.is_available() and device is not None and device.type == "cuda"
@@ -341,8 +354,10 @@ class PinnedRingBuffer:
         """Fill TE output buffer for a specific component."""
         if buffer_idx < 0:
             buffer_idx = self._active_idx
-        if component < len(self._te_buffers):
-            buf = self._te_buffers[component][buffer_idx]
+        # Map component index to buffer index (handles None gaps)
+        buf_idx = self._te_component_map.get(component, component)
+        if buf_idx < len(self._te_buffers):
+            buf = self._te_buffers[buf_idx][buffer_idx]
             for i, t in enumerate(tensors):
                 if i >= self.batch_size:
                     break
@@ -485,9 +500,13 @@ class BackgroundPrefetcher:
         try:
             while not self._stop.is_set():
                 # Wait for main thread to consume previous batch
-                self._consumed.wait(timeout=1.0)
+                was_set = self._consumed.wait(timeout=1.0)
                 if self._stop.is_set():
                     break
+                if not was_set:
+                    # Timed out — main thread hasn't consumed the buffer yet.
+                    # Loop back to wait again instead of overwriting live data.
+                    continue
                 self._consumed.clear()
 
                 # Check if we have more data
@@ -685,17 +704,23 @@ class ZeroBottleneckLoader:
         lat = self._reader.get_latent(0)
         latent_shape = tuple(lat.shape)
 
-        # Detect TE shapes
+        # Detect TE shapes — preserve index alignment with num_te_components
+        # so that fill_te(j, ...) writes to the correct buffer.  None
+        # components get no buffer; fill_te silently skips them via the
+        # bounds check (component >= len(self._te_buffers) is already safe).
         te_shapes = []
+        self._te_component_to_buffer: dict[int, int] = {}
         if self._reader.num_te_components > 0:
             te_out = self._reader.get_te_output(0)
-            for t in te_out:
+            for i, t in enumerate(te_out):
                 if t is not None:
+                    self._te_component_to_buffer[i] = len(te_shapes)
                     te_shapes.append(tuple(t.shape))
 
         # Create pinned ring buffer
         self._ring = PinnedRingBuffer(
             self.batch_size, latent_shape, te_shapes,
+            te_component_map=self._te_component_to_buffer,
             dtype=self.dtype, device=self.device,
         )
 

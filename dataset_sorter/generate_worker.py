@@ -425,43 +425,55 @@ class GenerateWorker(QThread):
             self.finished_generating.emit(False, msg)
             return
 
-        self.progress.emit(50, 100, "Applying optimizations...")
+        # Wrap post-load setup in try/except so the local `pipe` is freed on
+        # failure.  Without this, an exception between _load_pipeline() and the
+        # assignment to self.pipe leaves a GPU-resident pipeline unreachable,
+        # leaking potentially 5-20 GB of VRAM until process exit.
+        try:
+            self.progress.emit(50, 100, "Applying optimizations...")
 
-        # Enable memory optimizations — cpu_offload must be called INSTEAD of
-        # pipe.to(device), not after it, otherwise the model is already fully on
-        # GPU and offloading has no effect (OOM on low-VRAM GPUs).
-        _use_cpu_offload = False
-        if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
-            try:
-                vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                if vram < 16:
-                    _use_cpu_offload = True
-            except Exception as e:
-                log.debug(f"VRAM detection failed: {e}")
+            # Enable memory optimizations — cpu_offload must be called INSTEAD of
+            # pipe.to(device), not after it, otherwise the model is already fully on
+            # GPU and offloading has no effect (OOM on low-VRAM GPUs).
+            _use_cpu_offload = False
+            if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
+                try:
+                    vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                    if vram < 16:
+                        _use_cpu_offload = True
+                except Exception as e:
+                    log.debug(f"VRAM detection failed: {e}")
 
-        if _use_cpu_offload:
-            pipe.enable_model_cpu_offload()
-        else:
-            try:
-                pipe = pipe.to(self._device, dtype=dtype)
-            except Exception:
-                pipe = pipe.to(self._device)
+            if _use_cpu_offload:
+                pipe.enable_model_cpu_offload()
+            else:
+                try:
+                    pipe = pipe.to(self._device, dtype=dtype)
+                except Exception:
+                    pipe = pipe.to(self._device)
 
-        if hasattr(pipe, "enable_vae_slicing"):
-            pipe.enable_vae_slicing()
-        if hasattr(pipe, "enable_vae_tiling"):
-            pipe.enable_vae_tiling()
+            if hasattr(pipe, "enable_vae_slicing"):
+                pipe.enable_vae_slicing()
+            if hasattr(pipe, "enable_vae_tiling"):
+                pipe.enable_vae_tiling()
 
-        self.progress.emit(70, 100, "Loading LoRA adapters...")
+            self.progress.emit(70, 100, "Loading LoRA adapters...")
 
-        # Load LoRA adapters
-        if self._lora_adapters:
-            self._load_loras(pipe, self._lora_adapters)
+            # Load LoRA adapters
+            if self._lora_adapters:
+                self._load_loras(pipe, self._lora_adapters)
 
-        self.progress.emit(90, 100, "Finalizing...")
+            self.progress.emit(90, 100, "Finalizing...")
 
-        with self._lock:
-            self.pipe = pipe
+            with self._lock:
+                self.pipe = pipe
+        except Exception:
+            # Free the local pipeline to release VRAM before re-raising
+            del pipe
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise
+
         self.progress.emit(100, 100, "Model loaded!")
         self.model_loaded.emit(
             f"Loaded {model_type} on {self._device} ({dtype.__name__ if hasattr(dtype, '__name__') else dtype})"

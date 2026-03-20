@@ -708,8 +708,16 @@ class CachedTrainDataset(Dataset):
         return 4  # Conservative default
 
     def _latent_disk_path(self, idx: int) -> Path:
-        """Generate disk cache path for a latent."""
-        img_hash = hashlib.md5(str(self.image_paths[idx]).encode()).hexdigest()
+        """Generate disk cache path for a latent.
+
+        Includes bucket resolution in the hash so latents are invalidated
+        when bucket assignments change between runs.
+        """
+        key = str(self.image_paths[idx])
+        if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
+            w, h = self._bucket_assignments[idx]
+            key += f"_{w}x{h}"
+        img_hash = hashlib.md5(key.encode()).hexdigest()
         return self.cache_dir / f"latent_{img_hash}.pt"
 
     def clear_caches(self):

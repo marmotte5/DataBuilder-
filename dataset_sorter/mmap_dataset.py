@@ -224,13 +224,19 @@ class MMapTensorStore:
 
         return tensor.to(self.device, non_blocking=True)
 
-    def get_te_output(self, idx: int, num_outputs: int = 2) -> tuple[torch.Tensor, ...]:
-        """Load text encoder outputs for a sample."""
-        outputs = []
+    def get_te_output(self, idx: int, num_outputs: int = 2) -> tuple[torch.Tensor | None, ...]:
+        """Load text encoder outputs for a sample.
+
+        Handles None gaps in TE outputs (e.g., SD3 with 5 components where
+        some are None) by appending None for missing keys instead of breaking
+        early, which would silently truncate all components after the first gap.
+        """
+        outputs: list[torch.Tensor | None] = []
         for j in range(num_outputs):
             key = f"te_{idx}_{j}"
             if key not in self._header["tensors"]:
-                break
+                outputs.append(None)
+                continue
             meta = self._header["tensors"][key]
             offset = self._data_offset + meta["offset"]
             nbytes = meta["nbytes"]
