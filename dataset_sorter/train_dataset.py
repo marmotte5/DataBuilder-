@@ -341,7 +341,13 @@ class CachedTrainDataset(Dataset):
                 try:
                     with torch.no_grad():
                         encoded = vae.encode(batch_tensor).latent_dist.sample()
-                        encoded = encoded * vae.config.scaling_factor
+                        # Some VAEs (e.g. Z-Image) have a shift_factor that
+                        # must be subtracted before scaling.
+                        shift = getattr(vae.config, 'shift_factor', 0.0)
+                        if shift:
+                            encoded = (encoded - shift) * vae.config.scaling_factor
+                        else:
+                            encoded = encoded * vae.config.scaling_factor
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() and vae_batch_size > 1:
                         # OOM: reduce batch size and retry this batch one-by-one
@@ -354,7 +360,10 @@ class CachedTrainDataset(Dataset):
                             single = pv_item.to(device, dtype=dtype, memory_format=torch.channels_last)
                             with torch.no_grad():
                                 enc = vae.encode(single).latent_dist.sample()
-                                enc = enc * vae.config.scaling_factor
+                                if shift:
+                                    enc = (enc - shift) * vae.config.scaling_factor
+                                else:
+                                    enc = enc * vae.config.scaling_factor
                             latent = enc[0].cpu()
                             if torch.cuda.is_available():
                                 latent = latent.pin_memory()
@@ -510,24 +519,32 @@ class CachedTrainDataset(Dataset):
                     tokens = _tok_out.input_ids.to(device)
                     encoder_output = text_encoder(tokens, output_hidden_states=True)
 
-                # LLM text encoders (Qwen3) use the last hidden state [-1].
+                # LLM text encoders (Qwen3 for Z-Image) use second-to-last
+                # hidden state [-2], matching the official pipeline.
                 # CLIP models use the penultimate layer [-2] by default,
                 # adjusted by clip_skip.
                 if caption_preprocessor is not None:
-                    # LLM path: use last hidden state (matches encode_text_batch)
-                    hidden_states = encoder_output.hidden_states[-1].cpu()
+                    # LLM path: second-to-last hidden state (matches pipeline)
+                    hidden_states = encoder_output.hidden_states[-2].cpu()
                     _skip = 1  # default for LLM path (used by TE2 below)
                     tokens = _tok_out.input_ids.to(device)  # needed for token_id_result
                 else:
                     _skip = max(clip_skip, 1)
                     _skip = min(_skip, len(encoder_output.hidden_states) - 2)
                     hidden_states = encoder_output.hidden_states[-(_skip + 1)].cpu()
-                # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state
-                pooled = (
-                    encoder_output.pooler_output.cpu()
-                    if hasattr(encoder_output, "pooler_output") and encoder_output.pooler_output is not None
-                    else None
-                )
+                # pooler_output contains the pooled [CLS] embedding; [0] is last_hidden_state.
+                # For LLM text encoders (e.g. Qwen3), store the attention mask
+                # instead — the transformer needs it to strip padding tokens.
+                if caption_preprocessor is not None:
+                    # LLM path: store attention mask (used to strip padding
+                    # in training_step before passing to transformer)
+                    pooled = _tok_out["attention_mask"].cpu()
+                else:
+                    pooled = (
+                        encoder_output.pooler_output.cpu()
+                        if hasattr(encoder_output, "pooler_output") and encoder_output.pooler_output is not None
+                        else None
+                    )
 
                 te_result = (hidden_states, pooled)
                 hidden_states_2 = None

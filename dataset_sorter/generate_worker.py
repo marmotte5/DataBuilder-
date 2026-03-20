@@ -49,12 +49,16 @@ PIPELINE_MAP = {
     "sd3":      ("diffusers", "StableDiffusion3Pipeline"),
     "sd35":     ("diffusers", "StableDiffusion3Pipeline"),
     "flux":     ("diffusers", "FluxPipeline"),
+    "flux2":    ("diffusers", "DiffusionPipeline"),
     "pixart":   ("diffusers", "PixArtSigmaPipeline"),
     "sana":     ("diffusers", "SanaPipeline"),
     "kolors":   ("diffusers", "KolorsPipeline"),
     "cascade":  ("diffusers", "StableCascadeCombinedPipeline"),
     "hunyuan":  ("diffusers", "HunyuanDiTPipeline"),
     "auraflow": ("diffusers", "AuraFlowPipeline"),
+    "zimage":   ("diffusers", "DiffusionPipeline"),
+    "chroma":   ("diffusers", "DiffusionPipeline"),
+    "hidream":  ("diffusers", "DiffusionPipeline"),
 }
 
 # Models that need trust_remote_code
