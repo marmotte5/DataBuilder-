@@ -150,7 +150,7 @@ class CachedTrainDataset(Dataset):
         crop_cls = transforms.CenterCrop if self.center_crop else transforms.RandomCrop
         return transforms.Compose([
             transforms.Resize(
-                min(width, height),
+                max(width, height),
                 interpolation=transforms.InterpolationMode.BILINEAR,
             ),
             crop_cls((height, width)),
@@ -690,8 +690,8 @@ class CachedTrainDataset(Dataset):
             import torch
             if device.type == "cuda" and torch.cuda.is_available():
                 free_gb = (
-                    torch.cuda.get_device_properties(0).total_memory
-                    - torch.cuda.memory_allocated()
+                    torch.cuda.get_device_properties(device).total_memory
+                    - torch.cuda.memory_allocated(device)
                 ) / (1024 ** 3)
                 # Each image at 1024x1024 bf16 needs ~0.5 GB for VAE forward
                 # Use ~60% of free memory for batching, leave headroom

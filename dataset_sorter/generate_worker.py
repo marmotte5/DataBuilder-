@@ -801,13 +801,16 @@ class GenerateWorker(QThread):
 
     # ── Image generation ────────────────────────────────────────────────
 
-    def _build_png_metadata(self, seed: int) -> PngInfo:
+    def _build_png_metadata(self, seed: int) -> tuple[PngInfo, str]:
         """Build PNG tEXt metadata chunks in Automatic1111's format.
 
         Writes a 'parameters' chunk with the prompt, negative prompt, and
         settings on separate lines, matching the format that Civitai and
         A1111's PNG Info tab can parse. Also stores individual fields (seed,
         steps, etc.) as separate chunks for programmatic access.
+
+        Returns (PngInfo, parameters_string) so callers can use the
+        parameters string directly without parsing internal PngInfo chunks.
         """
         pnginfo = PngInfo()
 
@@ -840,7 +843,8 @@ class GenerateWorker(QThread):
             settings.append(f"LoRA: {', '.join(lora_parts)}")
 
         params_parts.append(", ".join(settings))
-        pnginfo.add_text("parameters", "\n".join(params_parts))
+        parameters_str = "\n".join(params_parts)
+        pnginfo.add_text("parameters", parameters_str)
 
         # Individual fields for programmatic access
         pnginfo.add_text("seed", str(seed))
@@ -851,7 +855,7 @@ class GenerateWorker(QThread):
         pnginfo.add_text("width", str(self.width))
         pnginfo.add_text("height", str(self.height))
 
-        return pnginfo
+        return pnginfo, parameters_str
 
     def _get_pipeline_for_mode(self):
         """Select the appropriate pipeline variant for the current generation mode.
@@ -1008,13 +1012,9 @@ class GenerateWorker(QThread):
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
-                pnginfo = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(current_seed)
                 img.info["pnginfo"] = pnginfo
-                # Store parameters string for UI display
-                for chunk_type, chunk_data, *_ in pnginfo.chunks:
-                    if chunk_type == "tEXt" and chunk_data.startswith(b"parameters\x00"):
-                        img.info["parameters"] = chunk_data.split(b"\x00", 1)[1].decode("latin-1")
-                        break
+                img.info["parameters"] = parameters_str
 
                 # Build display info
                 mode_str = "txt2img"

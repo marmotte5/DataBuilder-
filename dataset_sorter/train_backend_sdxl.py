@@ -86,6 +86,8 @@ class SDXLBackend(TrainBackendBase):
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             # Respect clip_skip for TE1 (Pony uses clip_skip=2)
             skip = max(self.config.clip_skip, 1)
+            # Clamp to valid range to prevent IndexError with large clip_skip
+            skip = min(skip, len(out_1.hidden_states) - 2)
             hidden_1 = out_1.hidden_states[-(skip + 1)]
 
         # TE2

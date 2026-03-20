@@ -66,6 +66,8 @@ class SD15Backend(TrainBackendBase):
             # clip_skip=0 or 1 → hidden_states[-2] (default, penultimate layer)
             # clip_skip=2      → hidden_states[-3] (skip last 2)
             skip = max(self.config.clip_skip, 1)
+            # Clamp to valid range to prevent IndexError with large clip_skip
+            skip = min(skip, len(output.hidden_states) - 2)
             hidden = output.hidden_states[-(skip + 1)]
 
         return (hidden,)
