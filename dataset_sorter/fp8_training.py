@@ -149,6 +149,13 @@ class FP8LinearWrapper(nn.Module):
             return self.linear(x)
 
         try:
+            # torch._scaled_mm requires 2D inputs. Transformer layers pass
+            # 3D tensors (batch, seq_len, hidden). Reshape to 2D for the
+            # matmul, then restore the original batch dimensions.
+            orig_shape = x.shape
+            if x.dim() > 2:
+                x = x.reshape(-1, x.shape[-1])
+
             # Quantize input to FP8 E4M3
             x_scale = self.tracker.get_scale(f"{self.name}_input", x, is_forward=True)
             x_fp8 = (x.float() * x_scale).to(_fp8_e4m3)
@@ -169,6 +176,10 @@ class FP8LinearWrapper(nn.Module):
                 out_dtype=x.dtype,
             )
 
+            # Restore original batch dimensions
+            if len(orig_shape) > 2:
+                out = out.reshape(*orig_shape[:-1], out.shape[-1])
+
             if self.linear.bias is not None:
                 out = out + self.linear.bias
 
@@ -176,7 +187,7 @@ class FP8LinearWrapper(nn.Module):
 
         except (RuntimeError, TypeError):
             # Fallback for unsupported shapes or hardware
-            return self.linear(x)
+            return self.linear(x.reshape(orig_shape) if x.shape != orig_shape else x)
 
 
 class FP8TrainingWrapper:

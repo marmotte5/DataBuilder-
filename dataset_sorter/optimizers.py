@@ -514,7 +514,26 @@ class SOAP(Optimizer):
 
                 # Update preconditioner eigenvectors periodically
                 if step % freq == 0:
+                    # Save old eigenvectors so we can re-rotate Adam state
+                    old_Q = [Q.clone() if Q is not None else None for Q in state["Q"]]
                     self._update_preconditioner(grad, state)
+                    new_Q = state["Q"]
+
+                    # Re-rotate exp_avg and exp_avg_sq from old basis to new basis.
+                    # Without this, Adam moments accumulated in the old eigenbasis
+                    # get mixed with gradients rotated by the new eigenbasis,
+                    # corrupting the optimizer state every preconditioner update.
+                    if any(o is not None and n is not None and not torch.equal(o, n)
+                           for o, n in zip(old_Q, new_Q)):
+                        # old_basis → original → new_basis
+                        exp_avg.data.copy_(
+                            self._rotate(self._rotate(exp_avg, old_Q, forward=False),
+                                         new_Q, forward=True)
+                        )
+                        exp_avg_sq.data.copy_(
+                            self._rotate(self._rotate(exp_avg_sq, old_Q, forward=False),
+                                         new_Q, forward=True)
+                        )
 
                 # Rotate gradient into eigenbasis
                 rotated_grad = self._rotate(grad, state["Q"], forward=True)
