@@ -540,6 +540,17 @@ class ZImageBackend(TrainBackendBase):
                     errors.append(f"Pipeline loading: {e}")
                     log.debug("_load_single_file_pipeline failed: %s", e)
 
+            # Strategy 3: Manual single-file loading (supports quantized TE).
+            # Strategies 1-2 are skipped when use_quantized_te is True, so
+            # this is the only path that handles quantized TE + single file.
+            if pipe is None and self.unet is None:
+                try:
+                    self._load_single_file_manual(model_path)
+                    log.info("Z-Image loaded via manual single-file parsing")
+                except Exception as e:
+                    errors.append(f"Manual single-file: {e}")
+                    log.debug("_load_single_file_manual failed: %s", e)
+
             # If all strategies failed, raise with combined errors
             if pipe is None and self.unet is None:
                 raise RuntimeError(
@@ -597,13 +608,19 @@ class ZImageBackend(TrainBackendBase):
                         torch_dtype=self.dtype, trust_remote_code=True,
                     )
                 except Exception:
+                    # Fallback: load full pipeline but only extract the
+                    # transformer.  Delete the pipeline immediately to free
+                    # the duplicate TE + VAE copies (which can waste ~10+ GB
+                    # when quantization is enabled for the TE above).
                     from diffusers import DiffusionPipeline
                     pipe = DiffusionPipeline.from_pretrained(
                         model_path, torch_dtype=self.dtype,
                         trust_remote_code=True,
                     )
-                    self.pipeline = pipe
                     self.unet = getattr(pipe, 'transformer', pipe.unet)
+                    del pipe
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
                 self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
                     model_path, subfolder="scheduler",
