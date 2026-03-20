@@ -63,7 +63,14 @@ def training_collate_fn(batch: list[dict]) -> dict:
             # Recursively collate each position, preserving None.
             # Use min length across samples to avoid IndexError when
             # tuple lengths vary (e.g. some cached with mask, some without).
-            min_len = min(len(v) for v in values)
+            lengths = [len(v) for v in values]
+            min_len = min(lengths)
+            if min_len != max(lengths):
+                log.warning(
+                    "TE cache tuple length mismatch in batch (lengths: %s). "
+                    "This may indicate cache corruption or mixed model types. "
+                    "Truncating to min length %d.", lengths, min_len,
+                )
             collated_tuple = []
             for pos in range(min_len):
                 pos_values = [v[pos] for v in values]
