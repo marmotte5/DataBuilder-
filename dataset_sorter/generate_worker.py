@@ -112,7 +112,12 @@ def _detect_model_type_from_keys(model_path: str) -> str:
     if _any("model.diffusion_model."):
         if _any("conditioner.embedders."):
             return "sdxl"  # dual CLIP → SDXL/Pony
-        return "sd15"  # single CLIP → SD 1.x / 2.x
+        # SD2 uses OpenCLIP (cond_stage_model.model.transformer.) while
+        # SD1.5 uses HF CLIP (cond_stage_model.transformer.). Distinguish
+        # to avoid using the wrong prediction type and text encoder.
+        if _any("cond_stage_model.model."):
+            return "sd2"
+        return "sd15"
 
     # ── Transformer-based architectures ──────────────────────────────
     # Flux / Flux2: distinctive double_blocks + single_blocks
@@ -145,7 +150,7 @@ def _detect_model_type_from_keys(model_path: str) -> str:
         "all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
         "context_refiner", "noise_refiner", "t_embedder", "x_pad_token",
     }
-    top_level = {k.split(".")[0] for k in list(keys)[:200]}
+    top_level = {k.split(".")[0] for k in keys}
     if top_level & _ZIMAGE_PREFIXES:
         return "zimage"
 
@@ -356,6 +361,12 @@ class GenerateWorker(QThread):
             else:
                 self.error.emit(f"{e}\n\n{traceback.format_exc()}")
             self.finished_generating.emit(False, str(e))
+            # Unload on load failures to free VRAM from partial pipeline.
+            if self._mode == "load":
+                try:
+                    self.unload_model()
+                except Exception as ue:
+                    log.debug(f"Unload model during OSError cleanup failed: {ue}")
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
