@@ -822,6 +822,7 @@ class Trainer:
 
         grad_accum_steps = config.gradient_accumulation
         running_loss = 0.0
+        _valid_microbatches = 0  # tracks non-NaN micro-batches for correct averaging
 
         # ── VJP Approximation (Feb 2026) ──
         vjp_scaler = None
@@ -1011,6 +1012,7 @@ class Trainer:
                     _speculative_predictor.correct(self.optimizer)
 
                 running_loss += loss.item()
+                _valid_microbatches += 1
                 _accum_count += 1
 
                 # ── Optimizer step (on accumulation boundary) ──
@@ -1075,9 +1077,16 @@ class Trainer:
                         self.ema_model.update(self.backend.unet.parameters())
 
                     self.state.global_step += 1
-                    self.state.loss = running_loss
+                    # Each micro-batch loss was divided by grad_accum_steps.
+                    # If NaN skips reduced the count, rescale to get the
+                    # correct mean rather than a biased-low value.
+                    if _valid_microbatches > 0 and _valid_microbatches < grad_accum_steps:
+                        self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
+                    else:
+                        self.state.loss = running_loss
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
+                    _valid_microbatches = 0
 
                     # ── TensorBoard logging ──
                     if self._tb_logger is not None and self._tb_logger.available:
@@ -1187,6 +1196,7 @@ class Trainer:
                     # ── DPO fine-tuning step using collected preferences ──
                     if (config.rlhf_enabled and
                             config.rlhf_dpo_rounds > 0 and
+                            config.rlhf_collect_every_n_steps > 0 and
                             self.state.global_step % config.rlhf_collect_every_n_steps == 0):
                         self._apply_dpo_from_preferences()
 
@@ -1695,6 +1705,15 @@ class Trainer:
         if self.backend.vae is not None:
             self.backend.vae.to(self.device, dtype=self.dtype)
 
+        # Move text encoders to GPU for pipeline prompt encoding.
+        # They may have been offloaded to CPU after TE output caching.
+        _te_moved = []
+        for te in (self.backend.text_encoder, self.backend.text_encoder_2,
+                   getattr(self.backend, "text_encoder_3", None)):
+            if te is not None and next(te.parameters(), torch.tensor(0)).device.type == "cpu":
+                te.to(self.device)
+                _te_moved.append(te)
+
         try:
             # Use last training caption if available, fall back to config prompts
             if self._last_batch_caption:
@@ -1719,6 +1738,12 @@ class Trainer:
             # Always offload VAE to prevent GPU memory leak on error
             if config.cache_latents and self.backend.vae is not None:
                 self.backend.vae.cpu()
+
+            # Offload text encoders back to CPU if we moved them
+            for te in _te_moved:
+                te.cpu()
+            if _te_moved:
+                empty_cache()
 
             self.state.phase = "training"
 

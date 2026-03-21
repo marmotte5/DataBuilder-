@@ -394,11 +394,13 @@ class TrainBackendBase(ABC):
         self.unet = get_peft_model(self.unet, lora_config)
         self.unet.train()
 
-        # Update pipeline reference (handle both UNet and transformer models)
+        # Update pipeline reference (handle both UNet and transformer models).
+        # Check getattr value, not hasattr, because transformer pipelines
+        # define 'unet' as an optional component (exists but is None).
         if self.pipeline is not None:
-            if hasattr(self.pipeline, "transformer") and not hasattr(self.pipeline, "unet"):
+            if hasattr(self.pipeline, "transformer") and getattr(self.pipeline, "unet", None) is None:
                 self.pipeline.transformer = self.unet
-            elif hasattr(self.pipeline, "prior") and not hasattr(self.pipeline, "unet"):
+            elif hasattr(self.pipeline, "prior") and getattr(self.pipeline, "unet", None) is None:
                 self.pipeline.prior = self.unet
             else:
                 self.pipeline.unet = self.unet
