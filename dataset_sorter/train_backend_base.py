@@ -661,12 +661,19 @@ class TrainBackendBase(ABC):
                 fwd_kwargs["added_cond_kwargs"] = added_cond
 
         ts_input = timesteps / timestep_scale if normalize_timestep else timesteps
-        noise_pred = self.unet(
-            hidden_states=noisy_latents,
-            timestep=ts_input,
-            encoder_hidden_states=encoder_hidden,
-            **fwd_kwargs,
-        ).sample
+
+        # Autocast for mixed-precision speed, matching the epsilon/v-pred
+        # training_step.  Without this, all flow-matching backends (Flux,
+        # SD3, PixArt, AuraFlow, Sana, Chroma, HiDream) run the transformer
+        # forward pass in full precision, wasting compute.
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                hidden_states=noisy_latents,
+                timestep=ts_input,
+                encoder_hidden_states=encoder_hidden,
+                **fwd_kwargs,
+            ).sample
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
