@@ -78,6 +78,54 @@ class StableCascadeBackend(TrainBackendBase):
             return None
         return {"text_embeds": pooled}
 
+    def training_step(
+        self, latents: torch.Tensor, te_out: tuple, batch_size: int,
+    ) -> torch.Tensor:
+        """Cascade Stage C prior uses a different forward signature.
+
+        StableCascadeUNet.forward() expects:
+          (sample, timestep_ratio, clip_text_pooled, clip_text=..., clip_img=...)
+        where timestep_ratio is in [0, 1], not integer timesteps.
+        """
+        from dataset_sorter.utils import autocast_device_type
+        config = self.config
+        noise = torch.randn_like(latents)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                latents.shape[0], latents.shape[1], 1, 1,
+                device=latents.device, dtype=latents.dtype,
+            )
+
+        timesteps = torch.randint(
+            0, self.noise_scheduler.config.num_train_timesteps,
+            (batch_size,), device=latents.device, dtype=torch.long,
+        )
+        noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+
+        encoder_hidden = te_out[0]
+        pooled = te_out[1] if len(te_out) > 1 else None
+
+        # Cascade expects timestep_ratio in [0, 1]
+        num_steps = self.noise_scheduler.config.num_train_timesteps
+        timestep_ratio = timesteps.float() / num_steps
+
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                sample=noisy_latents,
+                timestep_ratio=timestep_ratio,
+                clip_text_pooled=pooled,
+                clip_text=encoder_hidden,
+            ).sample
+
+        loss = self.compute_loss(noise_pred, noise, latents, timesteps)
+
+        if config.min_snr_gamma > 0:
+            snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
+            loss = loss * snr_weights
+
+        return loss.mean()
+
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Cascade prior expects image embeddings from Stage B, not raw pixels.
 

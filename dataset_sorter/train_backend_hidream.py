@@ -96,20 +96,20 @@ class HiDreamBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
-        """Encode captions through all four text encoders and combine the results.
+        """Encode captions through all four text encoders.
 
-        Each available encoder (CLIP-L, CLIP-G, T5-XXL, Llama) produces hidden
-        states that are padded to a common feature dimension and concatenated.
-        Pooled embeddings from the CLIP encoders are concatenated separately.
+        HiDream's transformer expects T5 and Llama hidden states as separate
+        inputs (encoder_hidden_states_t5 and encoder_hidden_states_llama3),
+        plus concatenated CLIP pooled embeddings. CLIP hidden states are NOT
+        passed to the transformer — only their pooled outputs are used.
 
         Returns:
-            (encoder_hidden_states, pooled) where pooled may be None if no
-            CLIP encoders are available.
+            (t5_hidden, pooled, llama_hidden) — the training_step override
+            unpacks these and passes them as the correct keyword arguments.
         """
-        all_hidden = []
         pooled_list = []
 
-        # CLIP-L
+        # CLIP-L (only pooled output used)
         if self.tokenizer is not None and self.text_encoder is not None:
             tokens_1 = self.tokenizer(
                 captions, padding="max_length",
@@ -118,11 +118,10 @@ class HiDreamBackend(TrainBackendBase):
             ).input_ids.to(self.device)
             with self._te_no_grad():
                 out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
-                all_hidden.append(out_1.hidden_states[-2])
                 if hasattr(out_1, 'text_embeds'):
                     pooled_list.append(out_1.text_embeds)
 
-        # CLIP-G
+        # CLIP-G (only pooled output used)
         if self.tokenizer_2 is not None and self.text_encoder_2 is not None:
             tokens_2 = self.tokenizer_2(
                 captions, padding="max_length",
@@ -131,11 +130,11 @@ class HiDreamBackend(TrainBackendBase):
             ).input_ids.to(self.device)
             with self._te_no_grad():
                 out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
-                all_hidden.append(out_2.hidden_states[-2])
                 if hasattr(out_2, 'text_embeds'):
                     pooled_list.append(out_2.text_embeds)
 
         # T5-XXL
+        t5_hidden = None
         if self.tokenizer_3 is not None and self.text_encoder_3 is not None:
             tokens_3 = self.tokenizer_3(
                 captions, padding="max_length",
@@ -144,9 +143,10 @@ class HiDreamBackend(TrainBackendBase):
             ).input_ids.to(self.device)
             with self._te_no_grad():
                 out_3 = self.text_encoder_3(tokens_3)
-                all_hidden.append(out_3.last_hidden_state)
+                t5_hidden = out_3.last_hidden_state
 
         # Llama
+        llama_hidden = None
         if self.tokenizer_4 is not None and self.text_encoder_4 is not None:
             tokens_4 = self.tokenizer_4(
                 captions, padding="max_length",
@@ -155,34 +155,68 @@ class HiDreamBackend(TrainBackendBase):
             ).to(self.device)
             with self._te_no_grad():
                 out_4 = self.text_encoder_4(**tokens_4, output_hidden_states=True)
-                all_hidden.append(out_4.hidden_states[-1])
+                llama_hidden = out_4.hidden_states[-1]
 
-        # Concatenate all hidden states (pad to matching feature dim)
-        if all_hidden:
-            encoder_hidden = self._pad_and_cat(all_hidden)
-        else:
-            encoder_hidden = torch.zeros(
-                len(captions), 1, 4096,
-                device=self.device, dtype=self.dtype,
-            )
-
-        # Concatenate pooled outputs
+        # Concatenate pooled outputs from CLIP encoders
         pooled = torch.cat(pooled_list, dim=-1) if pooled_list else None
 
-        return (encoder_hidden, pooled)
+        return (t5_hidden, pooled, llama_hidden)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
         if pooled is None:
             return None
-        return {"pooled_projections": pooled}
+        return {"pooled_embeds": pooled}
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        return self.flow_training_step(
-            latents, te_out, batch_size, use_added_cond_as_kwargs=True,
-        )
+        """HiDream training step with separate T5/Llama encoder hidden states.
+
+        The transformer expects encoder_hidden_states_t5 and
+        encoder_hidden_states_llama3 as separate keyword arguments, plus
+        pooled_embeds for the CLIP pooled embeddings.
+        """
+        from dataset_sorter.utils import autocast_device_type
+
+        config = self.config
+        t5_hidden = te_out[0]
+        pooled = te_out[1] if len(te_out) > 1 else None
+        llama_hidden = te_out[2] if len(te_out) > 2 else None
+
+        t = self._sample_flow_timesteps(batch_size)
+        noise = torch.randn_like(latents)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                latents.shape[0], latents.shape[1], 1, 1,
+                device=latents.device, dtype=latents.dtype,
+            )
+        noisy_latents = self._flow_interpolate(latents, noise, t)
+        timesteps = (t * 1000.0).long()
+
+        fwd_kwargs = {}
+        if pooled is not None:
+            fwd_kwargs["pooled_embeds"] = pooled
+        if t5_hidden is not None:
+            fwd_kwargs["encoder_hidden_states_t5"] = t5_hidden
+        if llama_hidden is not None:
+            fwd_kwargs["encoder_hidden_states_llama3"] = llama_hidden
+
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                hidden_states=noisy_latents,
+                timestep=timesteps,
+                **fwd_kwargs,
+            ).sample
+
+        loss = self._compute_flow_loss(noise_pred, noise, latents)
+
+        if config.debiased_estimation:
+            weight = 1.0 / torch.clamp(1.0 - t.float() + 1e-6, min=0.01)
+            loss = loss * weight
+
+        return loss.mean()
 
     def freeze_text_encoders(self):
         """Set all four text encoders to eval mode and disable gradients.

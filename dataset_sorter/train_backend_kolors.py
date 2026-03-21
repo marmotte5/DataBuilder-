@@ -92,13 +92,14 @@ class KolorsBackend(TrainBackendBase):
 
         with self._te_no_grad():
             out = self.text_encoder(**tokens, output_hidden_states=True)
-            encoder_hidden = out.hidden_states[-2]
+            # ChatGLM outputs hidden states in sequence-first [seq, batch, hidden]
+            # format. Permute to [batch, seq, hidden] for the UNet.
+            encoder_hidden = out.hidden_states[-2].permute(1, 0, 2)
 
         # ChatGLM doesn't produce pooled embeddings like CLIP. The official
         # KolorsPipeline uses the last token from the last hidden layer as
-        # the pooled representation (output.hidden_states[-1][-1, :, :]).
-        # ChatGLM may output in sequence-first [seq, batch, hidden] format,
-        # matching the official pipeline's indexing convention.
+        # the pooled representation. In sequence-first format, [-1, :, :]
+        # selects the last token across all batch items → [batch, hidden].
         last_layer = out.hidden_states[-1]
         pooled = last_layer[-1, :, :].clone()
 
