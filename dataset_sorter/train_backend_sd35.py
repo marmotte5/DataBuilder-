@@ -28,6 +28,9 @@ class SD35Backend(SD3Backend):
 
     model_name = "sd35"
     default_resolution = 1024
+    # SD 3.5 Large has a different architecture size than SD3-medium.
+    # Using SD3-medium as fallback would silently load mismatched weights.
+    _HF_FALLBACK_REPO = "stabilityai/stable-diffusion-3.5-large"
 
     def load_model(self, model_path: str):
         """Load SD 3.5 model (same pipeline as SD3)."""

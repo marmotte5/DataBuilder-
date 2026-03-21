@@ -65,6 +65,9 @@ class SD2Backend(TrainBackendBase):
 
         with self._te_no_grad():
             out = self.text_encoder(tokens, output_hidden_states=True)
-            encoder_hidden = out.hidden_states[-2]
+            # Respect clip_skip the same way SD 1.5 does.
+            skip = max(self.config.clip_skip, 1)
+            skip = min(skip, len(out.hidden_states) - 2)
+            encoder_hidden = out.hidden_states[-(skip + 1)]
 
         return (encoder_hidden,)

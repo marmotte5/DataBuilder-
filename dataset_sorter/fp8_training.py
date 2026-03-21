@@ -248,13 +248,17 @@ class FP8TrainingWrapper:
     def _setup_manual(self) -> nn.Module:
         """Replace Linear layers in attention/FF blocks with FP8 versions."""
         converted = 0
-        for name, module in self.model.named_modules():
+        # Snapshot the module list first — mutating the tree during
+        # named_modules() iteration can skip or double-wrap layers.
+        all_modules = list(self.model.named_modules())
+        module_dict = dict(all_modules)
+        for name, module in all_modules:
             # Only convert attention projection and feedforward layers
             # (these are the compute-bound matmuls that benefit from FP8)
             if isinstance(module, nn.Linear):
                 parent_name = name.rsplit(".", 1)[0] if "." in name else ""
                 attr_name = name.rsplit(".", 1)[-1] if "." in name else name
-                parent = dict(self.model.named_modules()).get(parent_name, self.model)
+                parent = module_dict.get(parent_name, self.model)
 
                 # Target attention projections and FF layers
                 if any(pat in name.lower() for pat in
