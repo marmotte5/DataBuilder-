@@ -307,7 +307,7 @@ class PinnedRingBuffer:
         self._te_component_map = te_component_map or {}
 
         # Pin memory only when CUDA is available (pinned memory requires a GPU driver)
-        _pin = torch.cuda.is_available() and device is not None and device.type == "cuda"
+        _pin = torch.cuda.is_available() and self.device.type == "cuda"
 
         # Allocate two pinned buffers (double buffering)
         self._lat_buffers = [

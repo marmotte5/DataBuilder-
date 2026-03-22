@@ -370,7 +370,8 @@ class AsyncGPUPrefetcher:
             # Sync before using next_batch
             torch.cuda.current_stream(self.device).wait_stream(self._stream)
 
-        # Don't forget the last batch
+        # Don't forget the last batch — sync its async transfer first
+        torch.cuda.current_stream(self.device).wait_stream(self._stream)
         yield next_batch
 
     def _transfer_to_gpu(self, batch: dict) -> dict:
@@ -921,7 +922,7 @@ def apply_liger_kernels(model: nn.Module) -> bool:
     # Try to replace RMSNorm layers with fused Triton version
     try:
         from liger_kernel.transformers.rms_norm import LigerRMSNorm
-        for name, module in model.named_modules():
+        for name, module in list(model.named_modules()):
             # Match RMSNorm-like modules (used in DiT/Flux/SD3 transformers)
             if type(module).__name__ in ("RMSNorm", "LlamaRMSNorm", "Qwen2RMSNorm"):
                 parent = _get_parent_module(model, name)
@@ -941,7 +942,7 @@ def apply_liger_kernels(model: nn.Module) -> bool:
     # Try to replace LayerNorm with fused version
     try:
         from liger_kernel.transformers.layer_norm import LigerLayerNorm
-        for name, module in model.named_modules():
+        for name, module in list(model.named_modules()):
             if isinstance(module, nn.LayerNorm) and module.elementwise_affine:
                 parent = _get_parent_module(model, name)
                 attr = name.rsplit(".", 1)[-1]
@@ -961,7 +962,7 @@ def apply_liger_kernels(model: nn.Module) -> bool:
     # Try to replace SwiGLU/GEGLU activations with fused version
     try:
         from liger_kernel.transformers.swiglu import LigerSwiGLUMLP
-        for name, module in model.named_modules():
+        for name, module in list(model.named_modules()):
             if type(module).__name__ in ("SwiGLU", "GEGLU"):
                 parent = _get_parent_module(model, name)
                 attr = name.rsplit(".", 1)[-1]

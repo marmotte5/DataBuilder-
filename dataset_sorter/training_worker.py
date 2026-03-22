@@ -290,8 +290,26 @@ class TrainingWorker(QThread):
             f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
         )
 
+        # Signal the trainer to apply DPO on the very next step so
+        # preferences aren't silently lost if training ends before
+        # the next scheduled collection boundary.
+        t._dpo_pending.set()
+
         # Resume training
         t.resume()
+
+    def cancel_rlhf(self):
+        """Cancel RLHF collection and resume training.
+
+        Called from the UI when the user closes the RLHF preference dialog
+        without making a selection, preventing the training from being stuck
+        in a permanently paused state.
+        """
+        t = self.trainer
+        if t:
+            log.info("RLHF collection cancelled by user, resuming training")
+            t.resume()
+            self.phase_changed.emit("training")
 
     @property
     def is_paused(self) -> bool:

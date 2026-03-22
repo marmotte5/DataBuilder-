@@ -162,6 +162,8 @@ class Trainer:
 
         # RLHF collection flag (set from UI thread when ready)
         self._rlhf_collect = threading.Event()
+        # Flag to apply DPO on next step (set when preferences are submitted)
+        self._dpo_pending = threading.Event()
         self._rlhf_callback = None  # Set by training worker
 
         # On-demand action flags (set from UI thread, consumed in training loop)
@@ -1253,10 +1255,15 @@ class Trainer:
                         self._rlhf_collect.set()
 
                     # ── DPO fine-tuning step using collected preferences ──
-                    if (config.rlhf_enabled and
-                            config.rlhf_dpo_rounds > 0 and
-                            config.rlhf_collect_every_n_steps > 0 and
-                            self.state.global_step % config.rlhf_collect_every_n_steps == 0):
+                    # Fire when scheduled OR when preferences were just submitted
+                    _dpo_scheduled = (
+                        config.rlhf_enabled and
+                        config.rlhf_dpo_rounds > 0 and
+                        config.rlhf_collect_every_n_steps > 0 and
+                        self.state.global_step % config.rlhf_collect_every_n_steps == 0
+                    )
+                    if _dpo_scheduled or self._dpo_pending.is_set():
+                        self._dpo_pending.clear()
                         self._apply_dpo_from_preferences()
 
                     # Max steps check
@@ -1387,7 +1394,7 @@ class Trainer:
                 h3 = te_cache[4].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[4] is not None else None
                 # Concatenate CLIP hidden states and pooled outputs
                 clip_hidden = torch.cat([h1, h2], dim=-1) if h2 is not None else h1
-                pooled = torch.cat([p1, p2], dim=-1) if p1 is not None and p2 is not None else (p1 or p2)
+                pooled = torch.cat([p1, p2], dim=-1) if p1 is not None and p2 is not None else (p1 if p1 is not None else p2)
                 # Pad and concatenate with T5 hidden states
                 if h3 is not None:
                     encoder_hidden = self.backend._pad_and_cat([clip_hidden, h3])
@@ -1434,6 +1441,12 @@ class Trainer:
                     else:
                         pooled = p1 if p1 is not None else p2
                     te_out = (encoder_hidden, pooled)
+            elif len(te_cache) == 3:
+                # HiDream: (t5_hidden, pooled, llama_hidden)
+                t5_h = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[0] is not None else None
+                pooled = te_cache[1].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[1] is not None else None
+                llama_h = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[2] is not None else None
+                te_out = (t5_h, pooled, llama_h)
             elif len(te_cache) == 2:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
                 pooled = te_cache[1]
@@ -1625,8 +1638,29 @@ class Trainer:
                     self.backend.vae.to("cpu")
                     empty_cache()
 
+                # Move text encoders to GPU if they were offloaded (mirrors VAE pattern above)
+                te_was_offloaded = False
+                for _te_attr in ('text_encoder', 'text_encoder_2', 'text_encoder_3', 'text_encoder_4'):
+                    _te = getattr(self.backend, _te_attr, None)
+                    if _te is not None:
+                        try:
+                            _te_dev = next(_te.parameters()).device
+                        except StopIteration:
+                            continue
+                        if _te_dev != self.device:
+                            _te.to(self.device)
+                            te_was_offloaded = True
+
                 # Encode prompt
                 te_out = self.backend.encode_text_batch([pair.prompt])
+
+                # Offload text encoders again to free VRAM
+                if te_was_offloaded:
+                    for _te_attr in ('text_encoder', 'text_encoder_2', 'text_encoder_3', 'text_encoder_4'):
+                        _te = getattr(self.backend, _te_attr, None)
+                        if _te is not None:
+                            _te.to("cpu")
+                    empty_cache()
 
                 # Compute DPO loss (use current model as both policy and reference
                 # since we don't maintain a separate reference copy)

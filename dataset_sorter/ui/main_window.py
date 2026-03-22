@@ -762,6 +762,30 @@ class MainWindow(QMainWindow):
                 if gt._worker.isRunning():
                     gt._worker.wait(5000)
 
+        # Stop batch generation worker
+        if hasattr(self, 'batch_tab'):
+            bt = self.batch_tab
+            if hasattr(bt, '_worker') and bt._worker is not None:
+                if hasattr(bt._worker, 'stop'):
+                    bt._worker.stop()
+                if bt._worker.isRunning():
+                    bt._worker.wait(3000)
+
+        # Stop comparison worker
+        if hasattr(self, 'comparison_tab'):
+            ct = self.comparison_tab
+            if hasattr(ct, '_comparison_worker') and ct._comparison_worker is not None:
+                if hasattr(ct._comparison_worker, 'stop'):
+                    ct._comparison_worker.stop()
+                if ct._comparison_worker.isRunning():
+                    ct._comparison_worker.wait(3000)
+
+        # Stop library scan worker
+        if hasattr(self, 'library_tab'):
+            lt = self.library_tab
+            if hasattr(lt, '_stop_worker'):
+                lt._stop_worker()
+
         # Shutdown shared async I/O executor
         try:
             from dataset_sorter.async_io import shutdown_executor

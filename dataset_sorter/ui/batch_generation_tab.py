@@ -470,10 +470,13 @@ class BatchGenerationTab(QWidget):
 
     def _update_count(self):
         n = self._table.rowCount()
-        total_images = sum(
-            max(1, int((self._table.item(r, 6).text() if self._table.item(r, 6) else "1") or "1"))
-            for r in range(n)
-        )
+        total_images = 0
+        for r in range(n):
+            raw = (self._table.item(r, 6).text() if self._table.item(r, 6) else "1") or "1"
+            try:
+                total_images += max(1, int(raw))
+            except (ValueError, TypeError):
+                total_images += 1
         self._queue_count_label.setText(f"{n} prompts, ~{total_images} images")
 
     # ── Import / Export ───────────────────────────────────────────────

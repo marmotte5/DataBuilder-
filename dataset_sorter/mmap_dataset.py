@@ -357,10 +357,13 @@ class SafetensorsMMapDataset(Dataset):
                     if te_len_key in handle.keys():
                         te_len = int(handle.get_tensor(te_len_key).item())
                     else:
-                        # Legacy cache without length marker — scan for keys
+                        # Legacy cache without length marker — scan for keys.
+                        # Don't stop at the first gap: some TE components may
+                        # be None (e.g. SD3 with optional T5), producing gaps.
                         te_len = 0
-                        while f"te_{idx}_{te_len}" in handle.keys():
-                            te_len += 1
+                        for _j in range(20):
+                            if f"te_{idx}_{_j}" in handle.keys():
+                                te_len = _j + 1
                     te_parts = []
                     for j in range(te_len):
                         te_key = f"te_{idx}_{j}"

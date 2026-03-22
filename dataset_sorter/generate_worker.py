@@ -383,8 +383,8 @@ class GenerateWorker(QThread):
             if self._mode == "load":
                 try:
                     self.unload_model()
-                except Exception as e:
-                    log.debug(f"Unload model during error cleanup failed: {e}")
+                except Exception as ue:
+                    log.debug(f"Unload model during error cleanup failed: {ue}")
 
     # ── Model loading ───────────────────────────────────────────────────
 
@@ -834,7 +834,17 @@ class GenerateWorker(QThread):
 
     # ── Image generation ────────────────────────────────────────────────
 
-    def _build_png_metadata(self, seed: int) -> tuple[PngInfo, str]:
+    def _build_png_metadata(self, seed: int, *,
+                            positive_prompt: str | None = None,
+                            negative_prompt: str | None = None,
+                            steps: int | None = None,
+                            scheduler_name: str | None = None,
+                            cfg_scale: float | None = None,
+                            width: int | None = None,
+                            height: int | None = None,
+                            clip_skip: int | None = None,
+                            init_image=None,
+                            strength: float | None = None) -> tuple[PngInfo, str]:
         """Build PNG tEXt metadata chunks in Automatic1111's format.
 
         Writes a 'parameters' chunk with the prompt, negative prompt, and
@@ -844,26 +854,42 @@ class GenerateWorker(QThread):
 
         Returns (PngInfo, parameters_string) so callers can use the
         parameters string directly without parsing internal PngInfo chunks.
+
+        Accepts explicit parameter overrides so callers can pass snapshotted
+        values instead of reading from ``self`` (avoids race conditions when
+        the UI modifies attributes mid-batch).
         """
         pnginfo = PngInfo()
 
+        # Use explicit overrides when provided, fall back to self for legacy callers
+        _positive = positive_prompt if positive_prompt is not None else self.positive_prompt
+        _negative = negative_prompt if negative_prompt is not None else self.negative_prompt
+        _steps = steps if steps is not None else self.steps
+        _scheduler = scheduler_name if scheduler_name is not None else self.scheduler_name
+        _cfg = cfg_scale if cfg_scale is not None else self.cfg_scale
+        _width = width if width is not None else self.width
+        _height = height if height is not None else self.height
+        _clip_skip = clip_skip if clip_skip is not None else self.clip_skip
+        _init_image = init_image
+        _strength = strength if strength is not None else self.strength
+
         # Build parameters string (compatible with A1111 / civitai metadata readers)
-        params_parts = [self.positive_prompt]
-        if self.negative_prompt:
-            params_parts.append(f"Negative prompt: {self.negative_prompt}")
+        params_parts = [_positive]
+        if _negative:
+            params_parts.append(f"Negative prompt: {_negative}")
 
         settings = [
-            f"Steps: {self.steps}",
-            f"Sampler: {self.scheduler_name}",
-            f"CFG scale: {self.cfg_scale}",
+            f"Steps: {_steps}",
+            f"Sampler: {_scheduler}",
+            f"CFG scale: {_cfg}",
             f"Seed: {seed}",
-            f"Size: {self.width}x{self.height}",
+            f"Size: {_width}x{_height}",
             f"Model: {Path(self._model_path).stem}",
         ]
-        if self.clip_skip > 0:
-            settings.append(f"Clip skip: {self.clip_skip}")
-        if self.init_image is not None:
-            settings.append(f"Denoising strength: {self.strength}")
+        if _clip_skip > 0:
+            settings.append(f"Clip skip: {_clip_skip}")
+        if _init_image is not None:
+            settings.append(f"Denoising strength: {_strength}")
 
         # LoRA info
         lora_parts = []
@@ -881,12 +907,12 @@ class GenerateWorker(QThread):
 
         # Individual fields for programmatic access
         pnginfo.add_text("seed", str(seed))
-        pnginfo.add_text("steps", str(self.steps))
-        pnginfo.add_text("cfg_scale", str(self.cfg_scale))
-        pnginfo.add_text("sampler", self.scheduler_name)
+        pnginfo.add_text("steps", str(_steps))
+        pnginfo.add_text("cfg_scale", str(_cfg))
+        pnginfo.add_text("sampler", _scheduler)
         pnginfo.add_text("model", self._model_path)
-        pnginfo.add_text("width", str(self.width))
-        pnginfo.add_text("height", str(self.height))
+        pnginfo.add_text("width", str(_width))
+        pnginfo.add_text("height", str(_height))
 
         return pnginfo, parameters_str
 
@@ -963,6 +989,7 @@ class GenerateWorker(QThread):
         with self._lock:
             if self.pipe is None:
                 self.error.emit("No model loaded. Load a model first.")
+                self.finished_generating.emit(False, "No model loaded")
                 return
             # Take a local reference under the lock so a concurrent
             # unload_model() call cannot set self.pipe = None between
@@ -1053,7 +1080,19 @@ class GenerateWorker(QThread):
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
-                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(
+                    current_seed,
+                    positive_prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    steps=steps,
+                    scheduler_name=scheduler_name,
+                    cfg_scale=cfg_scale,
+                    width=width,
+                    height=height,
+                    clip_skip=clip_skip,
+                    init_image=init_image,
+                    strength=strength,
+                )
                 img.info["pnginfo"] = pnginfo
                 img.info["parameters"] = parameters_str
 
@@ -1109,6 +1148,7 @@ class GenerateWorker(QThread):
 
         with self._lock:
             if self.pipe is None:
+                log.error("_do_generate_blocking called with no model loaded")
                 return []
             pipe_ref = self.pipe
 
@@ -1179,7 +1219,19 @@ class GenerateWorker(QThread):
                     result = active_pipe(**kwargs)
                     img = result.images[0]
 
-                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(
+                    current_seed,
+                    positive_prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    steps=steps,
+                    scheduler_name=scheduler_name,
+                    cfg_scale=cfg_scale,
+                    width=width,
+                    height=height,
+                    clip_skip=clip_skip,
+                    init_image=init_image,
+                    strength=strength,
+                )
                 img.info["pnginfo"] = pnginfo
                 img.info["parameters"] = parameters_str
 

@@ -86,9 +86,11 @@ class MergeWorker(QThread):
             # For two 10GB models this reduces peak from ~40GB to ~2-3GB.
             self.progress.emit(0, 3, "Scanning model keys...")
 
+            handle_a = None
+            handle_b = None
+            handle_c = None
             handle_a = safe_open(self.model_a_path, framework="pt", device="cpu")
             handle_b = safe_open(self.model_b_path, framework="pt", device="cpu")
-            handle_c = None
             if self.method == "add_difference" and self.model_c_path:
                 handle_c = safe_open(self.model_c_path, framework="pt", device="cpu")
 
@@ -187,6 +189,14 @@ class MergeWorker(QThread):
         except Exception as exc:
             log.exception("Merge failed")
             self.finished.emit(False, f"Merge failed: {exc}")
+        finally:
+            # Close safetensors file handles to release OS resources
+            for _h in (handle_a, handle_b, handle_c):
+                if _h is not None and hasattr(_h, '__del__'):
+                    try:
+                        del _h
+                    except Exception:
+                        pass
 
     def _merge(self, a: dict, b: dict, c: dict | None) -> dict:
         """Perform the actual weight merging (legacy fallback, unused by streaming path)."""
