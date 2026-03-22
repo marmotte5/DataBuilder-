@@ -167,7 +167,7 @@ def save_tensor_compressed(tensor, path: Path):
     """Save tensor with LZ4 compression (40-60% smaller, ~zero CPU overhead).
 
     LZ4 has 3-5 GB/s decompression speed — faster than most SSDs can read.
-    Falls back to uncompressed if lz4 is not installed.
+    Falls back to uncompressed if lz4 is not installed or compression fails.
     """
     import torch
     import io
@@ -181,6 +181,8 @@ def save_tensor_compressed(tensor, path: Path):
         return
     except ImportError:
         pass
+    except Exception as exc:
+        log.warning("LZ4 compression failed, falling back to uncompressed: %s", exc)
     torch.save(tensor, path)
 
 
@@ -197,6 +199,8 @@ def load_tensor_compressed(path: Path):
             return torch.load(io.BytesIO(decompressed), map_location="cpu", weights_only=True)
         except ImportError:
             pass
+        except Exception as exc:
+            log.warning("LZ4 decompression failed for %s, trying uncompressed: %s", lz4_path, exc)
     if not path.exists():
         raise FileNotFoundError(f"Cached tensor not found: {path} (and no .lz4 variant)")
     return torch.load(path, map_location="cpu", weights_only=True)

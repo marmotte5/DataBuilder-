@@ -271,6 +271,10 @@ class Marmotte(Optimizer):
 
                 # ── Per-row magnitude update ──────────────────────────
                 new_row_mag = true_momentum.norm(dim=1) / max(math.sqrt(n), 1.0)
+                # NaN guard: if backward produced NaN grads, norm() returns NaN
+                # and clamp_() silently preserves NaN. Replace with zeros to
+                # prevent NaN from propagating into the update gate.
+                torch.nan_to_num_(new_row_mag, nan=0.0, posinf=0.0, neginf=0.0)
                 # Clamp to prevent runaway growth
                 new_row_mag.clamp_(max=grad_scale.item() * 20.0)
                 state["row_magnitude"] = new_row_mag
@@ -357,9 +361,11 @@ class Marmotte(Optimizer):
         # Scale by singular value estimates (geometric mean of norms)
         sv_est = (U_norms * V_norms).sqrt()  # (k,)
 
-        # EMA update for stability
+        # EMA update for stability.
+        # Scale only U by singular values so that U @ V.T ≈ error.
+        # Applying sv_est to both U and V would square the singular values.
         U.lerp_(U_new * sv_est.unsqueeze(0), ef_alpha)
-        V.lerp_(V_new * sv_est.unsqueeze(0), ef_alpha)
+        V.lerp_(V_new, ef_alpha)
 
         # Clamp to prevent blowup: max norm per column = 2 * grad_scale
         max_norm = grad_scale.item() * 2.0

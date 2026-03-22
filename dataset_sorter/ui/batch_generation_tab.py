@@ -181,6 +181,7 @@ class BatchGenerationTab(QWidget):
         self._worker: BatchGenerationWorker | None = None
         self._generate_worker = None  # will be set by MainWindow
         self._output_folder = str(Path.home() / "DataBuilder_batch_outputs")
+        self._batch_start: float = 0.0  # set in _run_batch, used for ETA
         self._build_ui()
 
     # ── UI Construction ──────────────────────────────────────────────
@@ -612,6 +613,14 @@ class BatchGenerationTab(QWidget):
 
     def _stop_batch(self):
         if self._worker:
+            # Disconnect signals before stopping to prevent stale callbacks
+            try:
+                self._worker.image_generated.disconnect(self._on_image_generated)
+                self._worker.prompt_status.disconnect(self._on_prompt_status)
+                self._worker.batch_progress.disconnect(self._on_batch_progress)
+                self._worker.finished.disconnect(self._on_batch_finished)
+            except (TypeError, RuntimeError):
+                pass  # Already disconnected
             self._worker.stop()
         self._btn_stop.setEnabled(False)
 

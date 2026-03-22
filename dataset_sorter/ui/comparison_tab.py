@@ -523,6 +523,13 @@ class ComparisonTab(QWidget):
 
     def _stop(self):
         if self._comparison_worker:
+            # Disconnect signals before stopping to prevent stale callbacks
+            try:
+                self._comparison_worker.image_ready.disconnect(self._on_image_ready)
+                self._comparison_worker.progress.disconnect(self._on_worker_progress)
+                self._comparison_worker.finished.disconnect(self._on_worker_finished)
+            except (TypeError, RuntimeError):
+                pass  # Already disconnected
             self._comparison_worker.stop()
         self._btn_stop.setEnabled(False)
 

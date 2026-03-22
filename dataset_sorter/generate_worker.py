@@ -487,8 +487,12 @@ class GenerateWorker(QThread):
             with self._lock:
                 self.pipe = pipe
         except Exception:
-            # Free the local pipeline to release VRAM before re-raising
+            # Free the local pipeline to release VRAM before re-raising.
+            # gc.collect() is needed before empty_cache() because Python's
+            # refcount alone may not reclaim GPU tensors held by cycles.
             del pipe
+            import gc
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             raise
