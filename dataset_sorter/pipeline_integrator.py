@@ -469,7 +469,8 @@ class LiveTrainingMonitor:
         self.min_steps = min_steps_before_check
         self.auto_adjust = auto_adjust
 
-        self._loss_window: list[float] = []
+        from collections import deque
+        self._loss_window: deque[float] = deque(maxlen=500)
         self._lr_at_adjustment: float = config.learning_rate
         self._adjustments_made: int = 0
         self._max_adjustments: int = 3  # Cap auto-adjustments per run
@@ -507,8 +508,9 @@ class LiveTrainingMonitor:
         if len(self._loss_window) < 50:
             return None
 
-        recent = self._loss_window[-100:]
-        older = self._loss_window[-200:-100] if len(self._loss_window) >= 200 else self._loss_window[:len(self._loss_window) // 2]
+        window = list(self._loss_window)
+        recent = window[-100:]
+        older = window[-200:-100] if len(window) >= 200 else window[:len(window) // 2]
 
         if not older:
             return None

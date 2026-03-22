@@ -148,11 +148,12 @@ def load_tensor_fast(path: Path, use_safetensors: bool = True):
             from safetensors.torch import load_file
             data = load_file(str(sf_path))
             return data["data"]
-        except (ImportError, KeyError, Exception):
-            # ImportError: safetensors not installed
-            # KeyError: file missing "data" key (corrupted cache)
-            # Other: file corruption, version mismatch
-            pass
+        except ImportError:
+            pass  # safetensors not installed, use torch fallback
+        except KeyError:
+            log.debug(f"Malformed safetensors cache (missing 'data' key): {sf_path}")
+        except Exception as e:
+            log.warning(f"Failed to load safetensors cache {sf_path}: {e}")
     if path.exists():
         return torch.load(path, map_location="cpu", weights_only=True)
     raise FileNotFoundError(f"No cache file found: {path} or {sf_path}")

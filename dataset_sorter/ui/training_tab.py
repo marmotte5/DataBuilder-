@@ -50,6 +50,9 @@ class LossChartWidget(QWidget):
     def append_point(self, step: int, loss: float):
         """Append a single (step, loss) data point and refresh the chart."""
         self._points.append((step, loss))
+        # Downsample when exceeding cap to prevent unbounded memory growth
+        if len(self._points) > 50_000:
+            self._points = self._points[::2]  # keep every other point
         self.update()
 
     def clear_data(self):
@@ -673,6 +676,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._training_worker.quit()
             if not self._training_worker.wait(5000):
                 self._log("WARNING: Previous training worker did not stop within timeout")
+            self._disconnect_training_worker()
             self._training_worker = None
 
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
@@ -779,6 +783,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log(f"WARNING: Non-finite loss at step {step}: {loss}")
             return
         self._loss_history.append((step, loss))
+        # Cap UI history to prevent unbounded memory growth in long runs
+        if len(self._loss_history) > 50_000:
+            self._loss_history = self._loss_history[-25_000:]
         self.loss_label.setText(f"Step {step}  |  Loss: {loss:.6f}  |  LR: {lr:.2e}")
         self.loss_chart.append_point(step, loss)
         if not self.loss_chart.isVisible():
@@ -789,30 +796,39 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _on_sample(self, images, step):
         """Handle sample signal: save generated images to disk and display the first one."""
         self._log(f"Samples generated at step {step}")
-        # Save samples to disk
-        output_text = self.output_dir_input.text().strip()
-        if not output_text:
-            self._log("Warning: output directory not set, skipping sample save")
-            return
-        output_dir = Path(output_text)
-        sample_dir = output_dir / "samples"
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        for i, img in enumerate(images):
-            path = sample_dir / f"sample_step{step:06d}_{i}.png"
-            img.save(str(path))
+        try:
+            # Save samples to disk
+            output_text = self.output_dir_input.text().strip()
+            if not output_text:
+                self._log("Warning: output directory not set, skipping sample save")
+            else:
+                output_dir = Path(output_text)
+                sample_dir = output_dir / "samples"
+                sample_dir.mkdir(parents=True, exist_ok=True)
+                for i, img in enumerate(images):
+                    path = sample_dir / f"sample_step{step:06d}_{i}.png"
+                    img.save(str(path))
 
-        # Display first sample
-        if images:
-            img = images[0].convert("RGB")  # Ensure RGB mode
-            data = img.tobytes("raw", "RGB")
-            qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
-            # .copy() ensures Qt owns the pixel data (avoids dangling pointer
-            # if Python's `data` bytes object is garbage-collected first).
-            pixmap = QPixmap.fromImage(qimg.copy()).scaled(
-                400, 300, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.sample_label.setPixmap(pixmap)
+            # Display first sample
+            if images:
+                img = images[0].convert("RGB")  # Ensure RGB mode
+                data = img.tobytes("raw", "RGB")
+                qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+                # .copy() ensures Qt owns the pixel data (avoids dangling pointer
+                # if Python's `data` bytes object is garbage-collected first).
+                pixmap = QPixmap.fromImage(qimg.copy()).scaled(
+                    400, 300, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.sample_label.setPixmap(pixmap)
+        except Exception as e:
+            self._log(f"Warning: failed to save/display sample at step {step}: {e}")
+        finally:
+            # Free PIL images — they can be 1-4 MB each and accumulate across
+            # sampling intervals during long training runs.
+            for img in images:
+                img.close()
+            del images
 
     def _on_phase(self, phase):
         """Log a training phase transition (e.g. caching, training, saving)."""
@@ -1027,6 +1043,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _stop_vram_monitor(self):
         """Stop the VRAM monitor thread if running."""
         if hasattr(self, '_vram_monitor') and self._vram_monitor is not None:
+            try:
+                self._vram_monitor.vram_update.disconnect(self._on_vram_update)
+            except TypeError:
+                pass
             self._vram_monitor.stop()
             self._vram_monitor.wait(3000)
             self._vram_monitor = None
@@ -1051,4 +1071,28 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                 self._log(f"Peak VRAM: {snap.peak_allocated_gb:.2f} / {snap.total_gb:.1f} GB")
         except Exception:
             pass
+        self._disconnect_training_worker()
         self._training_worker = None
+
+    def _disconnect_training_worker(self):
+        """Disconnect all signals from the training worker to prevent stale callbacks."""
+        w = self._training_worker
+        if w is None:
+            return
+        for sig, slot in [
+            (w.progress, self._on_progress),
+            (w.loss_update, self._on_loss),
+            (w.sample_generated, self._on_sample),
+            (w.phase_changed, self._on_phase),
+            (w.error, self._on_error),
+            (w.finished_training, self._on_finished),
+            (w.paused_changed, self._on_paused_changed),
+            (w.smart_resume_report, self._on_smart_resume_report),
+            (w.pipeline_report, self._on_pipeline_report),
+            (w.rlhf_candidates_ready, self._on_rlhf_candidates),
+            (w.finished, self._stop_vram_monitor),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass

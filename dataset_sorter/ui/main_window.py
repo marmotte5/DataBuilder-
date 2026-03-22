@@ -49,6 +49,9 @@ from dataset_sorter.ui.dataset_tab import DatasetTab
 from dataset_sorter.ui.dialogs import DryRunDialog
 from dataset_sorter.ui.toast import show_toast
 from dataset_sorter.ui.help_tab import HelpTab
+from dataset_sorter.ui.batch_generation_tab import BatchGenerationTab
+from dataset_sorter.ui.model_merge_tab import ModelMergeTab
+from dataset_sorter.ui.comparison_tab import ComparisonTab
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +167,9 @@ class MainWindow(QMainWindow):
         ("dataset",  "DB",  "Dataset",   "Prepare your training dataset",   "data"),
         ("train",    "TR",  "Train",     "Configure and run training",      "work"),
         ("generate", "GN",  "Generate",  "Generate images with your model", "work"),
+        ("batch",    "BT",  "Batch",     "Queue-based batch generation",    "work"),
+        ("compare",  "AB",  "Compare",   "A/B side-by-side comparison",     "work"),
+        ("merge",    "MG",  "Merge",     "Merge model checkpoints",         "work"),
         ("library",  "LB",  "Library",   "Browse models, LoRAs, embeddings","work"),
         ("settings", "ST",  "Settings",  "Training recommendations",        "util"),
         ("help",     "?",   "Help",      "Getting started guide",           "util"),
@@ -445,7 +451,19 @@ class MainWindow(QMainWindow):
         self.generate_tab = GenerateTab()
         self._content_stack.addWidget(self.generate_tab)  # index 2
 
-        # Page 3: Library
+        # Page 3: Batch Generation
+        self.batch_tab = BatchGenerationTab()
+        self._content_stack.addWidget(self.batch_tab)  # index 3
+
+        # Page 4: A/B Comparison
+        self.comparison_tab = ComparisonTab()
+        self._content_stack.addWidget(self.comparison_tab)  # index 4
+
+        # Page 5: Model Merge
+        self.merge_tab = ModelMergeTab()
+        self._content_stack.addWidget(self.merge_tab)  # index 5
+
+        # Page 6: Library
         try:
             from dataset_sorter.ui.library_tab import LibraryTab
             self.library_tab = LibraryTab()
@@ -455,15 +473,15 @@ class MainWindow(QMainWindow):
             self.library_tab.setStyleSheet(
                 f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
             )
-        self._content_stack.addWidget(self.library_tab)  # index 3
+        self._content_stack.addWidget(self.library_tab)  # index 6
 
-        # Page 4: Settings (recommendations)
+        # Page 7: Settings (recommendations)
         self.reco_tab = RecoTab()
-        self._content_stack.addWidget(self.reco_tab)  # index 4
+        self._content_stack.addWidget(self.reco_tab)  # index 7
 
-        # Page 5: Help
+        # Page 8: Help
         self.help_tab = HelpTab()
-        self._content_stack.addWidget(self.help_tab)  # index 5
+        self._content_stack.addWidget(self.help_tab)  # index 8
 
         right_layout.addWidget(self._content_stack, 1)
         outer.addWidget(right_area, 1)
@@ -495,10 +513,12 @@ class MainWindow(QMainWindow):
         """Switch the active navigation section."""
         nav_to_page = {
             "dataset": 0, "train": 1, "generate": 2,
-            "library": 3, "settings": 4, "help": 5,
+            "batch": 3, "compare": 4, "merge": 5,
+            "library": 6, "settings": 7, "help": 8,
         }
         nav_to_title = {
             "dataset": "Dataset", "train": "Train", "generate": "Generate",
+            "batch": "Batch Generate", "compare": "A/B Compare", "merge": "Merge",
             "library": "Library", "settings": "Settings", "help": "Help",
         }
         page = nav_to_page.get(nav_id, 0)
@@ -587,11 +607,17 @@ class MainWindow(QMainWindow):
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
 
+        # Generate worker → batch/comparison/merge tabs
+        self.generate_tab.worker_ready.connect(self._on_generate_worker_ready)
+
         # Library tab signals
         if hasattr(self.library_tab, 'use_in_generate'):
             self.library_tab.use_in_generate.connect(self._on_library_use_generate)
         if hasattr(self.library_tab, 'use_in_train'):
             self.library_tab.use_in_train.connect(self._on_library_use_train)
+        # Library → Merge tab
+        if hasattr(self.library_tab, 'use_in_generate'):
+            self.library_tab.use_in_generate.connect(self._on_library_use_merge)
 
     def _on_library_use_generate(self, path: str):
         """Load a model from library into the generate tab."""
@@ -605,6 +631,15 @@ class MainWindow(QMainWindow):
             self.training_tab.base_model_edit.setText(path)
         self._switch_nav("train")
         self._toast("Model path set in Train tab", "success")
+
+    def _on_library_use_merge(self, path: str):
+        """Load a model from library into the merge tab's Model A slot."""
+        self.merge_tab.load_model_path(path)
+
+    def _on_generate_worker_ready(self, worker):
+        """Pass the loaded GenerateWorker to batch and comparison tabs."""
+        self.batch_tab.set_generate_worker(worker)
+        self.comparison_tab.set_generate_worker(worker)
 
     def _setup_shortcuts(self):
         """Register global keyboard shortcuts."""

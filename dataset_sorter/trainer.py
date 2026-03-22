@@ -124,6 +124,9 @@ class Trainer:
         trainer.train(progress_fn, loss_fn, sample_fn)
     """
 
+    # Maximum loss/LR history entries (~3.2 MB cap per list)
+    MAX_HISTORY_LEN = 100_000
+
     def __init__(self, config: TrainingConfig):
         self.config = config
         self.state = TrainingState()
@@ -155,7 +158,7 @@ class Trainer:
         # Loss history for Smart Resume (capped to prevent unbounded growth)
         self._loss_history: list[tuple[int, float]] = []
         self._lr_history: list[tuple[int, float]] = []
-        self._max_history_len = 100_000  # ~3.2 MB cap per list
+        self._max_history_len = self.MAX_HISTORY_LEN
 
         # RLHF collection flag (set from UI thread when ready)
         self._rlhf_collect = threading.Event()
@@ -257,13 +260,13 @@ class Trainer:
                         f"error(s):\n" + "\n".join(self._integration_report.config_errors)
                     )
 
-            # Setup live training monitor
-            if config.live_loss_monitor:
-                self._live_monitor = LiveTrainingMonitor(
-                    config,
-                    check_every_n_steps=config.live_monitor_interval,
-                    auto_adjust=config.live_monitor_auto_adjust,
-                )
+        # Setup live training monitor (independent of pipeline integration)
+        if config.live_loss_monitor:
+            self._live_monitor = LiveTrainingMonitor(
+                config,
+                check_every_n_steps=config.live_monitor_interval,
+                auto_adjust=config.live_monitor_auto_adjust,
+            )
 
         if progress_fn:
             progress_fn(0, 8, "Loading model...")
@@ -291,6 +294,30 @@ class Trainer:
                 "when cached outputs are used. Disabling text encoder caching."
             )
             config.cache_text_encoder = False
+
+        # Warn about config options that have UI but no backend implementation yet
+        if config.controlnet_enabled:
+            log.warning(
+                "controlnet_enabled=True but ControlNet training is not yet "
+                "implemented — the setting will be ignored."
+            )
+        if config.adversarial_enabled:
+            log.warning(
+                "adversarial_enabled=True but adversarial training is not yet "
+                "implemented — the setting will be ignored."
+            )
+
+        if config.rescale_noise_schedule:
+            log.warning(
+                "rescale_noise_schedule=True but noise schedule rescaling is not yet "
+                "implemented — the setting will be ignored."
+            )
+        if config.dpo_chosen_dir or config.dpo_rejected_dir:
+            log.warning(
+                "dpo_chosen_dir/dpo_rejected_dir are set but batch DPO from "
+                "directories is not yet implemented. DPO currently only works "
+                "via RLHF preferences collected during training."
+            )
 
         if progress_fn:
             progress_fn(1, 8, "Applying speed optimizations...")
@@ -352,7 +379,17 @@ class Trainer:
             progress_fn(2, 8, "Preparing dataset...")
 
         # ── 6. Create dataset (with optional aspect ratio bucketing) ──
-        cache_dir = output_dir / ".cache" if config.cache_latents_to_disk else None
+        cache_dir = None
+        if config.cache_latents_to_disk:
+            if config.cache_to_ram_disk and Path("/dev/shm").is_dir():
+                # Use tmpfs RAM disk for faster cache I/O (Linux only)
+                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                log.info(f"Using RAM disk for cache: {cache_dir}")
+            else:
+                cache_dir = output_dir / ".cache"
+                if config.cache_to_ram_disk:
+                    log.warning("cache_to_ram_disk=True but /dev/shm not available, using disk cache")
 
         bucket_assignments = None
         self._bucket_sampler = None
@@ -630,6 +667,8 @@ class Trainer:
             initial_weights = {}
             if self._concept_probe_result is not None:
                 initial_weights = self._concept_probe_result.suggested_weights
+            elif self._tag_weights:
+                initial_weights = self._tag_weights
             self._adaptive_tag_weighter = AdaptiveTagWeighter(
                 initial_weights=initial_weights,
                 warmup_steps=config.adaptive_tag_warmup,
@@ -799,10 +838,22 @@ class Trainer:
                 )
                 log.info("DataLoader using BucketBatchSampler for multi-aspect training")
             else:
+                _sampler = None
+                _shuffle = True
+                if self._curriculum_sampler is not None:
+                    from torch.utils.data import WeightedRandomSampler
+                    _weights = torch.ones(len(self.dataset), dtype=torch.double)
+                    _sampler = WeightedRandomSampler(
+                        _weights, num_samples=len(self.dataset), replacement=True,
+                    )
+                    _shuffle = False  # mutually exclusive with sampler
+                    log.info("DataLoader using WeightedRandomSampler for curriculum learning")
+
                 dataloader = DataLoader(
                     self.dataset,
                     batch_size=config.batch_size,
-                    shuffle=True,
+                    shuffle=_shuffle,
+                    sampler=_sampler,
                     num_workers=use_workers,
                     pin_memory=True,
                     drop_last=True,
@@ -917,9 +968,14 @@ class Trainer:
             # the end of the previous epoch (when num_batches % grad_accum != 0).
             self.optimizer.zero_grad(set_to_none=True)
 
-            # Curriculum learning: epoch callback
+            # Curriculum learning: epoch callback + update sampler weights
             if self._curriculum_sampler is not None:
                 self._curriculum_sampler.on_epoch_start()
+                if dataloader is not None and hasattr(dataloader, 'sampler'):
+                    _dl = getattr(dataloader, 'dataloader', dataloader)  # unwrap prefetcher
+                    if hasattr(_dl, 'sampler') and hasattr(_dl.sampler, 'weights'):
+                        _new_w = self._curriculum_sampler.get_sampling_weights()
+                        _dl.sampler.weights = torch.from_numpy(_new_w).double()
 
             if progress_fn:
                 progress_fn(
@@ -1080,10 +1136,13 @@ class Trainer:
                     # Each micro-batch loss was divided by grad_accum_steps.
                     # If NaN skips reduced the count, rescale to get the
                     # correct mean rather than a biased-low value.
-                    if _valid_microbatches > 0 and _valid_microbatches < grad_accum_steps:
-                        self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
-                    else:
-                        self.state.loss = running_loss
+                    if _valid_microbatches > 0:
+                        if _valid_microbatches < grad_accum_steps:
+                            self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
+                        else:
+                            self.state.loss = running_loss
+                    # else: all microbatches were NaN — keep previous loss
+                    # to avoid corrupting loss history with artificial zeros
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
                     _valid_microbatches = 0
@@ -1433,13 +1492,13 @@ class Trainer:
             elif isinstance(indices, (int, float)):
                 indices = [int(indices)]
             # Load and stack masks for this batch
-            from dataset_sorter.masked_loss import load_mask_for_image
+            from dataset_sorter.masked_loss import load_mask_direct
             masks = []
             has_any = False
             for idx in indices:
                 idx = int(idx)
                 if idx in self._mask_map:
-                    mask = load_mask_for_image(
+                    mask = load_mask_direct(
                         self._mask_map[idx],
                         self.config.resolution,
                         self.device,
@@ -1569,6 +1628,7 @@ class Trainer:
                     ref_backend=self.backend,
                     beta=config.dpo_beta,
                     loss_type=config.dpo_loss_type,
+                    label_smoothing=config.dpo_label_smoothing,
                     device=self.device,
                     dtype=self.dtype,
                 )
@@ -1579,13 +1639,19 @@ class Trainer:
 
                 # Use GradScaler if active (fp16 training) to avoid
                 # unscaled gradients that may underflow.
+                # Collect all trainable params by requires_grad (not by
+                # p.grad is not None) because grads don't exist yet before
+                # backward().
+                _dpo_params = [
+                    p for g in self.optimizer.param_groups
+                    for p in g["params"] if p.requires_grad
+                ]
                 if self.grad_scaler is not None:
                     self.grad_scaler.scale(total_dpo_loss).backward()
                     self.grad_scaler.unscale_(self.optimizer)
                     if config.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
-                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
-                            config.max_grad_norm,
+                            _dpo_params, config.max_grad_norm,
                         )
                     self.grad_scaler.step(self.optimizer)
                     self.grad_scaler.update()
@@ -1593,8 +1659,7 @@ class Trainer:
                     total_dpo_loss.backward()
                     if config.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
-                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
-                            config.max_grad_norm,
+                            _dpo_params, config.max_grad_norm,
                         )
                     self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
@@ -1742,8 +1807,8 @@ class Trainer:
             # Offload text encoders back to CPU if we moved them
             for te in _te_moved:
                 te.cpu()
-            if _te_moved:
-                empty_cache()
+            # Flush VRAM freed by offloading VAE and/or text encoders.
+            empty_cache()
 
             self.state.phase = "training"
 
@@ -2200,7 +2265,10 @@ class Trainer:
 
         dataset = getattr(self, "dataset", None)
         if dataset is not None:
-            dataset.clear_caches()
+            if hasattr(dataset, "clear_caches"):
+                dataset.clear_caches()
+            elif hasattr(dataset, "close"):
+                dataset.close()
 
         backend = getattr(self, "backend", None)
         if backend is not None:

@@ -73,6 +73,40 @@ def compute_masked_loss(
     return masked_loss.sum()
 
 
+def load_mask_direct(
+    mask_path: Path,
+    resolution: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> Optional[torch.Tensor]:
+    """Load a mask from a known file path.
+
+    Args:
+        mask_path: Direct path to the mask image file.
+        resolution: Target spatial resolution (mask is resized to this).
+        device: Target device for the tensor.
+        dtype: Target dtype for the tensor.
+
+    Returns:
+        Tensor [1, 1, H, W] with values 0.0 or 1.0, or None on failure.
+    """
+    try:
+        from PIL import Image
+        with Image.open(mask_path) as _raw:
+            mask_img = _raw.convert("L")
+        mask_img = mask_img.resize((resolution, resolution), Image.NEAREST)
+
+        import numpy as np
+        mask_np = np.array(mask_img, dtype=np.float32) / 255.0
+        mask_np = (mask_np > 0.5).astype(np.float32)
+
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)
+        return mask_tensor.to(device=device, dtype=dtype)
+    except Exception as e:
+        log.warning(f"Failed to load mask {mask_path}: {e}")
+        return None
+
+
 def load_mask_for_image(
     image_path: Path,
     resolution: int,
@@ -110,22 +144,7 @@ def load_mask_for_image(
     if mask_path is None:
         return None
 
-    try:
-        from PIL import Image
-        with Image.open(mask_path) as _raw:
-            mask_img = _raw.convert("L")
-        mask_img = mask_img.resize((resolution, resolution), Image.NEAREST)
-
-        import numpy as np
-        mask_np = np.array(mask_img, dtype=np.float32) / 255.0
-        # Threshold: >0.5 = train region
-        mask_np = (mask_np > 0.5).astype(np.float32)
-
-        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)
-        return mask_tensor.to(device=device, dtype=dtype)
-    except Exception as e:
-        log.warning(f"Failed to load mask {mask_path}: {e}")
-        return None
+    return load_mask_direct(mask_path, resolution, device, dtype)
 
 
 def find_images_with_masks(image_paths: list[Path]) -> dict[int, Path]:

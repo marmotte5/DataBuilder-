@@ -110,22 +110,26 @@ class Flux2Backend(TrainBackendBase):
             hidden_states = out.hidden_states
 
             # Extract from specified layers and concatenate
+            num_layers = len(hidden_states)
             selected = []
             for layer_idx in self._hidden_state_layers:
-                if layer_idx < len(hidden_states):
+                if layer_idx < num_layers:
                     selected.append(hidden_states[layer_idx])
                 else:
                     log.warning(
-                        f"Flux 2 encoder has {len(hidden_states)} layers "
+                        f"Flux 2 encoder has {num_layers} layers "
                         f"but layer {layer_idx} was requested; skipping"
                     )
+            # Free full LLM outputs — only the selected layers are needed.
+            # Without this, all ~32 hidden state tensors stay on GPU.
+            del out, hidden_states
 
             if selected:
                 # Concatenate along sequence dimension
                 encoder_hidden = torch.cat(selected, dim=1)
             else:
                 raise RuntimeError(
-                    f"Flux 2 encoder has {len(hidden_states)} layers but none of "
+                    f"Flux 2 encoder has {num_layers} layers but none of "
                     f"the requested layers {self._hidden_state_layers} are available. "
                     f"The model may be incompatible or corrupted."
                 )

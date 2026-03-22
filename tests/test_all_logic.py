@@ -98,7 +98,7 @@ class TestConstants:
     def test_prediction_types_per_model(self):
         from dataset_sorter.constants import MODEL_PREDICTION_TYPE
         assert MODEL_PREDICTION_TYPE["sd15_lora"] == "epsilon"
-        assert MODEL_PREDICTION_TYPE["flux_lora"] == "raw"
+        assert MODEL_PREDICTION_TYPE["flux_lora"] == "flow"
         assert MODEL_PREDICTION_TYPE["sd3_lora"] == "flow"
         assert MODEL_PREDICTION_TYPE["sd2_lora"] == "v_prediction"
 

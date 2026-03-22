@@ -425,7 +425,10 @@ class ExportWorker(QThread):
                 if self._cancelled:
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
-                success, err = future.result()
+                try:
+                    success, err = future.result()
+                except Exception as exc:
+                    success, err = False, str(exc)
                 if success:
                     copied += 1
                 else:

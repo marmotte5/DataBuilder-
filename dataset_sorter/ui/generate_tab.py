@@ -10,6 +10,7 @@ Full-featured inference UI supporting:
 - One-click save to disk
 """
 
+import weakref
 from pathlib import Path
 from datetime import datetime
 
@@ -152,6 +153,10 @@ class LoRAEntry(QWidget):
 
 class GenerateTab(QWidget):
     """Full image generation / model testing tab."""
+
+    # Emitted when the generate worker has a model loaded, so other tabs
+    # (batch, comparison) can get a reference to the worker.
+    worker_ready = pyqtSignal(object)  # GenerateWorker instance
 
     def __init__(self, parent=None):
         """Initialize the generate tab with empty gallery and build the UI."""
@@ -716,12 +721,16 @@ class GenerateTab(QWidget):
         self.btn_load.setEnabled(True)
         self.btn_unload.setEnabled(True)
         self.btn_generate.setEnabled(True)
+        # Notify other tabs that the worker is ready
+        if self._worker is not None:
+            self.worker_ready.emit(self._worker)
         self.progress_bar.setVisible(False)
         show_toast(self, "Model loaded", "success")
 
     def _on_unload_model(self):
         """Unload the current model, free GPU memory, and reset UI state."""
         if self._worker:
+            self._disconnect_generate_worker()
             self._worker.unload_model()
             # Wait for the worker thread to finish before dropping the
             # reference — destroying a running QThread causes a segfault.
@@ -733,6 +742,23 @@ class GenerateTab(QWidget):
         self.btn_unload.setEnabled(False)
         self.btn_generate.setEnabled(False)
         show_toast(self, "Model unloaded", "info")
+
+    def _disconnect_generate_worker(self):
+        """Disconnect all signals from the generate worker to prevent stale callbacks."""
+        w = self._worker
+        if w is None:
+            return
+        for sig, slot in [
+            (w.model_loaded, self._on_model_loaded),
+            (w.image_generated, self._on_image_generated),
+            (w.progress, self._on_progress),
+            (w.error, self._on_error),
+            (w.finished_generating, self._on_finished),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass
 
     # ── Generation ──────────────────────────────────────────────────────
 
@@ -807,10 +833,11 @@ class GenerateTab(QWidget):
         # Evict oldest images AND their thumbnails when gallery exceeds cap
         while len(self._generated_images) > self._max_gallery_images:
             self._generated_images.pop(0)
-            # Remove oldest thumbnail widget (index 0; last item is stretch)
-            item = self.thumb_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
+            # Remove oldest thumbnail widget (index 0; stretch is always last)
+            if self.thumb_layout.count() > 1:  # guard: keep the trailing stretch
+                item = self.thumb_layout.takeAt(0)
+                if item and item.widget():
+                    item.widget().deleteLater()
         self._current_gallery_idx = len(self._generated_images) - 1
         self._display_current_image()
         self._add_thumbnail(pil_image, len(self._generated_images) - 1)
@@ -849,6 +876,9 @@ class GenerateTab(QWidget):
         if not self._generated_images:
             return
         idx = self._current_gallery_idx
+        if idx < 0 or idx >= len(self._generated_images):
+            idx = len(self._generated_images) - 1
+            self._current_gallery_idx = idx
         pil_img, info = self._generated_images[idx]
 
         # Get available space
@@ -896,8 +926,12 @@ class GenerateTab(QWidget):
         )
         thumb_label.setCursor(Qt.CursorShape.PointingHandCursor)
         # Use widget position in layout at click time (not captured index)
-        # to stay correct after eviction shifts indices
-        thumb_label.mousePressEvent = lambda e, w=thumb_label: self._goto_thumbnail(w)
+        # to stay correct after eviction shifts indices.
+        # weakref avoids thumb_label → closure → self → thumb_layout → thumb_label cycle.
+        weak_self = weakref.ref(self)
+        thumb_label.mousePressEvent = lambda e, w=thumb_label, ws=weak_self: (
+            ws() and ws()._goto_thumbnail(w)
+        )
         self.thumb_layout.addWidget(thumb_label)
         self.thumb_layout.addStretch()
 

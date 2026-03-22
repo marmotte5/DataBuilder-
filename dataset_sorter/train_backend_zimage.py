@@ -701,6 +701,7 @@ class ZImageBackend(TrainBackendBase):
             )
             # Use second-to-last hidden state (matches official pipeline)
             encoder_hidden = out.hidden_states[-2]
+            del out  # Free all LLM hidden states from VRAM
 
         # Return (hidden_states, attention_mask) — mask is used by
         # training_step to strip padding before the transformer call.

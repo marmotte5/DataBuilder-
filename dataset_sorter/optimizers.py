@@ -585,8 +585,8 @@ class SOAP(Optimizer):
             try:
                 _, eigvecs = torch.linalg.eigh(state[cov_key])
                 Q_list[i] = eigvecs
-            except Exception:
-                pass  # Keep old eigenvectors on failure
+            except Exception as e:
+                log.warning("SOAP eigendecomposition failed (keeping old basis): %s", e)
 
     @staticmethod
     def _rotate(tensor: torch.Tensor, Q_list: list, forward: bool) -> torch.Tensor:

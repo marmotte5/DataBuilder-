@@ -120,6 +120,7 @@ class HiDreamBackend(TrainBackendBase):
                 out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
                 if hasattr(out_1, 'text_embeds'):
                     pooled_list.append(out_1.text_embeds)
+                del out_1
 
         # CLIP-G (only pooled output used)
         if self.tokenizer_2 is not None and self.text_encoder_2 is not None:
@@ -132,6 +133,7 @@ class HiDreamBackend(TrainBackendBase):
                 out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
                 if hasattr(out_2, 'text_embeds'):
                     pooled_list.append(out_2.text_embeds)
+                del out_2
 
         # T5-XXL
         t5_hidden = None
@@ -144,6 +146,7 @@ class HiDreamBackend(TrainBackendBase):
             with self._te_no_grad():
                 out_3 = self.text_encoder_3(tokens_3)
                 t5_hidden = out_3.last_hidden_state
+                del out_3
 
         # Llama
         llama_hidden = None
@@ -156,6 +159,7 @@ class HiDreamBackend(TrainBackendBase):
             with self._te_no_grad():
                 out_4 = self.text_encoder_4(**tokens_4, output_hidden_states=True)
                 llama_hidden = out_4.hidden_states[-1]
+                del out_4  # Free all Llama hidden states from VRAM
 
         # Concatenate pooled outputs from CLIP encoders
         pooled = torch.cat(pooled_list, dim=-1) if pooled_list else None

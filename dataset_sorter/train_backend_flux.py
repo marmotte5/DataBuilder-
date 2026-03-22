@@ -76,6 +76,7 @@ class FluxBackend(TrainBackendBase):
 
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
+            clip_l_hidden = out_1.hidden_states[-2]
             pooled = out_1.pooler_output
 
         # T5-XXL
@@ -89,7 +90,11 @@ class FluxBackend(TrainBackendBase):
             out_2 = self.text_encoder_2(tokens_2)
             t5_hidden = out_2.last_hidden_state
 
-        return (t5_hidden, pooled)
+        # Concatenate CLIP-L hidden states with T5 hidden states.
+        # FluxTransformer2DModel expects joint text embeddings, not T5 alone.
+        encoder_hidden = self._pad_and_cat([clip_l_hidden, t5_hidden])
+
+        return (encoder_hidden, pooled)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:

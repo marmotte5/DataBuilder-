@@ -46,6 +46,13 @@ class TrainBackendBase(ABC):
     supports_triple_te: bool = False
     prediction_type: str = "epsilon"  # epsilon, v_prediction, flow
 
+    # Threshold for prefix stripping: if more than this fraction of keys
+    # share a prefix (e.g. "transformer."), we strip it.
+    PREFIX_DOMINANT_THRESHOLD = 0.5
+
+    # Maximum safetensors header size (bytes) for component-only detection
+    MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
+
     def __init__(self, config: TrainingConfig, device: torch.device, dtype: torch.dtype):
         self.config = config
         self.device = device
@@ -274,8 +281,8 @@ class TrainBackendBase(ABC):
         if config.xformers and self.unet is not None:
             try:
                 self.unet.enable_xformers_memory_efficient_attention()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("xformers not available: %s", e)
 
         # 4. cuDNN benchmark (CUDA only)
         if config.cudnn_benchmark and self.device.type == "cuda":
@@ -306,12 +313,12 @@ class TrainBackendBase(ABC):
         if self.vae is not None:
             try:
                 self.vae.enable_slicing()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("VAE slicing unavailable: %s", e)
             try:
                 self.vae.enable_tiling()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("VAE tiling unavailable: %s", e)
 
         # 9. FP8 base model: cast frozen (non-LoRA) weights to float8_e4m3fn
         #    Halves model weight VRAM on Hopper/Ada GPUs (RTX 4090, H100, etc.)
@@ -879,8 +886,8 @@ class TrainBackendBase(ABC):
 
         return pipe
 
-    @staticmethod
-    def _strip_state_dict_prefix(state_dict: dict) -> dict:
+    @classmethod
+    def _strip_state_dict_prefix(cls, state_dict: dict) -> dict:
         """Strip common component prefixes from a state dict.
 
         Handles prefixed checkpoints (transformer.*, unet.*, model.diffusion_model.*)
@@ -893,9 +900,10 @@ class TrainBackendBase(ABC):
             "unet.",
             "model.",
         ]
+        threshold = cls.PREFIX_DOMINANT_THRESHOLD
         for prefix in prefixes_to_try:
             prefixed_keys = [k for k in state_dict if k.startswith(prefix)]
-            if len(prefixed_keys) > len(state_dict) * 0.5:
+            if len(prefixed_keys) > len(state_dict) * threshold:
                 # Most keys have this prefix — strip it
                 return {
                     k[len(prefix):] if k.startswith(prefix) else k: v

@@ -21,6 +21,7 @@ Architecture:
         emits results as a list of LibraryItem dataclasses.
 """
 
+import json as _json
 import logging
 import os
 import platform
@@ -96,6 +97,11 @@ class LibraryItem:
     is_directory: bool = False
     lora_rank: int | None = None
     base_model_hint: str = ""
+    # User-managed metadata (persisted in QSettings)
+    favorite: bool = False
+    user_note: str = ""
+    user_tags: list[str] = field(default_factory=list)
+    rating: int = 0  # 0-5 stars
 
     @property
     def size_display(self) -> str:
@@ -538,6 +544,20 @@ class LibraryTab(QWidget):
 
         toolbar.addStretch()
 
+        # Favorites filter toggle
+        self._fav_filter_btn = QPushButton("Favorites")
+        self._fav_filter_btn.setCheckable(True)
+        self._fav_filter_btn.setFixedHeight(34)
+        self._fav_filter_btn.setFixedWidth(90)
+        self._fav_filter_btn.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 6px; "
+            f"padding: 4px 10px; background: transparent; color: {COLORS['text_muted']}; }} "
+            f"QPushButton:checked {{ background: {COLORS['accent_subtle']}; "
+            f"color: {COLORS['accent']}; border-color: {COLORS['accent']}; }}"
+        )
+        self._fav_filter_btn.clicked.connect(self._apply_filter)
+        toolbar.addWidget(self._fav_filter_btn)
+
         # Sort dropdown
         self._sort_combo = QComboBox()
         self._sort_combo.addItems(["Name", "Size", "Date Modified"])
@@ -645,16 +665,43 @@ class LibraryTab(QWidget):
         self._detail_frame.setStyleSheet(
             f"QFrame {{ {card_style()} }}"
         )
-        self._detail_frame.setFixedHeight(130)
+        self._detail_frame.setFixedHeight(180)
 
         layout = QVBoxLayout(self._detail_frame)
         layout.setContentsMargins(16, 10, 16, 10)
         layout.setSpacing(4)
 
-        # Top row: selected item name
+        # Top row: selected item name + favorite button
+        name_row = QHBoxLayout()
         self._detail_name = QLabel("No item selected")
         self._detail_name.setStyleSheet(section_header_style())
-        layout.addWidget(self._detail_name)
+        name_row.addWidget(self._detail_name)
+
+        self._btn_favorite = QPushButton("Favorite")
+        self._btn_favorite.setFixedHeight(28)
+        self._btn_favorite.setCheckable(True)
+        self._btn_favorite.setEnabled(False)
+        self._btn_favorite.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 2px 10px; background: transparent; color: {COLORS['text_muted']}; }} "
+            f"QPushButton:checked {{ background: {COLORS['accent_subtle']}; "
+            f"color: {COLORS['accent']}; border-color: {COLORS['accent']}; }}"
+        )
+        self._btn_favorite.clicked.connect(self._toggle_favorite)
+        name_row.addWidget(self._btn_favorite)
+
+        # Rating (1-5 stars via combo)
+        self._rating_combo = QComboBox()
+        self._rating_combo.addItem("No rating", 0)
+        for i in range(1, 6):
+            self._rating_combo.addItem(f"{'*' * i} ({i})", i)
+        self._rating_combo.setFixedWidth(100)
+        self._rating_combo.setEnabled(False)
+        self._rating_combo.currentIndexChanged.connect(self._on_rating_changed)
+        name_row.addWidget(self._rating_combo)
+
+        name_row.addStretch()
+        layout.addLayout(name_row)
 
         # Path
         self._detail_path = QLabel("")
@@ -664,12 +711,33 @@ class LibraryTab(QWidget):
         self._detail_path.setWordWrap(True)
         layout.addWidget(self._detail_path)
 
-        # Metadata row
+        # Metadata + user tags row
+        meta_row = QHBoxLayout()
         self._detail_meta = QLabel("")
         self._detail_meta.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;"
         )
-        layout.addWidget(self._detail_meta)
+        meta_row.addWidget(self._detail_meta, 1)
+
+        # User note inline
+        meta_row.addWidget(QLabel("Note:"))
+        self._note_edit = QLineEdit()
+        self._note_edit.setPlaceholderText("Add a note...")
+        self._note_edit.setFixedWidth(200)
+        self._note_edit.setEnabled(False)
+        self._note_edit.editingFinished.connect(self._save_note)
+        meta_row.addWidget(self._note_edit)
+
+        # User tags inline
+        meta_row.addWidget(QLabel("Tags:"))
+        self._tags_edit = QLineEdit()
+        self._tags_edit.setPlaceholderText("tag1, tag2...")
+        self._tags_edit.setFixedWidth(200)
+        self._tags_edit.setEnabled(False)
+        self._tags_edit.editingFinished.connect(self._save_user_tags)
+        meta_row.addWidget(self._tags_edit)
+
+        layout.addLayout(meta_row)
 
         # Action buttons
         btn_row = QHBoxLayout()
@@ -912,14 +980,33 @@ class LibraryTab(QWidget):
     # ── Filtering ───────────────────────────────────────────────────────
 
     def _filtered_items(self) -> list[LibraryItem]:
-        """Return items filtered by the current search query."""
+        """Return items filtered by the current search query and favorites toggle."""
+        items = self._items
+
+        # Load metadata once for the entire filter pass (avoids O(n) QSettings reads)
+        all_meta = self._get_all_user_meta()
+
+        # Favorites filter
+        if self._fav_filter_btn.isChecked():
+            items = [
+                i for i in items
+                if all_meta.get(i.path, {}).get("favorite", False)
+            ]
+
         query = self._search_edit.text().strip().lower()
         if not query:
-            return self._sorted_items(self._items)
-        filtered = [
-            item for item in self._items
-            if query in item.name.lower() or query in item.model_type.lower()
-        ]
+            return self._sorted_items(items)
+
+        filtered = []
+        for item in items:
+            if query in item.name.lower() or query in item.model_type.lower():
+                filtered.append(item)
+                continue
+            # Also search user tags
+            tags = all_meta.get(item.path, {}).get("tags", [])
+            if any(query in t.lower() for t in tags):
+                filtered.append(item)
+
         return self._sorted_items(filtered)
 
     def _apply_filter(self):
@@ -977,12 +1064,23 @@ class LibraryTab(QWidget):
         for btn in (self._btn_copy_path, self._btn_open_folder,
                      self._btn_use_generate, self._btn_use_train, self._btn_delete):
             btn.setEnabled(has_selection)
+        self._btn_favorite.setEnabled(has_selection)
+        self._rating_combo.setEnabled(has_selection)
+        self._note_edit.setEnabled(has_selection)
+        self._tags_edit.setEnabled(has_selection)
 
         if not has_selection:
             self._detail_name.setText("No item selected")
             self._detail_path.setText("")
             self._detail_meta.setText("")
+            self._btn_favorite.setChecked(False)
+            self._rating_combo.setCurrentIndex(0)
+            self._note_edit.clear()
+            self._tags_edit.clear()
             return
+
+        # Load user metadata from QSettings
+        self._load_user_metadata(item)
 
         self._detail_name.setText(f"Selected: {item.name}")
         self._detail_path.setText(f"Path: {item.path}")
@@ -998,6 +1096,14 @@ class LibraryTab(QWidget):
         if item.base_model_hint:
             meta_parts.append(f"Base: {item.base_model_hint}")
         self._detail_meta.setText("  |  ".join(meta_parts))
+
+        # Update user metadata controls
+        self._btn_favorite.setChecked(item.favorite)
+        self._rating_combo.blockSignals(True)
+        self._rating_combo.setCurrentIndex(item.rating)
+        self._rating_combo.blockSignals(False)
+        self._note_edit.setText(item.user_note)
+        self._tags_edit.setText(", ".join(item.user_tags))
 
     # ── Action buttons ──────────────────────────────────────────────────
 
@@ -1159,3 +1265,86 @@ class LibraryTab(QWidget):
             self._sort_combo.setCurrentIndex(2)
         elif action == refresh_action:
             self.refresh()
+
+    # ── User metadata persistence ──────────────────────────────────────
+
+    _META_KEY = "library/user_metadata"
+
+    def _get_all_user_meta(self) -> dict:
+        """Load the full user metadata dict from QSettings."""
+        settings = QSettings()
+        raw = settings.value(self._META_KEY, "{}")
+        if isinstance(raw, str):
+            try:
+                return _json.loads(raw)
+            except _json.JSONDecodeError:
+                return {}
+        return {}
+
+    def _save_all_user_meta(self, meta: dict):
+        """Persist the full user metadata dict to QSettings."""
+        settings = QSettings()
+        settings.setValue(self._META_KEY, _json.dumps(meta))
+
+    def _load_user_metadata(self, item: LibraryItem):
+        """Load user metadata for a specific item from persistent storage."""
+        meta = self._get_all_user_meta()
+        item_meta = meta.get(item.path, {})
+        item.favorite = item_meta.get("favorite", False)
+        item.user_note = item_meta.get("note", "")
+        item.user_tags = item_meta.get("tags", [])
+        item.rating = item_meta.get("rating", 0)
+
+    def _save_item_meta(self, item: LibraryItem):
+        """Save user metadata for a specific item to persistent storage."""
+        meta = self._get_all_user_meta()
+        meta[item.path] = {
+            "favorite": item.favorite,
+            "note": item.user_note,
+            "tags": item.user_tags,
+            "rating": item.rating,
+        }
+        self._save_all_user_meta(meta)
+
+    def _is_favorite(self, path: str) -> bool:
+        """Quick check if a path is marked as favorite."""
+        meta = self._get_all_user_meta()
+        return meta.get(path, {}).get("favorite", False)
+
+    def _toggle_favorite(self):
+        """Toggle the favorite status of the selected item."""
+        item = self._selected_item
+        if item is None:
+            return
+        self._load_user_metadata(item)
+        item.favorite = not item.favorite
+        self._btn_favorite.setChecked(item.favorite)
+        self._save_item_meta(item)
+
+    def _on_rating_changed(self):
+        """Save the new rating for the selected item."""
+        item = self._selected_item
+        if item is None:
+            return
+        self._load_user_metadata(item)
+        item.rating = self._rating_combo.currentData() or 0
+        self._save_item_meta(item)
+
+    def _save_note(self):
+        """Save the note text for the selected item."""
+        item = self._selected_item
+        if item is None:
+            return
+        self._load_user_metadata(item)
+        item.user_note = self._note_edit.text().strip()
+        self._save_item_meta(item)
+
+    def _save_user_tags(self):
+        """Save user tags for the selected item."""
+        item = self._selected_item
+        if item is None:
+            return
+        self._load_user_metadata(item)
+        text = self._tags_edit.text().strip()
+        item.user_tags = [t.strip() for t in text.split(",") if t.strip()]
+        self._save_item_meta(item)

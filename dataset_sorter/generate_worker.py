@@ -71,6 +71,13 @@ CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
 # Models that use guidance_scale in a different way (no negative prompt)
 FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
+# Maximum safetensors header size (bytes) for sanity checks during inspection.
+_MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
+
+# Threshold: if more than this fraction of state dict keys share a prefix,
+# we strip it (e.g. "transformer." → "").
+_PREFIX_DOMINANT_THRESHOLD = 0.5
+
 
 def _detect_model_type_from_keys(model_path: str) -> str:
     """Detect model architecture by reading safetensors file header keys.
@@ -460,7 +467,8 @@ class GenerateWorker(QThread):
             else:
                 try:
                     pipe = pipe.to(self._device, dtype=dtype)
-                except Exception:
+                except Exception as e:
+                    log.debug("Pipeline .to(device, dtype) failed, retrying without dtype: %s", e)
                     pipe = pipe.to(self._device)
 
             if hasattr(pipe, "enable_vae_slicing"):
@@ -576,7 +584,8 @@ class GenerateWorker(QThread):
             if is_single_file and hasattr(pipe_cls, "from_single_file"):
                 try:
                     pipe = pipe_cls.from_single_file(model_path, **kwargs)
-                except Exception:
+                except Exception as e:
+                    log.debug("from_single_file retry without safety_checker failed: %s", e)
                     pipe = self._load_single_file_custom(
                         model_path, model_type, dtype, kwargs
                     )
@@ -608,10 +617,11 @@ class GenerateWorker(QThread):
                 if len(raw) < 8:
                     return False
                 header_size = struct.unpack("<Q", raw)[0]
-                if header_size > 50_000_000:
+                if header_size > _MAX_SAFETENSORS_HEADER_SIZE:
                     return False
                 header = json.loads(f.read(header_size))
-        except Exception:
+        except Exception as e:
+            log.debug("Cannot inspect checkpoint header: %s", e)
             return False
 
         keys = set(header.keys())
@@ -723,21 +733,9 @@ class GenerateWorker(QThread):
             state_dict = load_file(model_path)
 
             # Strip known component prefixes (transformer., unet., model.diffusion_model., etc.)
-            prefixes_to_try = [
-                "model.diffusion_model.",
-                "transformer.",
-                "unet.",
-                "model.",
-            ]
-            for prefix in prefixes_to_try:
-                prefixed_keys = [k for k in state_dict if k.startswith(prefix)]
-                if len(prefixed_keys) > len(state_dict) * 0.5:
-                    state_dict = {
-                        k[len(prefix):] if k.startswith(prefix) else k: v
-                        for k, v in state_dict.items()
-                    }
-                    log.info(f"Stripped prefix '{prefix}' from {len(prefixed_keys)} keys")
-                    break
+            # Reuse the shared utility from TrainBackendBase to avoid duplication.
+            from dataset_sorter.train_backend_base import TrainBackendBase
+            state_dict = TrainBackendBase._strip_state_dict_prefix(state_dict)
 
             missing, unexpected = model_component.load_state_dict(state_dict, strict=False)
             if missing:
@@ -1092,3 +1090,107 @@ class GenerateWorker(QThread):
             self.finished_generating.emit(False, f"All {total} image(s) failed to generate.")
         else:
             self.finished_generating.emit(True, f"Generated {succeeded}/{total} image(s).")
+
+    def _do_generate_blocking(self) -> list[tuple]:
+        """Synchronous generation — returns list of (PIL.Image, info_str).
+
+        Used by batch generation and A/B comparison tabs to generate images
+        without going through the QThread run() machinery. Caller is
+        responsible for setting generation params before calling.
+        """
+        import torch
+
+        with self._lock:
+            if self.pipe is None:
+                return []
+            pipe_ref = self.pipe
+
+        model_type = self._model_type
+        total = self.num_images
+        positive_prompt = self.positive_prompt
+        negative_prompt = self.negative_prompt
+        scheduler_name = self.scheduler_name
+        steps = self.steps
+        cfg_scale = self.cfg_scale
+        width = self.width
+        height = self.height
+        seed = self.seed
+        clip_skip = self.clip_skip
+        init_image = self.init_image
+        mask_image = self.mask_image
+        strength = self.strength
+
+        _load_scheduler(pipe_ref, scheduler_name, model_type)
+        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+
+        results = []
+        for i in range(total):
+            if self._stop_requested:
+                break
+
+            if seed < 0:
+                import random
+                current_seed = random.randint(0, 2**32 - 1)
+            else:
+                current_seed = seed + i
+
+            gen_device = "cpu" if self._device.type == "mps" else self._device
+            generator = torch.Generator(device=gen_device).manual_seed(current_seed)
+
+            kwargs = {
+                "prompt": positive_prompt,
+                "num_inference_steps": steps,
+                "generator": generator,
+            }
+
+            if init_image is not None:
+                init_img = init_image.convert("RGB").resize(
+                    (width, height), Image.Resampling.LANCZOS,
+                )
+                kwargs["image"] = init_img
+                kwargs["strength"] = strength
+                if mask_image is not None:
+                    mask = mask_image.convert("L").resize(
+                        (width, height), Image.Resampling.LANCZOS,
+                    )
+                    kwargs["mask_image"] = mask
+            else:
+                kwargs["width"] = width
+                kwargs["height"] = height
+
+            kwargs["guidance_scale"] = cfg_scale
+            if model_type in CFG_MODELS and negative_prompt:
+                kwargs["negative_prompt"] = negative_prompt
+
+            if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
+                kwargs["clip_skip"] = clip_skip
+
+            try:
+                with torch.inference_mode():
+                    result = active_pipe(**kwargs)
+                    img = result.images[0]
+
+                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                img.info["pnginfo"] = pnginfo
+                img.info["parameters"] = parameters_str
+
+                mode_str = "txt2img"
+                if mask_image is not None and init_image is not None:
+                    mode_str = "inpaint"
+                elif init_image is not None:
+                    mode_str = f"img2img (str={strength})"
+
+                info = (
+                    f"Seed: {current_seed} | "
+                    f"Steps: {steps} | "
+                    f"CFG: {cfg_scale} | "
+                    f"Sampler: {scheduler_name} | "
+                    f"{width}x{height} | "
+                    f"{mode_str}"
+                )
+                results.append((img, info))
+
+            except Exception as e:
+                log.error(f"Blocking generation failed for image {i + 1}: {e}")
+
+        return results

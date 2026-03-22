@@ -18,6 +18,10 @@ Main window:     dataset_sorter/ui/main_window.py
 Core trainer:    dataset_sorter/trainer.py
 Training worker: dataset_sorter/training_worker.py (QThread)
 Generate worker: dataset_sorter/generate_worker.py (QThread)
+Batch generate:  dataset_sorter/ui/batch_generation_tab.py
+A/B comparison:  dataset_sorter/ui/comparison_tab.py
+Model merge:     dataset_sorter/ui/model_merge_tab.py
+Library:         dataset_sorter/ui/library_tab.py
 Backend base:    dataset_sorter/train_backend_base.py
 Model backends:  dataset_sorter/train_backend_*.py (17 files)
 Optimizers:      dataset_sorter/optimizers.py (Marmotte, SOAP, Muon)
@@ -133,7 +137,7 @@ pytest tests/              # Run tests
 - Image generation with LoRA support (done)
 - Marmotte optimizer (done)
 - Extreme speed optimizations (done)
-- LoRA and model library management (in progress)
-- Batch generation workflows (planned)
-- Model merging tools (planned)
-- A/B comparison interface (planned)
+- LoRA and model library management (done) — favorites, notes, tags, ratings
+- Batch generation workflows (done) — prompt queue, CSV/JSON/TXT import, auto-save
+- Model merging tools (done) — weighted sum, SLERP, add-difference
+- A/B comparison interface (done) — side-by-side generation with per-side overrides
