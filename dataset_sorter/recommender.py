@@ -648,40 +648,128 @@ def _build_notes(
             "time on multi-epoch training."
         )
 
-    # Optimizer-specific
+    # Optimizer-specific (model-aware)
     if optimizer == "Prodigy":
         notes.append(
             "Prodigy: LR=1.0 is intentional (self-adjusting). "
-            "d_coef stabilizes in ~200-300 steps. Use constant scheduler."
+            "d_coef stabilizes in ~200-300 steps. "
+            "Best with cosine scheduler (avoid restarts). "
+            "Recommended args: decouple=True, d_coef=0.8, "
+            "safeguard_warmup=True, bias_correction=True."
         )
-        if not is_lora:
-            notes.append("Prodigy not recommended for full finetune — prefer AdamW or Adafactor.")
+        if is_lora and is_flux:
+            notes.append(
+                "Prodigy + Flux LoRA: good for auto-tuning when unsure of LR. "
+                "Expect ~1200-1500 steps (20-30% more than AdamW). "
+                "AdamW8bit with manual LR is more predictable for production."
+            )
+        elif not is_lora:
+            notes.append(
+                "Prodigy is less proven for full finetune — consider AdamW or "
+                "Adafactor for more predictable convergence."
+            )
     elif optimizer == "DAdaptAdam":
-        notes.append("D-Adapt Adam: LR=1.0 is intentional (self-adjusting).")
+        notes.append(
+            "D-Adapt Adam: LR=1.0 is intentional (self-adjusting). "
+            "Use constant scheduler. Similar to Prodigy but slightly less stable."
+        )
     elif optimizer == "Adafactor":
+        notes.append(
+            "Adafactor: ~50% less VRAM than AdamW. "
+            "Enable stochastic rounding for bf16 LoRA to avoid truncation bias."
+        )
         if "sdxl" in model_type or is_pony or is_zimage:
             notes.append(
-                "Adafactor + fused_backward_pass: dramatically reduces VRAM usage."
+                "Adafactor + fused_backward_pass: dramatically reduces VRAM usage. "
+                "This is the optimal combo for VRAM-constrained SDXL/Pony/Z-Image training."
             )
-        notes.append(
-            "Adafactor: stochastic rounding is important with bf16 LoRA weights."
-        )
+        if is_flux and is_lora:
+            notes.append(
+                "For Flux LoRA, Adafactor uses ~5x higher LR than AdamW. "
+                "Combined with cosine_with_restarts, this is the most VRAM-efficient setup."
+            )
+    elif optimizer in ("AdamW", "AdamW8bit"):
+        if optimizer == "AdamW8bit":
+            notes.append(
+                "AdamW8bit: 25-30% VRAM savings vs AdamW with identical output quality. "
+                "Recommended over AdamW unless you specifically need fp32 optimizer states."
+            )
+        if is_flux and is_lora:
+            notes.append(
+                "Flux LoRA + AdamW: community sweet spot is LR 1e-4 to 2e-3 with "
+                "cosine scheduler. Expect good results in 1000-2000 steps. "
+                "Tip: LoRA+ (16x LR ratio for lora_B) converges ~30% faster."
+            )
+        elif (is_pony or "sdxl" in model_type) and is_lora:
+            notes.append(
+                "SDXL/Pony LoRA + AdamW: use cosine_with_restarts (3-4 restarts). "
+                "Keep total steps under 4000 to avoid overtraining. "
+                "Noise offset 0.03 for fine details, 0.1 for diverse styles."
+            )
+        elif is_sd15 and is_lora:
+            notes.append(
+                "SD 1.5 LoRA + AdamW: well-established. LR 1e-4 to 2e-4, "
+                "rank 32-64, 10-15 epochs for small datasets."
+            )
     elif optimizer == "CAME":
-        notes.append("CAME: Adafactor-like memory with AdamW-like quality.")
+        notes.append(
+            "CAME: Adafactor-like memory efficiency with AdamW-like convergence quality. "
+            "Good choice when VRAM is tight but you want AdamW-level results."
+        )
     elif optimizer == "AdamWScheduleFree":
-        notes.append("AdamW Schedule-Free: set scheduler to 'constant'. No external scheduler needed.")
+        notes.append(
+            "AdamW Schedule-Free: set scheduler to 'constant' — the optimizer "
+            "handles schedule internally. No warmup needed."
+        )
     elif optimizer == "Lion":
-        notes.append("Lion: LR auto-reduced (~3x lower). Uses ~50% less memory than AdamW.")
+        notes.append(
+            "Lion: ~50% less memory than AdamW. LR auto-reduced (~3x lower). "
+            "Works well for LoRA; less proven for full finetune of large models."
+        )
+    elif optimizer == "SOAP":
+        notes.append(
+            "SOAP: strong convergence on DiT models (Flux, SD3, Z-Image). "
+            "Use cosine scheduler with weight_decay=0.01."
+        )
+    elif optimizer == "Muon":
+        notes.append(
+            "Muon: experimental high-LR optimizer (0.02). Best for DiT-based models. "
+            "Use cosine scheduler. Not recommended for UNet models (SD 1.5, SDXL)."
+        )
     elif optimizer == "SGD":
-        notes.append("SGD is not recommended. Adaptive optimizers converge significantly faster.")
+        notes.append(
+            "SGD is not recommended for diffusion model training. "
+            "Adaptive optimizers (AdamW, Prodigy, Adafactor) converge significantly faster."
+        )
 
-    # Network type
+    # Network type — model-aware guidance
     if network_type == "dora":
-        notes.append("DoRA: ~30% slower, ~15% more VRAM, often better quality than LoRA.")
+        if config.lora_rank <= 8:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: strongest advantage over LoRA at "
+                "low ranks. Up to 2x effective capacity — excellent choice here."
+            )
+        elif config.lora_rank >= 64:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: ~30% slower, ~15% more VRAM. "
+                "Quality gap vs standard LoRA narrows at high ranks — "
+                "consider standard LoRA for faster iteration."
+            )
+        else:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: better generalization than LoRA, "
+                "especially for complex subjects. ~30% slower but often needs fewer epochs."
+            )
     elif network_type == "loha":
-        notes.append("LoHa: dim^2 = effective rank. Good quality/size tradeoff.")
+        notes.append(
+            f"LoHa at dim {config.lora_rank}: effective rank = {config.lora_rank**2}. "
+            "Good quality/size tradeoff for style and concept LoRAs."
+        )
     elif network_type == "lokr":
-        notes.append("LoKr: very compact. Suited for simple styles, less for complex subjects.")
+        notes.append(
+            "LoKr: very compact adapter. Suited for simple styles and single-concept "
+            "training. Less effective for complex characters or multi-concept."
+        )
 
     # Conv layers
     if config.conv_rank > 0:
