@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from dataset_sorter.constants import (
-    MODEL_TYPE_LABELS, VRAM_TIERS,
+    MODEL_TYPE_LABELS, MODEL_TYPE_KEYS, VRAM_TIERS,
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
     ATTENTION_MODES, SAMPLE_SAMPLERS, SAVE_PRECISIONS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES,
@@ -127,12 +127,21 @@ class TrainingTabBuildersMixin:
         g3l = QGridLayout()
         self.ema_check = QCheckBox("Enable EMA")
         self.ema_check.setChecked(True)
-        self.ema_check.setToolTip("Exponential Moving Average of weights. Smooths training, often better final quality.")
+        self.ema_check.setToolTip(
+            "Exponential Moving Average: keeps a smoothed copy of model weights\n"
+            "updated each step. Reduces noise from mini-batch variance and\n"
+            "typically produces better generalization than raw trained weights.\n"
+            "Most beneficial for full finetune and large LoRA datasets (50+ images)."
+        )
         g3l.addWidget(self.ema_check, 0, 0)
 
         self.ema_cpu_check = QCheckBox("CPU Offload (saves ~2-4 GB VRAM)")
         self.ema_cpu_check.setChecked(True)
-        self.ema_cpu_check.setToolTip("Store EMA weights in system RAM instead of GPU VRAM. Recommended for <24 GB GPUs.")
+        self.ema_cpu_check.setToolTip(
+            "Store EMA shadow weights in system RAM instead of GPU VRAM.\n"
+            "Essential for 24 GB GPUs, recommended for 48 GB with large models.\n"
+            "Requires 16+ GB system RAM. Speed impact is minimal (<5%)."
+        )
         g3l.addWidget(self.ema_cpu_check, 0, 1)
 
         g3l.addWidget(QLabel("Decay"), 1, 0)
@@ -141,8 +150,29 @@ class TrainingTabBuildersMixin:
         self.ema_decay_spin.setDecimals(5)
         self.ema_decay_spin.setValue(0.9999)
         self.ema_decay_spin.setSingleStep(0.0001)
-        self.ema_decay_spin.setToolTip("EMA decay rate. Higher = smoother but slower to adapt. 0.9999 is standard.")
+        self.ema_decay_spin.setToolTip(
+            "EMA decay rate — controls how fast the average adapts.\n"
+            "0.9999: standard, good for most runs (1000+ steps)\n"
+            "0.999: faster adaptation, better for small datasets (<50 images)\n"
+            "0.99999: very smooth, only for long runs (5000+ steps)\n"
+            "Higher = more smoothing but slower to reflect recent changes."
+        )
         g3l.addWidget(self.ema_decay_spin, 1, 1)
+
+        self.ema_advice_label = QLabel("")
+        self.ema_advice_label.setWordWrap(True)
+        self.ema_advice_label.setStyleSheet(
+            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
+            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+        )
+        g3l.addWidget(self.ema_advice_label, 2, 0, 1, 2)
+
+        # Wire signals for dynamic advice updates
+        self.ema_check.stateChanged.connect(self._update_ema_advice)
+        self.ema_cpu_check.stateChanged.connect(self._update_ema_advice)
+        self.ema_decay_spin.valueChanged.connect(self._update_ema_advice)
+        self.train_model_combo.currentIndexChanged.connect(self._update_ema_advice)
+        self.train_vram_combo.currentIndexChanged.connect(self._update_ema_advice)
 
         g3.setLayout(g3l)
         layout.addWidget(g3)
@@ -179,7 +209,121 @@ class TrainingTabBuildersMixin:
 
         layout.addStretch()
         scroll.setWidget(w)
+        self._update_ema_advice()  # Initialize advice text
         return scroll
+
+    def _update_ema_advice(self):
+        """Update the EMA advice label based on current model type, VRAM, and settings."""
+        idx = self.train_model_combo.currentIndex()
+        model_key = MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
+        is_lora = model_key.endswith("_lora")
+        base_model = model_key.rsplit("_", 1)[0]
+
+        vidx = self.train_vram_combo.currentIndex()
+        vram_gb = VRAM_TIERS[vidx] if 0 <= vidx < len(VRAM_TIERS) else 24
+
+        ema_on = self.ema_check.isChecked()
+        cpu_offload = self.ema_cpu_check.isChecked()
+        decay = self.ema_decay_spin.value()
+
+        large_models = {"flux", "flux2", "zimage", "hidream", "chroma"}
+        medium_models = {"sdxl", "pony", "sd3", "sd35", "hunyuan"}
+
+        if not ema_on:
+            # Give context-specific recommendation on whether to enable
+            if is_lora:
+                advice = (
+                    "EMA is off. For LoRA training, EMA smooths weight updates and "
+                    "reduces noise — recommended for datasets with 50+ images."
+                )
+            elif base_model in large_models:
+                if vram_gb < 48:
+                    advice = (
+                        f"EMA is off. For {base_model.upper()} full finetune at {vram_gb} GB, "
+                        "enabling EMA with CPU offload is recommended if you have 32+ GB system RAM."
+                    )
+                else:
+                    advice = (
+                        f"EMA is off. For {base_model.upper()} full finetune, EMA significantly "
+                        "improves generalization — recommended for 200+ image datasets."
+                    )
+            elif base_model in medium_models:
+                advice = (
+                    "EMA is off. For full finetune, EMA helps prevent overfitting "
+                    "and produces smoother final weights — recommended with 200+ images."
+                )
+            else:
+                advice = (
+                    "EMA is off. Recommended for most training runs — it maintains "
+                    "a smoothed copy of weights that often produces better results."
+                )
+        else:
+            # EMA is enabled — give relevant advice based on context
+            parts = []
+
+            # VRAM / CPU offload advice
+            if base_model in large_models and not cpu_offload:
+                if vram_gb <= 24:
+                    parts.append(
+                        f"WARNING: {base_model.upper()} + EMA on GPU needs ~4 GB extra VRAM. "
+                        "Enable CPU offload to avoid OOM."
+                    )
+                elif vram_gb <= 48:
+                    parts.append(
+                        "Consider CPU offload — EMA adds ~2-4 GB VRAM overhead."
+                    )
+            elif base_model in medium_models and not cpu_offload and vram_gb <= 16:
+                parts.append(
+                    "Enable CPU offload at this VRAM level to keep EMA without OOM risk."
+                )
+
+            if cpu_offload:
+                parts.append(
+                    "CPU offload active — EMA weights stored in system RAM (needs 16+ GB RAM, <5% speed impact)."
+                )
+
+            # Decay rate advice
+            if is_lora:
+                if decay >= 0.9999:
+                    parts.append(
+                        f"Decay {decay:.5f} is standard. For small datasets (<50 images), "
+                        "try 0.999 for faster adaptation."
+                    )
+                elif decay <= 0.99:
+                    parts.append(
+                        f"Decay {decay:.5f} is aggressive — EMA will track training closely. "
+                        "Increase to 0.9999 for more smoothing."
+                    )
+            else:
+                if decay >= 0.99999:
+                    parts.append(
+                        f"Decay {decay:.5f} is very high — EMA will update slowly. "
+                        "Standard is 0.9999; use higher only for very long runs (5000+ steps)."
+                    )
+                elif decay <= 0.999:
+                    parts.append(
+                        f"Decay {decay:.5f} is low for full finetune — EMA may not smooth enough. "
+                        "Try 0.9999 for better generalization."
+                    )
+                else:
+                    parts.append(f"Decay {decay:.5f} — good for most training scenarios.")
+
+            # Model-specific guidance
+            if base_model in ("flux", "flux2") and is_lora:
+                parts.append(
+                    "Flux LoRA converges fast — compare EMA vs non-EMA outputs at inference."
+                )
+            elif base_model == "zimage" and not is_lora:
+                parts.append(
+                    "Z-Image full finetune: EMA is strongly recommended to prevent "
+                    "quality degradation over long training."
+                )
+
+            advice = " ".join(parts) if parts else (
+                "EMA enabled — maintains a smoothed copy of weights for better generalization."
+            )
+
+        self.ema_advice_label.setText(advice)
 
     def _build_optimizer_tab(self):
         """Build the Optimizer tab with optimizer selection, learning rate,

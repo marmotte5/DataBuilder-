@@ -589,13 +589,41 @@ def _build_notes(
     if num_active_buckets < 5 and total_images > 100:
         notes.append("Few active buckets — tags are very uniformly distributed.")
 
-    # EMA CPU offload note
-    if config.ema_cpu_offload:
-        notes.append(
-            "EMA CPU offload enabled: EMA weights stored in system RAM to save "
-            "~2-4 GB VRAM. Ensure you have sufficient system memory (16+ GB RAM). "
-            "Training speed impact is minimal (<5%)."
-        )
+    # EMA notes — context-aware advice
+    if config.use_ema:
+        if config.ema_cpu_offload:
+            notes.append(
+                f"EMA enabled with CPU offload (decay={config.ema_decay}): "
+                "shadow weights stored in system RAM, saving ~2-4 GB VRAM. "
+                "Requires 16+ GB system RAM. Speed impact <5%."
+            )
+        else:
+            notes.append(
+                f"EMA enabled on GPU (decay={config.ema_decay}): "
+                f"adds ~{2 if is_lora else 4} GB VRAM for shadow weights."
+            )
+        if is_lora and total_images < 50:
+            notes.append(
+                "EMA with small LoRA dataset: consider lowering decay to 0.999 "
+                "for faster adaptation, or disable EMA entirely — LoRA's low "
+                "parameter count already acts as regularization."
+            )
+        elif not is_lora and total_images >= 500:
+            notes.append(
+                "EMA is strongly recommended for large full-finetune runs — "
+                "compare EMA vs non-EMA checkpoints at inference for best results."
+            )
+    elif not config.use_ema:
+        if not is_lora and total_images >= 200:
+            notes.append(
+                "Consider enabling EMA: full finetune with 200+ images benefits "
+                "significantly from weight averaging to prevent overfitting."
+            )
+        elif is_lora and size_cat in ("large", "very_large"):
+            notes.append(
+                "Consider enabling EMA: large LoRA datasets benefit from "
+                "the smoothing effect of exponential weight averaging."
+            )
 
     # Fused backward pass
     if config.fused_backward_pass:
@@ -707,7 +735,17 @@ def _build_notes(
     if not is_lora:
         notes.append("Full finetune: save checkpoints every 100-200 steps.")
         if config.use_ema:
-            notes.append("EMA model often generalizes better — compare both at inference.")
+            if is_flux or is_zimage:
+                notes.append(
+                    f"EMA on {model_type}: large transformers drift easily during training. "
+                    "Save both EMA and non-EMA checkpoints, then compare at inference — "
+                    "EMA typically wins on generalization while non-EMA preserves sharp detail."
+                )
+            else:
+                notes.append(
+                    "EMA model often generalizes better than the raw trained weights. "
+                    "Compare both at inference to pick the best."
+                )
         if config.weight_decay >= 0.1:
             notes.append("Higher weight decay (0.1) for full finetune regularization.")
 
