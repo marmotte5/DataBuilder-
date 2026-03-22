@@ -707,8 +707,10 @@ class GenerateTab(QWidget):
         """Unload the current model, free GPU memory, and reset UI state."""
         if self._worker:
             self._worker.unload_model()
-            # Clear the worker reference so a fresh one is created on next load.
-            # This prevents GPU memory leaks and stale state when switching models.
+            # Wait for the worker thread to finish before dropping the
+            # reference — destroying a running QThread causes a segfault.
+            if self._worker.isRunning():
+                self._worker.wait(5000)
             self._worker = None
         self.model_status.setText("No model loaded")
         self.status_label.setText("Model unloaded.")

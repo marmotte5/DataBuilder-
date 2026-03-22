@@ -318,6 +318,52 @@ class FusedAdamW:
                     denom = state["exp_avg_sq"].sqrt() / bias_correction2_sqrt + self.eps
                     p.data.addcdiv_(m_hat, denom, value=-lr)
 
+    def state_dict(self) -> dict:
+        """Return optimizer state for checkpointing."""
+        # Map param tensor id → index for serializable keys
+        param_to_idx = {}
+        idx = 0
+        for group in self.param_groups:
+            for p in group["params"]:
+                param_to_idx[id(p)] = idx
+                idx += 1
+
+        packed_state = {}
+        for p, s in self.state.items():
+            key = param_to_idx.get(id(p))
+            if key is not None:
+                packed_state[key] = s
+
+        return {
+            "state": packed_state,
+            "step_count": self._step_count,
+            "param_groups": [
+                {k: v for k, v in g.items() if k != "params"}
+                for g in self.param_groups
+            ],
+        }
+
+    def load_state_dict(self, state_dict: dict):
+        """Restore optimizer state from checkpoint."""
+        self._step_count = state_dict.get("step_count", 0)
+
+        # Restore param_group hyperparams (not params themselves)
+        saved_groups = state_dict.get("param_groups", [])
+        for group, saved in zip(self.param_groups, saved_groups):
+            for k, v in saved.items():
+                if k != "params":
+                    group[k] = v
+
+        # Rebuild state keyed by param tensor
+        saved_state = state_dict.get("state", {})
+        idx = 0
+        self.state = {}
+        for group in self.param_groups:
+            for p in group["params"]:
+                if idx in saved_state:
+                    self.state[p] = saved_state[idx]
+                idx += 1
+
     def get_last_lr(self):
         return [g["lr"] for g in self.param_groups]
 
@@ -338,9 +384,16 @@ def fused_mse_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         BLOCK_SIZE = 1024
         grid = (batch_size,)
 
+        # Keep references to contiguous tensors alive until kernel completes.
+        # Without this, .contiguous() on a non-contiguous tensor creates a
+        # temporary whose data_ptr() could be invalidated by GC before the
+        # async GPU kernel reads the memory.
+        pred_c = pred.contiguous()
+        target_c = target.contiguous()
+
         _fused_mse_loss_kernel[grid](
-            pred.contiguous().data_ptr(), target.contiguous().data_ptr(),
-            output.data_ptr(),
+            pred_c, target_c,
+            output,
             inner_size, batch_size,
             BLOCK_SIZE=BLOCK_SIZE,
         )
@@ -367,18 +420,23 @@ def fused_flow_interpolate(
         BLOCK_SIZE = 1024
         grid = (batch_size,)
 
+        # Keep references to contiguous tensors alive (see fused_mse_loss).
+        latents_c = latents.contiguous()
+        noise_c = noise.contiguous()
+        t_c = t.contiguous().float()
+
         _fused_flow_interpolate_kernel[grid](
-            latents.contiguous().data_ptr(),
-            noise.contiguous().data_ptr(),
-            output.data_ptr(),
-            t.contiguous().float().data_ptr(),
+            latents_c,
+            noise_c,
+            output,
+            t_c,
             inner_size, batch_size,
             BLOCK_SIZE=BLOCK_SIZE,
         )
         return output
     else:
         # PyTorch fallback
-        t_view = t.view(-1, 1, 1, 1)
+        t_view = t.view(-1, *([1] * (latents.dim() - 1)))
         return (1 - t_view) * latents + t_view * noise
 
 

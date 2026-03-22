@@ -149,6 +149,17 @@ class FP8LinearWrapper(nn.Module):
             return self.linear(x)
 
         try:
+            # torch._scaled_mm requires 2D inputs. Transformer layers pass
+            # 3D tensors (batch, seq_len, hidden). Reshape to 2D for the
+            # matmul, then restore the original batch dimensions.
+            orig_shape = x.shape
+            # Save original input for fallback — subsequent operations rebind
+            # `x` to reshaped/quantized tensors, so the except handler needs
+            # the untouched original to pass to self.linear().
+            x_orig = x
+            if x.dim() > 2:
+                x = x.reshape(-1, x.shape[-1])
+
             # Quantize input to FP8 E4M3
             x_scale = self.tracker.get_scale(f"{self.name}_input", x, is_forward=True)
             x_fp8 = (x.float() * x_scale).to(_fp8_e4m3)
@@ -162,12 +173,19 @@ class FP8LinearWrapper(nn.Module):
             x_inv = torch.tensor(1.0 / x_scale, device=x.device, dtype=torch.float32)
             w_inv = torch.tensor(1.0 / w_scale, device=x.device, dtype=torch.float32)
 
-            # FP8 matmul
+            # FP8 matmul — some PyTorch versions (2.4-2.5) return
+            # (output, amax) tuple instead of a bare tensor.
             out = torch._scaled_mm(
                 x_fp8, w_fp8.t(),
                 scale_a=x_inv, scale_b=w_inv,
                 out_dtype=x.dtype,
             )
+            if isinstance(out, tuple):
+                out = out[0]
+
+            # Restore original batch dimensions
+            if len(orig_shape) > 2:
+                out = out.reshape(*orig_shape[:-1], out.shape[-1])
 
             if self.linear.bias is not None:
                 out = out + self.linear.bias
@@ -175,8 +193,9 @@ class FP8LinearWrapper(nn.Module):
             return out
 
         except (RuntimeError, TypeError):
-            # Fallback for unsupported shapes or hardware
-            return self.linear(x)
+            # Fallback for unsupported shapes or hardware — use the saved
+            # original input, not the potentially mutated/quantized `x`.
+            return self.linear(x_orig)
 
 
 class FP8TrainingWrapper:
@@ -229,13 +248,17 @@ class FP8TrainingWrapper:
     def _setup_manual(self) -> nn.Module:
         """Replace Linear layers in attention/FF blocks with FP8 versions."""
         converted = 0
-        for name, module in self.model.named_modules():
+        # Snapshot the module list first — mutating the tree during
+        # named_modules() iteration can skip or double-wrap layers.
+        all_modules = list(self.model.named_modules())
+        module_dict = dict(all_modules)
+        for name, module in all_modules:
             # Only convert attention projection and feedforward layers
             # (these are the compute-bound matmuls that benefit from FP8)
             if isinstance(module, nn.Linear):
                 parent_name = name.rsplit(".", 1)[0] if "." in name else ""
                 attr_name = name.rsplit(".", 1)[-1] if "." in name else name
-                parent = dict(self.model.named_modules()).get(parent_name, self.model)
+                parent = module_dict.get(parent_name, self.model)
 
                 # Target attention projections and FF layers
                 if any(pat in name.lower() for pat in

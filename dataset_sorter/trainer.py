@@ -273,6 +273,25 @@ class Trainer:
         self.backend.load_model(model_path)
         log.info(f"Backend: {self.backend.model_name} ({config.model_type})")
 
+        # Cascade Stage C operates on Stage B embeddings, not raw pixels.
+        # Training without latent caching would fail at runtime — catch early.
+        if self.backend.model_name == "cascade" and not config.cache_latents:
+            raise ValueError(
+                "Stable Cascade requires 'Cache Latents' to be enabled. "
+                "Cascade Stage C trains on Stage B embeddings, not raw pixels."
+            )
+
+        # Caching TE outputs + training the TE is contradictory: cached outputs
+        # are frozen snapshots so the TE forward pass never runs during training,
+        # making TE training silently ineffective.
+        if config.cache_text_encoder and (config.train_text_encoder or config.train_text_encoder_2):
+            log.warning(
+                "cache_text_encoder=True with train_text_encoder=True is "
+                "contradictory — the text encoder will NOT receive gradients "
+                "when cached outputs are used. Disabling text encoder caching."
+            )
+            config.cache_text_encoder = False
+
         if progress_fn:
             progress_fn(1, 8, "Applying speed optimizations...")
 
@@ -423,6 +442,18 @@ class Trainer:
             if getattr(self.backend, 'model_name', '') == 'hunyuan':
                 _max_tok_len_2 = 256
 
+            # Backends with custom encoding (multi-layer extraction, 4+ encoders)
+            # that can't be reproduced by the generic per-encoder caching path.
+            _encode_fn = None
+            _model_name = getattr(self.backend, 'model_name', '')
+            if _model_name in ('flux2', 'hidream'):
+                _encode_fn = self.backend.encode_text_batch
+                # HiDream: ensure all 4 encoders are on device for caching
+                if _model_name == 'hidream':
+                    te4 = getattr(self.backend, 'text_encoder_4', None)
+                    if te4 is not None:
+                        te4.to(self.device)
+
             self.dataset.cache_text_encoder_outputs(
                 self.backend.tokenizer, self.backend.text_encoder,
                 self.device, self.dtype,
@@ -434,6 +465,7 @@ class Trainer:
                 caption_preprocessor=_caption_pp,
                 max_token_length=_max_tok_len,
                 max_token_length_2=_max_tok_len_2,
+                encode_fn=_encode_fn,
             )
 
             # Offload text encoders to free VRAM for training
@@ -790,6 +822,7 @@ class Trainer:
 
         grad_accum_steps = config.gradient_accumulation
         running_loss = 0.0
+        _valid_microbatches = 0  # tracks non-NaN micro-batches for correct averaging
 
         # ── VJP Approximation (Feb 2026) ──
         vjp_scaler = None
@@ -822,13 +855,21 @@ class Trainer:
         # ── Fused Backward Pass ──
         fused_backward = None
         if config.fused_backward_pass:
-            from dataset_sorter.speed_optimizations import FusedBackwardPass
-            fused_backward = FusedBackwardPass(
-                self.optimizer, self.scheduler, self.grad_scaler,
-                max_grad_norm=config.max_grad_norm,
-            )
-            fused_backward.install_hooks(self.backend.unet.parameters())
-            log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
+            if config.gradient_accumulation > 1:
+                log.warning(
+                    "Fused backward pass is incompatible with gradient accumulation > 1 "
+                    f"(grad_accum={config.gradient_accumulation}). The optimizer hooks "
+                    "fire on every backward() call, stepping per micro-batch instead of "
+                    "per accumulation window. Disabling fused backward pass."
+                )
+            else:
+                from dataset_sorter.speed_optimizations import FusedBackwardPass
+                fused_backward = FusedBackwardPass(
+                    self.optimizer, self.scheduler, self.grad_scaler,
+                    max_grad_norm=config.max_grad_norm,
+                )
+                fused_backward.install_hooks(self.backend.unet.parameters())
+                log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
 
         # ── Stochastic Rounding for BF16 ──
         sr_hook = None
@@ -889,6 +930,11 @@ class Trainer:
             # Determine how many batches to skip (resume within epoch)
             _skip_batches = _resume_epoch_step if epoch == _resume_epoch else 0
 
+            # Counter for actually-processed batches (excludes skipped/NaN).
+            # Used for gradient accumulation boundaries instead of raw
+            # dataloader index, which misaligns after resume or NaN skips.
+            _accum_count = 0
+
             # Choose iteration source: zero-bottleneck loader or standard DataLoader
             if _zero_loader is not None:
                 _batch_iter = enumerate(_zero_loader.epoch_iterator(shuffle=True))
@@ -921,12 +967,17 @@ class Trainer:
                     _speculative_predictor.speculate()
 
                 # ── Forward + loss ──
+                _fp8_ctx = self._fp8_wrapper.fp8_context() if self._fp8_wrapper is not None else None
                 if _zero_loader is not None:
                     # Zero-bottleneck path: data already on GPU, skip _training_step
                     latents = batch["latents"]
                     te_out = batch.get("te_out", ())
                     bsz = latents.shape[0]
-                    loss = self.backend.training_step(latents, te_out, bsz)
+                    if _fp8_ctx is not None:
+                        with _fp8_ctx:
+                            loss = self.backend.training_step(latents, te_out, bsz)
+                    else:
+                        loss = self.backend.training_step(latents, te_out, bsz)
                 else:
                     # ── Track last caption for sample generation ──
                     if "caption" in batch:
@@ -936,7 +987,7 @@ class Trainer:
                         elif isinstance(cap, str):
                             self._last_batch_caption = cap
 
-                    loss = self._training_step(batch)
+                    loss = self._training_step(batch, _fp8_ctx)
                 loss = loss / grad_accum_steps
 
                 # ── NaN guard: skip backward if loss is NaN/Inf ──
@@ -961,9 +1012,11 @@ class Trainer:
                     _speculative_predictor.correct(self.optimizer)
 
                 running_loss += loss.item()
+                _valid_microbatches += 1
+                _accum_count += 1
 
                 # ── Optimizer step (on accumulation boundary) ──
-                if (step + 1) % grad_accum_steps == 0:
+                if _accum_count % grad_accum_steps == 0:
                     if fused_backward is not None:
                         # Fused backward: optimizer stepped during backward via hooks
                         fused_backward.finish_step()
@@ -1024,9 +1077,16 @@ class Trainer:
                         self.ema_model.update(self.backend.unet.parameters())
 
                     self.state.global_step += 1
-                    self.state.loss = running_loss
+                    # Each micro-batch loss was divided by grad_accum_steps.
+                    # If NaN skips reduced the count, rescale to get the
+                    # correct mean rather than a biased-low value.
+                    if _valid_microbatches > 0 and _valid_microbatches < grad_accum_steps:
+                        self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
+                    else:
+                        self.state.loss = running_loss
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
+                    _valid_microbatches = 0
 
                     # ── TensorBoard logging ──
                     if self._tb_logger is not None and self._tb_logger.available:
@@ -1136,6 +1196,7 @@ class Trainer:
                     # ── DPO fine-tuning step using collected preferences ──
                     if (config.rlhf_enabled and
                             config.rlhf_dpo_rounds > 0 and
+                            config.rlhf_collect_every_n_steps > 0 and
                             self.state.global_step % config.rlhf_collect_every_n_steps == 0):
                         self._apply_dpo_from_preferences()
 
@@ -1241,7 +1302,7 @@ class Trainer:
         if progress_fn:
             progress_fn(self.total_steps, self.total_steps, "Training complete!")
 
-    def _training_step(self, batch) -> torch.Tensor:
+    def _training_step(self, batch, fp8_ctx=None) -> torch.Tensor:
         """Single training step — delegates loss to backend."""
         config = self.config
 
@@ -1311,7 +1372,12 @@ class Trainer:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
                 pooled = te_cache[1]
                 if pooled is not None:
-                    pooled = pooled.to(self.device, dtype=self.dtype, non_blocking=True)
+                    # Attention masks (Z-Image) are integer tensors — preserve
+                    # their dtype instead of casting to training float dtype.
+                    if pooled.is_floating_point():
+                        pooled = pooled.to(self.device, dtype=self.dtype, non_blocking=True)
+                    else:
+                        pooled = pooled.to(self.device, non_blocking=True)
                 te_out = (encoder_hidden, pooled)
             else:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
@@ -1398,16 +1464,16 @@ class Trainer:
         # Removed redundant outer autocast that caused double nesting and confused
         # precision semantics (loss .float() casts ran under outer autocast).
         bsz = latents.shape[0]
-        loss = self.backend.training_step(latents, te_out, bsz)
+        if fp8_ctx is not None:
+            with fp8_ctx:
+                loss = self.backend.training_step(latents, te_out, bsz)
+        else:
+            loss = self.backend.training_step(latents, te_out, bsz)
 
-        # ── Apply adaptive sample weights to loss ──
-        if hasattr(self.backend, '_adaptive_sample_weights') and self.backend._adaptive_sample_weights is not None:
-            weights = self.backend._adaptive_sample_weights
-            if loss.dim() == 0:
-                loss = loss * weights.mean()
-            elif loss.shape[0] == weights.shape[0]:
-                loss = (loss * weights).mean()
-            self.backend._adaptive_sample_weights = None
+        # NOTE: Adaptive sample weights are now applied inside the backend's
+        # training_step/flow_training_step BEFORE .mean(), so each sample
+        # gets its own weight. Previously they were applied here after
+        # .mean() which collapsed per-sample weights to a single average.
 
         # ── Curriculum learning: update per-image loss tracking ──
         if self._curriculum_sampler is not None and "index" in batch:
@@ -1476,8 +1542,22 @@ class Trainer:
                     self.device, dtype=self.dtype
                 )
 
+                # Ensure VAE is on device (it may have been offloaded after
+                # latent caching). Move it back temporarily for DPO encoding.
+                vae_was_offloaded = False
+                if hasattr(self.backend, 'vae') and self.backend.vae is not None:
+                    vae_device = next(self.backend.vae.parameters()).device
+                    if vae_device != self.device:
+                        self.backend.vae.to(self.device)
+                        vae_was_offloaded = True
+
                 chosen_latents = self.backend.prepare_latents(chosen_tensor)
                 rejected_latents = self.backend.prepare_latents(rejected_tensor)
+
+                # Offload VAE again to free VRAM
+                if vae_was_offloaded:
+                    self.backend.vae.to("cpu")
+                    empty_cache()
 
                 # Encode prompt
                 te_out = self.backend.encode_text_batch([pair.prompt])
@@ -1496,8 +1576,27 @@ class Trainer:
 
             if dpo_losses:
                 total_dpo_loss = sum(dpo_losses) / len(dpo_losses)
-                total_dpo_loss.backward()
-                self.optimizer.step()
+
+                # Use GradScaler if active (fp16 training) to avoid
+                # unscaled gradients that may underflow.
+                if self.grad_scaler is not None:
+                    self.grad_scaler.scale(total_dpo_loss).backward()
+                    self.grad_scaler.unscale_(self.optimizer)
+                    if config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
+                            config.max_grad_norm,
+                        )
+                    self.grad_scaler.step(self.optimizer)
+                    self.grad_scaler.update()
+                else:
+                    total_dpo_loss.backward()
+                    if config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
+                            config.max_grad_norm,
+                        )
+                    self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 log.info(
                     f"DPO step applied: {len(dpo_losses)} pairs, "
@@ -1517,6 +1616,16 @@ class Trainer:
 
         if is_lora:
             self.backend.save_lora(save_dir)
+            # Save fine-tuned text encoder weights alongside LoRA adapter.
+            # Without this, TE training progress is lost on resume.
+            if config.train_text_encoder and self.backend.text_encoder is not None:
+                te_path = save_dir / "text_encoder"
+                te_path.mkdir(exist_ok=True)
+                self.backend.text_encoder.save_pretrained(str(te_path))
+            if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
+                te2_path = save_dir / "text_encoder_2"
+                te2_path.mkdir(exist_ok=True)
+                self.backend.text_encoder_2.save_pretrained(str(te2_path))
         elif self.backend.pipeline is not None:
             self.backend.pipeline.save_pretrained(str(save_dir))
         else:
@@ -1596,6 +1705,15 @@ class Trainer:
         if self.backend.vae is not None:
             self.backend.vae.to(self.device, dtype=self.dtype)
 
+        # Move text encoders to GPU for pipeline prompt encoding.
+        # They may have been offloaded to CPU after TE output caching.
+        _te_moved = []
+        for te in (self.backend.text_encoder, self.backend.text_encoder_2,
+                   getattr(self.backend, "text_encoder_3", None)):
+            if te is not None and next(te.parameters(), torch.tensor(0)).device.type == "cpu":
+                te.to(self.device)
+                _te_moved.append(te)
+
         try:
             # Use last training caption if available, fall back to config prompts
             if self._last_batch_caption:
@@ -1620,6 +1738,12 @@ class Trainer:
             # Always offload VAE to prevent GPU memory leak on error
             if config.cache_latents and self.backend.vae is not None:
                 self.backend.vae.cpu()
+
+            # Offload text encoders back to CPU if we moved them
+            for te in _te_moved:
+                te.cpu()
+            if _te_moved:
+                empty_cache()
 
             self.state.phase = "training"
 
@@ -1844,6 +1968,63 @@ class Trainer:
         log.info(f"Backup saved to {backup_dir}")
         self.state.phase = "training"
 
+    def _check_lora_compatibility(self, adapter_config_path: Path):
+        """Warn if the saved LoRA adapter targets different modules than the current model.
+
+        This catches the case where a user resumes training with a different
+        model architecture (e.g. SDXL checkpoint resumed on Flux model).
+        """
+        import json
+        try:
+            with open(adapter_config_path) as f:
+                saved_config = json.load(f)
+            saved_modules = set(saved_config.get("target_modules", []))
+            if not saved_modules:
+                return
+            current_modules = set(self.backend._get_lora_target_modules())
+            if saved_modules != current_modules:
+                log.warning(
+                    f"LoRA adapter target_modules mismatch! "
+                    f"Checkpoint targets: {sorted(saved_modules)}, "
+                    f"current model targets: {sorted(current_modules)}. "
+                    f"This may indicate the checkpoint was saved for a different model architecture."
+                )
+        except Exception as e:
+            log.debug(f"Could not check LoRA compatibility: {e}")
+
+    def _resume_text_encoders(self, checkpoint_dir: Path):
+        """Restore fine-tuned text encoder weights from a checkpoint directory.
+
+        Looks for text_encoder/ and text_encoder_2/ subdirectories saved
+        by _save_checkpoint when train_text_encoder was enabled.
+        """
+        config = self.config
+        for attr_name, dir_name, train_flag in [
+            ("text_encoder", "text_encoder", config.train_text_encoder),
+            ("text_encoder_2", "text_encoder_2", getattr(config, "train_text_encoder_2", False)),
+        ]:
+            te_dir = checkpoint_dir / dir_name
+            if not te_dir.exists() or not train_flag:
+                continue
+            encoder = getattr(self.backend, attr_name, None)
+            if encoder is None:
+                continue
+            try:
+                from safetensors.torch import load_file
+                weight_files = list(te_dir.glob("*.safetensors"))
+                if weight_files:
+                    te_state = {}
+                    for wf in weight_files:
+                        te_state.update(load_file(str(wf)))
+                    missing, unexpected = encoder.load_state_dict(te_state, strict=False)
+                    if missing:
+                        log.warning(f"TE resume ({dir_name}): {len(missing)} missing keys")
+                    log.info(f"Restored fine-tuned {dir_name} weights from checkpoint")
+                else:
+                    log.debug(f"No .safetensors in {te_dir}, skipping TE restore")
+            except Exception as e:
+                log.warning(f"Could not restore {dir_name} weights: {e}")
+
     def resume_from_checkpoint(self, checkpoint_dir: Path):
         """Resume training from a saved checkpoint."""
         state_path = checkpoint_dir / "training_state.pt"
@@ -1882,6 +2063,8 @@ class Trainer:
             # Check for LoRA adapter files
             adapter_config = checkpoint_dir / "adapter_config.json"
             if adapter_config.exists() and self.backend.unet is not None:
+                # Validate adapter compatibility with current model
+                self._check_lora_compatibility(adapter_config)
                 try:
                     if isinstance(self.backend.unet, PeftModel):
                         self.backend.unet.load_adapter(str(checkpoint_dir), "default")
@@ -1895,6 +2078,9 @@ class Trainer:
                     log.info("Restored LoRA weights from checkpoint")
                 except Exception as e:
                     log.warning(f"Could not restore LoRA weights: {e}")
+
+            # Restore fine-tuned text encoder weights saved alongside LoRA
+            self._resume_text_encoders(checkpoint_dir)
         else:
             # Full finetune — reload updated weights from checkpoint.
             # pipeline.save_pretrained saves the full model structure;

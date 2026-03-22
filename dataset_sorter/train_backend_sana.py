@@ -52,6 +52,10 @@ class SanaBackend(TrainBackendBase):
         self.vae = pipe.vae
         self.noise_scheduler = pipe.scheduler
 
+        # Sana uses DC-AE with 32x spatial compression (not the usual 8x).
+        # This is used by flow_training_step to compute image_hw from latents.
+        self.vae_scale_factor = 32
+
         if self.vae is not None:
             self.vae.to(self.device, dtype=self.dtype)
             self.vae.requires_grad_(False)
@@ -80,7 +84,7 @@ class SanaBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out = self.text_encoder(**tokens)
             encoder_hidden = out.last_hidden_state
 
@@ -88,18 +92,13 @@ class SanaBackend(TrainBackendBase):
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
-        """Build the additional conditioning dict containing target resolution.
+        """Sana's transformer does not accept ``added_cond_kwargs``.
 
-        Sana conditions on image resolution so the model can handle variable sizes.
-        Falls back to the configured default resolution when image_hw is not provided.
+        Return ``None`` so that ``flow_training_step`` skips the kwarg entirely.
+        Resolution information is handled internally by the model architecture
+        (DC-AE positional embeddings), not through explicit conditioning.
         """
-        if image_hw is not None:
-            h, w = image_hw
-        else:
-            h = w = self.config.resolution
-        return {
-            "resolution": torch.tensor([h, w], dtype=self.dtype, device=self.device).unsqueeze(0).expand(batch_size, -1),
-        }
+        return None
 
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,

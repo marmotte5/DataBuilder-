@@ -38,7 +38,7 @@ SCHEDULER_MAP = {
 # or similar) because standard schedulers lack the `mu`/`shift` parameters
 # required by the flow-matching timestep schedule.
 FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
-                        "auraflow", "hidream"}
+                        "auraflow", "hidream", "sana", "pixart"}
 
 # ── Model type → pipeline class ────────────────────────────────────────────
 PIPELINE_MAP = {
@@ -49,12 +49,16 @@ PIPELINE_MAP = {
     "sd3":      ("diffusers", "StableDiffusion3Pipeline"),
     "sd35":     ("diffusers", "StableDiffusion3Pipeline"),
     "flux":     ("diffusers", "FluxPipeline"),
+    "flux2":    ("diffusers", "DiffusionPipeline"),
     "pixart":   ("diffusers", "PixArtSigmaPipeline"),
     "sana":     ("diffusers", "SanaPipeline"),
     "kolors":   ("diffusers", "KolorsPipeline"),
     "cascade":  ("diffusers", "StableCascadeCombinedPipeline"),
     "hunyuan":  ("diffusers", "HunyuanDiTPipeline"),
     "auraflow": ("diffusers", "AuraFlowPipeline"),
+    "zimage":   ("diffusers", "DiffusionPipeline"),
+    "chroma":   ("diffusers", "DiffusionPipeline"),
+    "hidream":  ("diffusers", "DiffusionPipeline"),
 }
 
 # Models that need trust_remote_code
@@ -108,7 +112,12 @@ def _detect_model_type_from_keys(model_path: str) -> str:
     if _any("model.diffusion_model."):
         if _any("conditioner.embedders."):
             return "sdxl"  # dual CLIP → SDXL/Pony
-        return "sd15"  # single CLIP → SD 1.x / 2.x
+        # SD2 uses OpenCLIP (cond_stage_model.model.transformer.) while
+        # SD1.5 uses HF CLIP (cond_stage_model.transformer.). Distinguish
+        # to avoid using the wrong prediction type and text encoder.
+        if _any("cond_stage_model.model."):
+            return "sd2"
+        return "sd15"
 
     # ── Transformer-based architectures ──────────────────────────────
     # Flux / Flux2: distinctive double_blocks + single_blocks
@@ -141,7 +150,7 @@ def _detect_model_type_from_keys(model_path: str) -> str:
         "all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
         "context_refiner", "noise_refiner", "t_embedder", "x_pad_token",
     }
-    top_level = {k.split(".")[0] for k in list(keys)[:200]}
+    top_level = {k.split(".")[0] for k in keys}
     if top_level & _ZIMAGE_PREFIXES:
         return "zimage"
 
@@ -352,6 +361,12 @@ class GenerateWorker(QThread):
             else:
                 self.error.emit(f"{e}\n\n{traceback.format_exc()}")
             self.finished_generating.emit(False, str(e))
+            # Unload on load failures to free VRAM from partial pipeline.
+            if self._mode == "load":
+                try:
+                    self.unload_model()
+                except Exception as ue:
+                    log.debug(f"Unload model during OSError cleanup failed: {ue}")
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
@@ -380,6 +395,12 @@ class GenerateWorker(QThread):
         import torch
 
         self.progress.emit(0, 100, "Loading model...")
+
+        # Unload any previously loaded pipeline to free GPU memory before
+        # allocating the new one. Without this, switching models (e.g. Flux
+        # after SDXL) holds both pipelines in VRAM simultaneously, causing OOM.
+        if self.pipe is not None:
+            self.unload_model()
 
         # Determine device
         if torch.cuda.is_available():
@@ -410,46 +431,60 @@ class GenerateWorker(QThread):
         # Load pipeline
         pipe = self._load_pipeline(model_path, model_type, dtype)
         if pipe is None:
-            self.error.emit(f"Failed to load pipeline for model type: {model_type}")
+            msg = f"Failed to load pipeline for model type: {model_type}"
+            self.error.emit(msg)
+            self.finished_generating.emit(False, msg)
             return
 
-        self.progress.emit(50, 100, "Applying optimizations...")
+        # Wrap post-load setup in try/except so the local `pipe` is freed on
+        # failure.  Without this, an exception between _load_pipeline() and the
+        # assignment to self.pipe leaves a GPU-resident pipeline unreachable,
+        # leaking potentially 5-20 GB of VRAM until process exit.
+        try:
+            self.progress.emit(50, 100, "Applying optimizations...")
 
-        # Enable memory optimizations — cpu_offload must be called INSTEAD of
-        # pipe.to(device), not after it, otherwise the model is already fully on
-        # GPU and offloading has no effect (OOM on low-VRAM GPUs).
-        _use_cpu_offload = False
-        if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
-            try:
-                vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                if vram < 16:
-                    _use_cpu_offload = True
-            except Exception as e:
-                log.debug(f"VRAM detection failed: {e}")
+            # Enable memory optimizations — cpu_offload must be called INSTEAD of
+            # pipe.to(device), not after it, otherwise the model is already fully on
+            # GPU and offloading has no effect (OOM on low-VRAM GPUs).
+            _use_cpu_offload = False
+            if hasattr(pipe, "enable_model_cpu_offload") and self._device.type == "cuda":
+                try:
+                    vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                    if vram < 16:
+                        _use_cpu_offload = True
+                except Exception as e:
+                    log.debug(f"VRAM detection failed: {e}")
 
-        if _use_cpu_offload:
-            pipe.enable_model_cpu_offload()
-        else:
-            try:
-                pipe = pipe.to(self._device, dtype=dtype)
-            except Exception:
-                pipe = pipe.to(self._device)
+            if _use_cpu_offload:
+                pipe.enable_model_cpu_offload()
+            else:
+                try:
+                    pipe = pipe.to(self._device, dtype=dtype)
+                except Exception:
+                    pipe = pipe.to(self._device)
 
-        if hasattr(pipe, "enable_vae_slicing"):
-            pipe.enable_vae_slicing()
-        if hasattr(pipe, "enable_vae_tiling"):
-            pipe.enable_vae_tiling()
+            if hasattr(pipe, "enable_vae_slicing"):
+                pipe.enable_vae_slicing()
+            if hasattr(pipe, "enable_vae_tiling"):
+                pipe.enable_vae_tiling()
 
-        self.progress.emit(70, 100, "Loading LoRA adapters...")
+            self.progress.emit(70, 100, "Loading LoRA adapters...")
 
-        # Load LoRA adapters
-        if self._lora_adapters:
-            self._load_loras(pipe, self._lora_adapters)
+            # Load LoRA adapters
+            if self._lora_adapters:
+                self._load_loras(pipe, self._lora_adapters)
 
-        self.progress.emit(90, 100, "Finalizing...")
+            self.progress.emit(90, 100, "Finalizing...")
 
-        with self._lock:
-            self.pipe = pipe
+            with self._lock:
+                self.pipe = pipe
+        except Exception:
+            # Free the local pipeline to release VRAM before re-raising
+            del pipe
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise
+
         self.progress.emit(100, 100, "Model loaded!")
         self.model_loaded.emit(
             f"Loaded {model_type} on {self._device} ({dtype.__name__ if hasattr(dtype, '__name__') else dtype})"
@@ -797,13 +832,16 @@ class GenerateWorker(QThread):
 
     # ── Image generation ────────────────────────────────────────────────
 
-    def _build_png_metadata(self, seed: int) -> PngInfo:
+    def _build_png_metadata(self, seed: int) -> tuple[PngInfo, str]:
         """Build PNG tEXt metadata chunks in Automatic1111's format.
 
         Writes a 'parameters' chunk with the prompt, negative prompt, and
         settings on separate lines, matching the format that Civitai and
         A1111's PNG Info tab can parse. Also stores individual fields (seed,
         steps, etc.) as separate chunks for programmatic access.
+
+        Returns (PngInfo, parameters_string) so callers can use the
+        parameters string directly without parsing internal PngInfo chunks.
         """
         pnginfo = PngInfo()
 
@@ -836,7 +874,8 @@ class GenerateWorker(QThread):
             settings.append(f"LoRA: {', '.join(lora_parts)}")
 
         params_parts.append(", ".join(settings))
-        pnginfo.add_text("parameters", "\n".join(params_parts))
+        parameters_str = "\n".join(params_parts)
+        pnginfo.add_text("parameters", parameters_str)
 
         # Individual fields for programmatic access
         pnginfo.add_text("seed", str(seed))
@@ -847,13 +886,17 @@ class GenerateWorker(QThread):
         pnginfo.add_text("width", str(self.width))
         pnginfo.add_text("height", str(self.height))
 
-        return pnginfo
+        return pnginfo, parameters_str
 
-    def _get_pipeline_for_mode(self):
+    def _get_pipeline_for_mode(self, pipe_ref, init_img, mask_img):
         """Select the appropriate pipeline variant for the current generation mode.
 
-        If both init_image and mask_image are set, creates an inpaint pipeline
-        (supported for SD1.5/SD2/SDXL/Pony). If only init_image is set, creates
+        Uses the lock-protected ``pipe_ref`` snapshot instead of ``self.pipe``
+        so that a concurrent ``unload_model()`` call cannot cause an
+        ``AttributeError`` on a ``None`` pipeline.
+
+        If both init_img and mask_img are set, creates an inpaint pipeline
+        (supported for SD1.5/SD2/SDXL/Pony). If only init_img is set, creates
         an img2img pipeline (supported for SD1.5-Flux). Both are constructed
         from the loaded pipeline's components. Falls back to the base txt2img
         pipeline if the specialized variant is unavailable or fails to init.
@@ -862,7 +905,7 @@ class GenerateWorker(QThread):
 
         model_type = self._model_type
 
-        if self.mask_image is not None and self.init_image is not None:
+        if mask_img is not None and init_img is not None:
             # Inpainting mode
             inpaint_map = {
                 "sd15": "StableDiffusionInpaintPipeline",
@@ -874,12 +917,12 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**self.pipe.components)
+                    return cls(**pipe_ref.components)
                 except Exception as e:
                     log.warning(f"Could not create inpaint pipeline: {e}, falling back to txt2img")
-            return self.pipe
+            return pipe_ref
 
-        if self.init_image is not None:
+        if init_img is not None:
             # img2img mode
             img2img_map = {
                 "sd15": "StableDiffusionImg2ImgPipeline",
@@ -894,12 +937,12 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**self.pipe.components)
+                    return cls(**pipe_ref.components)
                 except Exception as e:
                     log.warning(f"Could not create img2img pipeline: {e}, falling back to txt2img")
-            return self.pipe
+            return pipe_ref
 
-        return self.pipe
+        return pipe_ref
 
     def _do_generate(self):
         """Run the image generation loop.
@@ -919,6 +962,10 @@ class GenerateWorker(QThread):
             if self.pipe is None:
                 self.error.emit("No model loaded. Load a model first.")
                 return
+            # Take a local reference under the lock so a concurrent
+            # unload_model() call cannot set self.pipe = None between
+            # the check above and the scheduler/pipeline access below.
+            pipe_ref = self.pipe
 
         # Snapshot all generation params so UI changes mid-batch are safe
         model_type = self._model_type
@@ -939,10 +986,10 @@ class GenerateWorker(QThread):
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
-        _load_scheduler(self.pipe, scheduler_name, model_type)
+        _load_scheduler(pipe_ref, scheduler_name, model_type)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
-        active_pipe = self._get_pipeline_for_mode()
+        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
         succeeded = 0
         for i in range(total):
@@ -1004,13 +1051,9 @@ class GenerateWorker(QThread):
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
-                pnginfo = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(current_seed)
                 img.info["pnginfo"] = pnginfo
-                # Store parameters string for UI display
-                for chunk_type, chunk_data, *_ in pnginfo.chunks:
-                    if chunk_type == "tEXt" and chunk_data.startswith(b"parameters\x00"):
-                        img.info["parameters"] = chunk_data.split(b"\x00", 1)[1].decode("latin-1")
-                        break
+                img.info["parameters"] = parameters_str
 
                 # Build display info
                 mode_str = "txt2img"

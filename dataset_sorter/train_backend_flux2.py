@@ -38,7 +38,10 @@ class Flux2Backend(TrainBackendBase):
     # Layer indices to extract hidden states from the LLM encoder
     _hidden_state_layers = [10, 20, 30]
 
-    _HF_FALLBACK_REPO = "black-forest-labs/FLUX.1-dev"  # Flux2 base
+    # NOTE: Flux 2 has a fundamentally different architecture from Flux 1
+    # (LLM text encoder instead of CLIP+T5, different transformer). Using
+    # a Flux 1 repo as fallback would silently produce a corrupted model.
+    _HF_FALLBACK_REPO = None
 
     def load_model(self, model_path: str):
         from diffusers import DiffusionPipeline
@@ -99,7 +102,7 @@ class Flux2Backend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             out = self.text_encoder(
                 **tokens,
                 output_hidden_states=True,

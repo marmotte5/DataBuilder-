@@ -644,6 +644,10 @@ class FusedBackwardPass:
         self._hooks: list = []
         self._param_to_group: dict = {}
         self._stepped = False
+        # Accumulate per-parameter squared norms for global gradient clipping.
+        # Each hook records its grad norm; the last hook to fire applies the clip.
+        self._grad_norms_sq: dict = {}
+        self._grads_received: int = 0
 
     def install_hooks(self, parameters):
         """Register post-accumulate-grad hooks on trainable parameters."""
@@ -672,76 +676,122 @@ class FusedBackwardPass:
 
         log.info(f"Fused backward pass: installed hooks on {self._total_hooked} parameters")
 
-    def _make_hook(self, param):
-        """Create a hook that applies the optimizer update for a single parameter.
+    def _apply_update(self, p):
+        """Apply the optimizer update for a single parameter."""
+        group_idx = self._param_to_group[p]
+        group = self.optimizer.param_groups[group_idx]
+        lr = group["lr"]
+        grad = p.grad
+        wd = group.get("weight_decay", 0.0)
 
-        Instead of calling optimizer.step() (which incorrectly increments the
-        global step counter per-parameter), we manually apply the optimizer
-        update using the parameter's state dict entry. This preserves correct
-        bias correction and adaptive LR behavior.
+        if "betas" in group:
+            # Adam/AdamW-style update with per-parameter EMA
+            state = self.optimizer.state.get(p, {})
+            if not state:
+                state["step"] = 0
+                state["exp_avg"] = torch.zeros_like(p)
+                state["exp_avg_sq"] = torch.zeros_like(p)
+                self.optimizer.state[p] = state
+
+            state["step"] += 1
+            step = state["step"]
+            beta1, beta2 = group["betas"]
+            eps = group.get("eps", 1e-8)
+
+            # Decoupled weight decay
+            if wd > 0:
+                p.data.mul_(1 - lr * wd)
+
+            # EMA updates
+            state["exp_avg"].lerp_(grad, 1 - beta1)
+            state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+            # Bias correction
+            bc1 = 1 - beta1 ** step
+            bc2 = 1 - beta2 ** step
+            step_size = lr / bc1
+            denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
+            p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
+        else:
+            # SGD-style update
+            if wd > 0:
+                grad = grad.add(p.data, alpha=wd)
+            momentum = group.get("momentum", 0)
+            if momentum > 0:
+                state = self.optimizer.state.get(p, {})
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = grad.clone()
+                    self.optimizer.state[p] = state
+                else:
+                    state["momentum_buffer"].mul_(momentum).add_(grad)
+                grad = state["momentum_buffer"]
+            p.data.add_(grad, alpha=-lr)
+
+        p.grad = None  # Free gradient memory immediately
+
+    def _make_hook(self, param):
+        """Create a hook that collects gradients and applies updates.
+
+        When gradient clipping is enabled, we must collect all gradient norms
+        first and apply a single global clip factor.  The last parameter to
+        receive its gradient triggers the clip + update for all parameters.
+        Without clipping, each parameter is updated immediately for maximum
+        overlap with the backward pass.
         """
         def hook(p):
             if p.grad is None:
                 return
+
             if self.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_([p], self.max_grad_norm)
+                # Collect this parameter's grad norm and defer the update
+                # until all gradients are available for global clipping.
+                self._grad_norms_sq[p] = p.grad.detach().float().pow(2).sum()
+                self._grads_received += 1
 
-            group_idx = self._param_to_group[p]
-            group = self.optimizer.param_groups[group_idx]
-            lr = group["lr"]
-            grad = p.grad
-            wd = group.get("weight_decay", 0.0)
-
-            if "betas" in group:
-                # Adam/AdamW-style update with per-parameter EMA
-                state = self.optimizer.state.get(p, {})
-                if not state:
-                    state["step"] = 0
-                    state["exp_avg"] = torch.zeros_like(p)
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-                    self.optimizer.state[p] = state
-
-                state["step"] += 1
-                step = state["step"]
-                beta1, beta2 = group["betas"]
-                eps = group.get("eps", 1e-8)
-
-                # Decoupled weight decay
-                if wd > 0:
-                    p.data.mul_(1 - lr * wd)
-
-                # EMA updates
-                state["exp_avg"].lerp_(grad, 1 - beta1)
-                state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-
-                # Bias correction
-                bc1 = 1 - beta1 ** step
-                bc2 = 1 - beta2 ** step
-                step_size = lr / bc1
-                denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
-                p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
+                if self._grads_received >= self._total_hooked:
+                    # All gradients ready — compute global norm and clip
+                    total_norm = torch.stack(list(self._grad_norms_sq.values())).sum().sqrt().item()
+                    clip_coef = self.max_grad_norm / max(total_norm, self.max_grad_norm)
+                    if clip_coef < 1.0:
+                        for pp in self._grad_norms_sq:
+                            if pp.grad is not None:
+                                pp.grad.mul_(clip_coef)
+                    # Now apply updates for all collected parameters
+                    for pp in self._grad_norms_sq:
+                        if pp.grad is not None:
+                            self._apply_update(pp)
+                    self._grad_norms_sq.clear()
+                    self._grads_received = 0
+                    self._stepped = True
+                    self._params_processed = self._total_hooked
             else:
-                # SGD-style update
-                if wd > 0:
-                    grad = grad.add(p.data, alpha=wd)
-                momentum = group.get("momentum", 0)
-                if momentum > 0:
-                    state = self.optimizer.state.get(p, {})
-                    if "momentum_buffer" not in state:
-                        state["momentum_buffer"] = grad.clone()
-                        self.optimizer.state[p] = state
-                    else:
-                        state["momentum_buffer"].mul_(momentum).add_(grad)
-                    grad = state["momentum_buffer"]
-                p.data.add_(grad, alpha=-lr)
-
-            p.grad = None  # Free gradient memory immediately
-            self._stepped = True
-            self._params_processed += 1
+                # No clipping — update immediately for maximum overlap
+                self._apply_update(p)
+                self._stepped = True
+                self._params_processed += 1
         return hook
 
     def finish_step(self):
-        """Call after loss.backward() to update scheduler and bookkeeping."""
+        """Call after loss.backward() to update scheduler and bookkeeping.
+
+        Also flushes any deferred gradient-clipped updates if some parameters
+        had None gradients and the collection never reached _total_hooked.
+        """
+        if self._grad_norms_sq:
+            # Some params had gradients but the total count never reached
+            # _total_hooked (some params had None grads). Flush now.
+            total_norm = torch.stack(list(self._grad_norms_sq.values())).sum().sqrt().item()
+            clip_coef = self.max_grad_norm / max(total_norm, self.max_grad_norm)
+            if clip_coef < 1.0:
+                for pp in self._grad_norms_sq:
+                    if pp.grad is not None:
+                        pp.grad.mul_(clip_coef)
+            for pp in self._grad_norms_sq:
+                if pp.grad is not None:
+                    self._apply_update(pp)
+            self._grad_norms_sq.clear()
+            self._grads_received = 0
+            self._stepped = True
         if self._stepped and self.scheduler is not None:
             self.scheduler.step()
         self._stepped = False

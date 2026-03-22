@@ -70,6 +70,7 @@ class TrainBackendBase(ABC):
         self._token_weight_mask: Optional[torch.Tensor] = None  # Per-step token weights
         self._timestep_ema_sampler = None  # Per-timestep EMA sampler (set by trainer)
         self._training_mask: Optional[torch.Tensor] = None  # Spatial mask [B,1,H,W] for masked training
+        self._training_te: bool = False  # Set True when TE is being trained (disables no_grad in encode_text_batch)
 
     # ── Abstract methods (model-specific) ──────────────────────────────
 
@@ -151,8 +152,10 @@ class TrainBackendBase(ABC):
             target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
         else:
             target = noise
-        # Use Triton fused MSE+cast kernel when available (~15% faster)
-        if self.config.triton_fused_loss:
+        # Use Triton fused MSE+cast kernel when available (~15% faster).
+        # Fall back to standard path when spatial masks are active (fused
+        # kernel returns per-sample means, but masking needs unreduced loss).
+        if self.config.triton_fused_loss and self._training_mask is None:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
@@ -185,7 +188,7 @@ class TrainBackendBase(ABC):
     ) -> torch.Tensor:
         """Flow matching loss: target = noise - latents."""
         target = noise.float() - latents.float()
-        if self.config.triton_fused_loss:
+        if self.config.triton_fused_loss and self._training_mask is None:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
         loss = F.mse_loss(noise_pred.float(), target, reduction="none")
@@ -204,7 +207,10 @@ class TrainBackendBase(ABC):
                 self._speed_sampler = SpeedTimestepSampler(device=self.device)
             return self._speed_sampler.sample_flow_timesteps(batch_size)
 
-        u = torch.rand(batch_size, device=self.device, dtype=self.dtype)
+        # Use float32 for timestep sampling — bfloat16 has only 8 bits of
+        # mantissa (~256 distinct values in [0,1]), severely quantizing the
+        # timestep distribution and reducing training diversity.
+        u = torch.rand(batch_size, device=self.device, dtype=torch.float32)
         if sampling == "logit_normal":
             # Configurable logit-normal: sigmoid(N(mu, sigma^2))
             mu = getattr(self.config, 'logit_normal_mu', 0.0)
@@ -388,11 +394,13 @@ class TrainBackendBase(ABC):
         self.unet = get_peft_model(self.unet, lora_config)
         self.unet.train()
 
-        # Update pipeline reference (handle both UNet and transformer models)
+        # Update pipeline reference (handle both UNet and transformer models).
+        # Check getattr value, not hasattr, because transformer pipelines
+        # define 'unet' as an optional component (exists but is None).
         if self.pipeline is not None:
-            if hasattr(self.pipeline, "transformer") and not hasattr(self.pipeline, "unet"):
+            if hasattr(self.pipeline, "transformer") and getattr(self.pipeline, "unet", None) is None:
                 self.pipeline.transformer = self.unet
-            elif hasattr(self.pipeline, "prior") and not hasattr(self.pipeline, "unet"):
+            elif hasattr(self.pipeline, "prior") and getattr(self.pipeline, "unet", None) is None:
                 self.pipeline.prior = self.unet
             else:
                 self.pipeline.unet = self.unet
@@ -456,6 +464,18 @@ class TrainBackendBase(ABC):
             te.to(self.device, dtype=self.dtype)
             te.train()
             te.requires_grad_(True)
+            self._training_te = True
+
+    def _te_no_grad(self):
+        """Return torch.no_grad() when TE is frozen, or a no-op context when training TE.
+
+        All backends' encode_text_batch() should use ``with self._te_no_grad():``
+        instead of bare ``with torch.no_grad():`` so that gradients flow through
+        the text encoder when it is being trained.
+        """
+        if self._training_te:
+            return torch.enable_grad()
+        return torch.no_grad()
 
     def offload_vae(self):
         """Move VAE to CPU after latent caching to free VRAM."""
@@ -558,10 +578,25 @@ class TrainBackendBase(ABC):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None  # Clear after use
 
+        # Adaptive per-sample weights (set by trainer's tag weighter).
+        # Must be applied BEFORE .mean() so each sample gets its own
+        # weight. Applying after .mean() collapses to weights.mean()
+        # which makes per-sample weighting completely ineffective.
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 
     def _compute_snr_weights(self, timesteps: torch.Tensor, gamma: int) -> torch.Tensor:
-        """Compute Min-SNR weighting (ICCV 2023)."""
+        """Compute Min-SNR weighting (ICCV 2023).
+
+        For epsilon prediction: weight = min(SNR, γ) / SNR
+        For v-prediction:       weight = min(SNR, γ) / (SNR + 1)
+        See Hang et al. "Efficient Diffusion Training via Min-SNR Weighting Strategy".
+        """
         if not hasattr(self.noise_scheduler, 'alphas_cumprod'):
             log.warning("Scheduler lacks alphas_cumprod; min_snr_gamma not supported.")
             return torch.ones_like(timesteps, dtype=torch.float32)
@@ -571,7 +606,10 @@ class TrainBackendBase(ABC):
         sqrt_alpha = alphas_cumprod[timesteps] ** 0.5
         sqrt_one_minus = (1.0 - alphas_cumprod[timesteps]).clamp(min=1e-8) ** 0.5
         snr = (sqrt_alpha / sqrt_one_minus) ** 2
-        return torch.clamp(snr, max=gamma) / snr.clamp(min=1e-8)
+        clamped_snr = torch.clamp(snr, max=gamma)
+        if self.prediction_type == "v_prediction":
+            return clamped_snr / (snr + 1.0)
+        return clamped_snr / snr.clamp(min=1e-8)
 
     def flow_training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
@@ -625,12 +663,19 @@ class TrainBackendBase(ABC):
                 fwd_kwargs["added_cond_kwargs"] = added_cond
 
         ts_input = timesteps / timestep_scale if normalize_timestep else timesteps
-        noise_pred = self.unet(
-            hidden_states=noisy_latents,
-            timestep=ts_input,
-            encoder_hidden_states=encoder_hidden,
-            **fwd_kwargs,
-        ).sample
+
+        # Autocast for mixed-precision speed, matching the epsilon/v-pred
+        # training_step.  Without this, all flow-matching backends (Flux,
+        # SD3, PixArt, AuraFlow, Sana, Chroma, HiDream) run the transformer
+        # forward pass in full precision, wasting compute.
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                hidden_states=noisy_latents,
+                timestep=ts_input,
+                encoder_hidden_states=encoder_hidden,
+                **fwd_kwargs,
+            ).sample
 
         loss = self._compute_flow_loss(noise_pred, noise, latents)
 
@@ -675,6 +720,16 @@ class TrainBackendBase(ABC):
                 loss = loss * sample_weight
             self._token_weight_mask = None  # Consumed
 
+        # Adaptive per-sample weights (set by trainer's tag weighter).
+        # Must be applied BEFORE .mean() so each sample gets its own
+        # weight. Applying after .mean() collapses to weights.mean()
+        # which makes per-sample weighting completely ineffective.
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
@@ -682,9 +737,15 @@ class TrainBackendBase(ABC):
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
-                pixel_values.to(memory_format=torch.channels_last)
+                pixel_values.to(device=self.device, memory_format=torch.channels_last)
             ).latent_dist.sample()
-            latents = latents * self.vae.config.scaling_factor
+            # Some VAEs (e.g. Z-Image) have a shift_factor that must be
+            # subtracted before scaling. Must match train_dataset.py caching.
+            shift = getattr(self.vae.config, 'shift_factor', 0.0)
+            if shift:
+                latents = (latents - shift) * self.vae.config.scaling_factor
+            else:
+                latents = latents * self.vae.config.scaling_factor
         return latents
 
     # ── Single-file loading helpers ──────────────────────────────────
@@ -692,7 +753,7 @@ class TrainBackendBase(ABC):
     @staticmethod
     def _is_single_file(model_path: str) -> bool:
         """Return True if the model path points to a single checkpoint file."""
-        return model_path.endswith((".safetensors", ".ckpt", ".pt", ".bin"))
+        return model_path.lower().endswith((".safetensors", ".ckpt", ".pt", ".bin"))
 
     def _load_single_file_or_pretrained(
         self,

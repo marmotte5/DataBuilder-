@@ -540,6 +540,17 @@ class ZImageBackend(TrainBackendBase):
                     errors.append(f"Pipeline loading: {e}")
                     log.debug("_load_single_file_pipeline failed: %s", e)
 
+            # Strategy 3: Manual single-file loading (supports quantized TE).
+            # Strategies 1-2 are skipped when use_quantized_te is True, so
+            # this is the only path that handles quantized TE + single file.
+            if pipe is None and self.unet is None:
+                try:
+                    self._load_single_file_manual(model_path)
+                    log.info("Z-Image loaded via manual single-file parsing")
+                except Exception as e:
+                    errors.append(f"Manual single-file: {e}")
+                    log.debug("_load_single_file_manual failed: %s", e)
+
             # If all strategies failed, raise with combined errors
             if pipe is None and self.unet is None:
                 raise RuntimeError(
@@ -597,13 +608,19 @@ class ZImageBackend(TrainBackendBase):
                         torch_dtype=self.dtype, trust_remote_code=True,
                     )
                 except Exception:
+                    # Fallback: load full pipeline but only extract the
+                    # transformer.  Delete the pipeline immediately to free
+                    # the duplicate TE + VAE copies (which can waste ~10+ GB
+                    # when quantization is enabled for the TE above).
                     from diffusers import DiffusionPipeline
                     pipe = DiffusionPipeline.from_pretrained(
                         model_path, torch_dtype=self.dtype,
                         trust_remote_code=True,
                     )
-                    self.pipeline = pipe
                     self.unet = getattr(pipe, 'transformer', pipe.unet)
+                    del pipe
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
                 self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
                     model_path, subfolder="scheduler",
@@ -632,11 +649,15 @@ class ZImageBackend(TrainBackendBase):
         projections, and adaptive-norm linear layers specific to the
         ZImageTransformer2DModel architecture.
         """
+        # ZImageTransformerBlock has:
+        #   attention.{to_q, to_k, to_v, to_out.0}
+        #   feed_forward.{w1, w2, w3}
+        #   adaLN_modulation (adaptive layer norm)
+        # Using short names for PEFT substring matching.
         return [
             "to_q", "to_k", "to_v", "to_out.0",
-            "proj_mlp", "proj_out",
-            "attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0",
-            "norm1.linear", "norm1_context.linear",
+            "w1", "w2", "w3",
+            "adaLN_modulation",
         ]
 
     def _format_caption(self, caption: str) -> str:
@@ -657,10 +678,10 @@ class ZImageBackend(TrainBackendBase):
         tokenization. The second-to-last hidden state layer is used
         as text conditioning (matching the official pipeline).
 
-        Returns a tuple of (list_of_embeddings, attention_masks) where
-        each embedding contains only non-padded tokens — the
-        ZImageTransformer2DModel expects variable-length per-sample
-        caption features without padding.
+        Returns (hidden_states, attention_mask) as padded tensors
+        so the output is compatible with the TE caching system. The
+        training_step strips padding per-sample before passing to
+        the transformer (which expects variable-length sequences).
         """
         # Format all captions through chat template
         texts = [_apply_chat_template(self.tokenizer, c) for c in captions]
@@ -672,7 +693,7 @@ class ZImageBackend(TrainBackendBase):
             truncation=True, return_tensors="pt",
         ).to(self.device)
 
-        with torch.no_grad():
+        with self._te_no_grad():
             attention_mask = tokens["attention_mask"]
             out = self.text_encoder(
                 **tokens,
@@ -681,14 +702,9 @@ class ZImageBackend(TrainBackendBase):
             # Use second-to-last hidden state (matches official pipeline)
             encoder_hidden = out.hidden_states[-2]
 
-            # Mask out padding tokens per sample — the transformer expects
-            # variable-length caption features, not padded sequences.
-            embeddings_list = []
-            for i in range(encoder_hidden.shape[0]):
-                mask = attention_mask[i].bool()
-                embeddings_list.append(encoder_hidden[i][mask])
-
-        return (embeddings_list,)
+        # Return (hidden_states, attention_mask) — mask is used by
+        # training_step to strip padding before the transformer call.
+        return (encoder_hidden, attention_mask)
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values into latent space using the frozen VAE.
@@ -753,6 +769,9 @@ class ZImageBackend(TrainBackendBase):
             # Z-exclusive: Logit-Normal sampling for straight-path training
             u = self._logit_normal_sampler.sample(batch_size)
         else:
+            # Falls through to _sample_flow_timesteps which handles SpeeD
+            # (timestep_sampling="speed" or speed_asymmetric), logit-normal,
+            # sigmoid, or uniform sampling via config
             u = self._sample_flow_timesteps(batch_size)
 
         # Apply dynamic timestep shift (Z-Image specific)
@@ -768,27 +787,36 @@ class ZImageBackend(TrainBackendBase):
             )
         noisy_latents = self._flow_interpolate(latents, noise, t)
 
-        # te_out[0] is either:
-        # - A list of variable-length 2D tensors (from live encode_text_batch)
-        # - A batched tensor from cached TE outputs, possibly with extra dims:
-        #   [B, seq_len, dim] (3D) or [B, 1, seq_len, dim] (4D if caching
-        #   preserved the per-sample batch dim of 1)
-        # The transformer expects a list of 2D tensors [seq_len, dim].
+        # Build per-sample caption features for the transformer.
+        # ZImageTransformer2DModel expects cap_feats as a list of 2D
+        # tensors [seq_len_i, dim] with padding REMOVED (variable length).
+        #
+        # te_out format:
+        #   Live:   (hidden_states [B, seq, dim], attention_mask [B, seq])
+        #   Cached: (hidden_states [B, seq, dim], None_or_mask)
+        #
+        # When an attention_mask is available (live encoding or if cache
+        # stored it), use it to strip padding. Otherwise pass as-is
+        # (the transformer handles padded sequences, just less efficiently).
         cap_feats_raw = te_out[0]
-        if isinstance(cap_feats_raw, (list, tuple)):
-            # Already a list (from live encode_text_batch)
-            cap_feats = cap_feats_raw
-        elif isinstance(cap_feats_raw, torch.Tensor):
-            # Squeeze singleton dims until we have [B, seq_len, dim] or [seq_len, dim]
+        attn_mask = te_out[1] if len(te_out) > 1 else None
+
+        # Normalise to 3D [B, seq, dim]
+        if isinstance(cap_feats_raw, torch.Tensor):
             while cap_feats_raw.dim() > 3:
                 cap_feats_raw = cap_feats_raw.squeeze(1)
-            if cap_feats_raw.dim() == 3:
-                cap_feats = list(cap_feats_raw.unbind(dim=0))
-            else:
-                # 2D: single sample
-                cap_feats = [cap_feats_raw]
+            if cap_feats_raw.dim() == 2:
+                cap_feats_raw = cap_feats_raw.unsqueeze(0)
+
+        # Strip padding using attention mask (produces variable-length list)
+        if attn_mask is not None and isinstance(attn_mask, torch.Tensor):
+            cap_feats = []
+            for i in range(cap_feats_raw.shape[0]):
+                mask = attn_mask[i].bool()
+                cap_feats.append(cap_feats_raw[i][mask])
         else:
-            cap_feats = [cap_feats_raw]
+            # No mask available (cached without mask) — pass padded
+            cap_feats = list(cap_feats_raw.unbind(dim=0))
 
         # Forward pass with autocast for mixed precision speed
         # ZImageTransformer2DModel.forward() expects:
@@ -823,7 +851,7 @@ class ZImageBackend(TrainBackendBase):
 
         if config.debiased_estimation:
             # Clamp denominator to prevent extreme weights when t → 1.0
-            weight = 1.0 / torch.clamp(1.0 - t + 1e-6, min=0.01)
+            weight = 1.0 / torch.clamp(1.0 - t.float() + 1e-6, min=0.01)
             loss = loss * weight
 
         # min_snr_gamma: not applicable to flow matching (requires alphas_cumprod)
@@ -859,6 +887,13 @@ class ZImageBackend(TrainBackendBase):
                     sample_weight = sample_weight.unsqueeze(-1)
                 loss = loss * sample_weight
             self._token_weight_mask = None
+
+        # Adaptive per-sample weights (set by trainer's tag weighter)
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
 
         # Z-exclusive: update timestep bandit with observed losses
         if getattr(self, '_timestep_bandit', None) is not None:

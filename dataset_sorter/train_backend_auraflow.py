@@ -71,14 +71,16 @@ class AuraFlowBackend(TrainBackendBase):
 
         Returns a 1-tuple of encoder hidden states (no pooled output for AuraFlow).
         """
-        tokens = self.tokenizer(
+        tok_out = self.tokenizer(
             captions, padding="max_length",
             max_length=256,
             truncation=True, return_tensors="pt",
-        ).input_ids.to(self.device)
+        )
+        input_ids = tok_out.input_ids.to(self.device)
+        attention_mask = tok_out.attention_mask.to(self.device)
 
-        with torch.no_grad():
-            out = self.text_encoder(tokens)
+        with self._te_no_grad():
+            out = self.text_encoder(input_ids, attention_mask=attention_mask)
             encoder_hidden = out.last_hidden_state
 
         return (encoder_hidden,)
@@ -88,9 +90,7 @@ class AuraFlowBackend(TrainBackendBase):
     ) -> torch.Tensor:
         """Compute a single flow-matching training step and return the loss.
 
-        Uses raw integer timesteps (no normalization) as expected by AuraFlow.
+        AuraFlow expects normalized float timesteps in [0, 1]. The official
+        AuraFlowPipeline explicitly divides by 1000 (``timestep / 1000``).
         """
-        # AuraFlow passes raw integer timesteps
-        return self.flow_training_step(
-            latents, te_out, batch_size, normalize_timestep=False,
-        )
+        return self.flow_training_step(latents, te_out, batch_size)

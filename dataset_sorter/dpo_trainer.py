@@ -216,7 +216,16 @@ def compute_image_log_probs(
         latents = latents.to(dtype=dtype)
         noise = noise.to(dtype=dtype)
 
-    noisy_latents = backend.noise_scheduler.add_noise(latents, noise, timesteps)
+    # Flow-matching schedulers use sigma-based interpolation instead of
+    # DDPM-style add_noise (which requires alphas_cumprod).
+    if hasattr(backend.noise_scheduler, 'add_noise'):
+        noisy_latents = backend.noise_scheduler.add_noise(latents, noise, timesteps)
+    else:
+        # Flow matching: noisy = (1 - t) * latents + t * noise
+        t = timesteps.float() / backend.noise_scheduler.config.num_train_timesteps
+        while t.dim() < latents.dim():
+            t = t.unsqueeze(-1)
+        noisy_latents = (1 - t) * latents + t * noise
 
     encoder_hidden = te_out[0]
     pooled = te_out[1] if len(te_out) > 1 else None
@@ -228,7 +237,10 @@ def compute_image_log_probs(
     if added_cond is not None:
         fwd_kwargs["added_cond_kwargs"] = added_cond
 
-    noise_pred = backend.unet(
+    # Use whichever model the backend has — UNet for epsilon/v-pred models,
+    # transformer for flow-matching models (Flux, SD3, PixArt, etc.).
+    model = backend.unet if backend.unet is not None else backend.transformer
+    noise_pred = model(
         noisy_latents, timesteps, encoder_hidden,
         **fwd_kwargs,
     ).sample

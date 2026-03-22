@@ -221,6 +221,11 @@ class TrainingWorker(QThread):
             )
             if candidates:
                 self.rlhf_candidates_ready.emit(candidates, round_idx)
+            else:
+                # No candidates generated — resume training to avoid a
+                # permanent hang (the UI never gets the signal to resume).
+                log.warning("RLHF: no candidates generated, resuming training")
+                self.trainer.resume()
         except Exception as e:
             self.error.emit(f"RLHF candidate generation failed: {e}")
             self.trainer.resume()
@@ -231,7 +236,11 @@ class TrainingWorker(QThread):
         Called from UI after user makes preference selections.
         Saves preference images and runs DPO update.
         """
-        if not self.trainer or not self.trainer.backend:
+        # Snapshot trainer reference to avoid TOCTOU race — this method is
+        # called from the UI thread while the worker thread may set
+        # self.trainer = None on completion/error.
+        t = self.trainer
+        if not t or not t.backend:
             return
 
         from dataset_sorter.dpo_trainer import PreferencePair, PreferenceStore
@@ -243,7 +252,7 @@ class TrainingWorker(QThread):
         prefs_img_dir = output_dir / "rlhf_preferences" / "images"
         prefs_img_dir.mkdir(parents=True, exist_ok=True)
 
-        step = self.trainer.state.global_step
+        step = t.state.global_step
         with self._config_lock:
             round_idx = self.config.rlhf_dpo_rounds
 
@@ -268,16 +277,14 @@ class TrainingWorker(QThread):
 
         with self._config_lock:
             self.config.rlhf_dpo_rounds += 1
-        # Snapshot total_steps via reference to avoid TOCTOU race
-        t = self.trainer
-        total = t.total_steps if t else 0
+        total = t.total_steps
         self.progress.emit(
             step, total,
             f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
         )
 
         # Resume training
-        self.trainer.resume()
+        t.resume()
 
     @property
     def is_paused(self) -> bool:

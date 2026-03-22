@@ -84,9 +84,12 @@ class MMapTensorStore:
         current_offset = 0
 
         for i, lat in enumerate(latents):
-            # Store latent
+            # Store latent — cast bfloat16 to float16 for numpy compatibility
+            # (numpy has no native bfloat16 support)
             key = f"latent_{i}"
-            data = lat.cpu().contiguous().numpy().tobytes()
+            lat_cpu = lat.cpu().contiguous()
+            lat_np = self._tensor_to_numpy_safe(lat_cpu)
+            data = lat_np.tobytes()
             header["tensors"][key] = {
                 "shape": list(lat.shape),
                 "dtype": str(lat.dtype),
@@ -101,7 +104,9 @@ class MMapTensorStore:
                 if te_t is None:
                     continue
                 te_key = f"te_{i}_{j}"
-                te_data = te_t.cpu().contiguous().numpy().tobytes()
+                te_cpu = te_t.cpu().contiguous()
+                te_np = self._tensor_to_numpy_safe(te_cpu)
+                te_data = te_np.tobytes()
                 header["tensors"][te_key] = {
                     "shape": list(te_t.shape),
                     "dtype": str(te_t.dtype),
@@ -165,6 +170,28 @@ class MMapTensorStore:
     def __del__(self):
         self.close()
 
+    @staticmethod
+    def _tensor_to_numpy_safe(t: torch.Tensor) -> np.ndarray:
+        """Convert tensor to numpy, handling bfloat16 via raw byte view."""
+        if t.dtype == torch.bfloat16:
+            # numpy has no bfloat16 — use raw uint16 byte view
+            return t.view(torch.uint16).numpy()
+        try:
+            return t.numpy()
+        except RuntimeError:
+            # Fallback for other unsupported dtypes
+            return t.float().numpy()
+
+    @staticmethod
+    def _numpy_to_tensor_safe(raw: bytes, shape: list, dtype: torch.dtype) -> torch.Tensor:
+        """Convert raw bytes to tensor, handling bfloat16 via uint16 view."""
+        if dtype == torch.bfloat16:
+            arr = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
+            return torch.from_numpy(arr.copy()).view(torch.bfloat16)
+        np_dtype = torch.zeros(1, dtype=dtype).numpy().dtype
+        arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
+        return torch.from_numpy(arr.copy())
+
     def _dtype_from_str(self, dtype_str: str) -> torch.dtype:
         """Convert string dtype to torch dtype."""
         _map = {
@@ -172,6 +199,11 @@ class MMapTensorStore:
             "torch.float16": torch.float16,
             "torch.bfloat16": torch.bfloat16,
             "torch.float8_e4m3fn": getattr(torch, 'float8_e4m3fn', torch.float16),
+            "torch.int32": torch.int32,
+            "torch.int64": torch.int64,
+            "torch.int16": torch.int16,
+            "torch.int8": torch.int8,
+            "torch.bool": torch.bool,
         }
         return _map.get(dtype_str, torch.float32)
 
@@ -187,20 +219,24 @@ class MMapTensorStore:
         # Read raw bytes from mmap (zero-copy on Linux with page cache)
         raw = self._mmap[offset:offset + nbytes]
 
-        # Convert to numpy → torch (minimal copy)
-        np_dtype = torch.zeros(1, dtype=dtype).numpy().dtype
-        arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
-        tensor = torch.from_numpy(arr.copy())
+        # Convert to torch tensor, handling bfloat16 safely
+        tensor = self._numpy_to_tensor_safe(raw, shape, dtype)
 
         return tensor.to(self.device, non_blocking=True)
 
-    def get_te_output(self, idx: int, num_outputs: int = 2) -> tuple[torch.Tensor, ...]:
-        """Load text encoder outputs for a sample."""
-        outputs = []
+    def get_te_output(self, idx: int, num_outputs: int = 2) -> tuple[torch.Tensor | None, ...]:
+        """Load text encoder outputs for a sample.
+
+        Handles None gaps in TE outputs (e.g., SD3 with 5 components where
+        some are None) by appending None for missing keys instead of breaking
+        early, which would silently truncate all components after the first gap.
+        """
+        outputs: list[torch.Tensor | None] = []
         for j in range(num_outputs):
             key = f"te_{idx}_{j}"
             if key not in self._header["tensors"]:
-                break
+                outputs.append(None)
+                continue
             meta = self._header["tensors"][key]
             offset = self._data_offset + meta["offset"]
             nbytes = meta["nbytes"]
@@ -208,9 +244,7 @@ class MMapTensorStore:
             dtype = self._dtype_from_str(meta["dtype"])
 
             raw = self._mmap[offset:offset + nbytes]
-            np_dtype = torch.zeros(1, dtype=dtype).numpy().dtype
-            arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
-            tensor = torch.from_numpy(arr.copy())
+            tensor = self._numpy_to_tensor_safe(raw, shape, dtype)
             outputs.append(tensor.to(self.device, non_blocking=True))
 
         return tuple(outputs)
@@ -317,18 +351,30 @@ class SafetensorsMMapDataset(Dataset):
                     result["latent"] = handle.get_tensor(lat_key).to(
                         self.device, dtype=self.dtype, non_blocking=True
                     )
-                    # Load TE outputs as te_cache tuple (matches _training_step)
+                    # Load TE outputs as te_cache tuple (matches _training_step).
+                    # Use stored tuple length to reconstruct None positions.
+                    te_len_key = f"te_{idx}_len"
+                    if te_len_key in handle.keys():
+                        te_len = int(handle.get_tensor(te_len_key).item())
+                    else:
+                        # Legacy cache without length marker — scan for keys
+                        te_len = 0
+                        while f"te_{idx}_{te_len}" in handle.keys():
+                            te_len += 1
                     te_parts = []
-                    for j in range(10):  # max 10 TE outputs
+                    for j in range(te_len):
                         te_key = f"te_{idx}_{j}"
                         if te_key in handle.keys():
-                            te_parts.append(
-                                handle.get_tensor(te_key).to(
-                                    self.device, dtype=self.dtype, non_blocking=True
-                                )
-                            )
+                            _t = handle.get_tensor(te_key)
+                            # Preserve integer dtypes (e.g. attention masks for
+                            # Z-Image/LLM encoders) — only cast float tensors.
+                            if _t.is_floating_point():
+                                _t = _t.to(self.device, dtype=self.dtype, non_blocking=True)
+                            else:
+                                _t = _t.to(self.device, non_blocking=True)
+                            te_parts.append(_t)
                         else:
-                            break
+                            te_parts.append(None)
                     result["te_cache"] = tuple(te_parts)
                     break
 
@@ -393,11 +439,16 @@ class MMapCacheBuilder:
             tensors[f"latent_{i}"] = lat
             current_size += lat.nelement() * lat.element_size()
 
-            # TE outputs (skip None entries)
-            for j, te_t in enumerate(te_outputs[i]):
+            # TE outputs — store the tuple length so the loader can
+            # reconstruct None positions correctly.
+            te_tuple = te_outputs[i]
+            tensors[f"te_{i}_len"] = torch.tensor([len(te_tuple)], dtype=torch.int32)
+            for j, te_t in enumerate(te_tuple):
                 if te_t is None:
                     continue
-                te = te_t.to(self.dtype).cpu().contiguous()
+                # Preserve integer dtypes (e.g. attention masks for LLM
+                # encoders) — only cast float tensors to training dtype.
+                te = te_t.to(self.dtype).cpu().contiguous() if te_t.is_floating_point() else te_t.cpu().contiguous()
                 tensors[f"te_{i}_{j}"] = te
                 current_size += te.nelement() * te.element_size()
 
@@ -456,7 +507,7 @@ class MMapCacheBuilder:
             for j, te_t in enumerate(te_outputs[i]):
                 if te_t is None:
                     continue
-                te = te_t.to(self.dtype).cpu().contiguous()
+                te = te_t.to(self.dtype).cpu().contiguous() if te_t.is_floating_point() else te_t.cpu().contiguous()
                 all_tensors.append(te)
                 metadata.append({
                     "key": f"te_{i}_{j}",
@@ -476,7 +527,7 @@ class MMapCacheBuilder:
 
         offset = 0
         for t in all_tensors:
-            data = t.numpy().tobytes()
+            data = MMapTensorStore._tensor_to_numpy_safe(t).tobytes()
             fp[offset:offset + len(data)] = np.frombuffer(data, dtype=np.uint8)
             offset += len(data)
 

@@ -42,6 +42,10 @@ class BackendRegistry:
             stem = item.stem  # e.g. "train_backend_sdxl"
             model_key = stem.replace("train_backend_", "")  # e.g. "sdxl"
 
+            # Skip abstract base class — it's not a usable backend
+            if model_key == "base":
+                continue
+
             if model_key in self._backends:
                 continue  # Already registered (manual override)
 
