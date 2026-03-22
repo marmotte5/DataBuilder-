@@ -727,9 +727,22 @@ class CachedTrainDataset(Dataset):
                             truncation=True, return_tensors="pt",
                         ).input_ids.to(device)
                         _uncond_out = text_encoder(_uncond_inputs, output_hidden_states=True)
-                        _h = _uncond_out.hidden_states[-(clip_skip + 1)] if clip_skip >= 0 else _uncond_out.last_hidden_state
-                        _p = getattr(_uncond_out, "pooler_output", getattr(_uncond_out, "text_embeds", None))
-                        uncond_parts = [_h.cpu(), _p.cpu() if _p is not None else None]
+                        # Match the regular cache path's clip_skip logic:
+                        # _skip = max(clip_skip, 1), clamped to available layers.
+                        _skip = max(clip_skip, 1)
+                        _skip = min(_skip, len(_uncond_out.hidden_states) - 2)
+                        _h = _uncond_out.hidden_states[-(_skip + 1)]
+                        if caption_preprocessor is not None:
+                            # LLM path (Z-Image): store attention mask, not pooled
+                            _uncond_tok = tokenizer(
+                                [uncond_caption], padding="max_length",
+                                max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
+                                truncation=True, return_tensors="pt",
+                            )
+                            _p = _uncond_tok["attention_mask"].cpu()
+                        else:
+                            _p = getattr(_uncond_out, "text_embeds", getattr(_uncond_out, "pooler_output", None))
+                        uncond_parts = [_h.cpu(), _p.cpu() if (_p is not None and hasattr(_p, 'cpu')) else _p]
 
                         if tokenizer_2 is not None and text_encoder_2 is not None:
                             _ml2 = tokenizer_2.model_max_length if max_token_length_2 <= 0 else max_token_length_2
@@ -738,8 +751,10 @@ class CachedTrainDataset(Dataset):
                                 max_length=_ml2, truncation=True, return_tensors="pt",
                             ).input_ids.to(device)
                             _uncond_out2 = text_encoder_2(_uncond_inputs2, output_hidden_states=True)
-                            _h2 = _uncond_out2.hidden_states[-(clip_skip + 1)] if clip_skip >= 0 else _uncond_out2.last_hidden_state
-                            _p2 = getattr(_uncond_out2, "pooler_output", getattr(_uncond_out2, "text_embeds", None))
+                            _skip2 = max(clip_skip, 1)
+                            _skip2 = min(_skip2, len(_uncond_out2.hidden_states) - 2)
+                            _h2 = _uncond_out2.hidden_states[-(_skip2 + 1)]
+                            _p2 = getattr(_uncond_out2, "text_embeds", getattr(_uncond_out2, "pooler_output", None))
                             uncond_parts.extend([_h2.cpu(), _p2.cpu() if _p2 is not None else None])
 
                         if tokenizer_3 is not None and text_encoder_3 is not None:
