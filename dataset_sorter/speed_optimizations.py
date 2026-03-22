@@ -717,9 +717,9 @@ class FusedBackwardPass:
             denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
             p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
         else:
-            # SGD-style update
+            # SGD-style update with decoupled weight decay (consistent with AdamW path)
             if wd > 0:
-                grad = grad.add(p.data, alpha=wd)
+                p.data.mul_(1 - lr * wd)
             momentum = group.get("momentum", 0)
             if momentum > 0:
                 state = self.optimizer.state.get(p, {})

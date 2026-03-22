@@ -197,8 +197,8 @@ class Marmotte(Optimizer):
                 in_warmup = (p.dim() >= 2 and step_num <= warmup
                              and "warmup_buf" in state)
 
-                # ── Decoupled weight decay ────────────────────────────
-                if wd > 0:
+                # ── Decoupled weight decay (skip 1D params: biases/norms) ──
+                if wd > 0 and p.dim() >= 2:
                     p.mul_(1 - lr * wd)
 
                 # ── Gradient-norm adaptive scaling ────────────────────
@@ -667,8 +667,8 @@ class Muon(Optimizer):
                     # 1D params (biases, norms): standard SGD with momentum
                     update = buf
 
-                # Decoupled weight decay
-                if wd > 0:
+                # Decoupled weight decay (skip 1D params: biases/norms)
+                if wd > 0 and p.dim() >= 2:
                     p.mul_(1 - lr * wd)
 
                 p.add_(update, alpha=-lr)
