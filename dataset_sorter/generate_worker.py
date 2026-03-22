@@ -386,6 +386,16 @@ class GenerateWorker(QThread):
                     self.unload_model()
                 except Exception as ue:
                     log.debug(f"Unload model during error cleanup failed: {ue}")
+            else:
+                # Free intermediate tensors (noisy latents, activations) that
+                # may linger after a failed generation (e.g. OOM mid-diffusion).
+                try:
+                    gc.collect()
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
     # ── Model loading ───────────────────────────────────────────────────
 

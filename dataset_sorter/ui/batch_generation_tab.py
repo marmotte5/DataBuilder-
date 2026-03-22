@@ -47,6 +47,22 @@ from dataset_sorter.ui.toast import show_toast
 log = logging.getLogger(__name__)
 
 
+def _safe_int(s: str, default: int) -> int:
+    """Parse an integer string, returning *default* on failure."""
+    try:
+        return int(s) if s else default
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(s: str, default: float) -> float:
+    """Parse a float string, returning *default* on failure."""
+    try:
+        return float(s) if s else default
+    except (ValueError, TypeError):
+        return default
+
+
 # ── Data model ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -488,23 +504,31 @@ class BatchGenerationTab(QWidget):
         if not path:
             return
         try:
+            skipped = 0
             with open(path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 count = 0
-                for row_data in reader:
-                    prompt = BatchPrompt(
-                        positive=row_data.get("positive", row_data.get("prompt", "")),
-                        negative=row_data.get("negative", ""),
-                        seed=int(row_data.get("seed", "-1")),
-                        steps=int(row_data.get("steps", "0")),
-                        cfg_scale=float(row_data.get("cfg", row_data.get("cfg_scale", "0"))),
-                        width=int(row_data.get("width", "0")),
-                        height=int(row_data.get("height", "0")),
-                        count=int(row_data.get("count", "1")),
-                    )
-                    self._add_row(prompt)
-                    count += 1
-            show_toast(self, f"Imported {count} prompts from CSV", "success")
+                for row_num, row_data in enumerate(reader, start=2):
+                    try:
+                        prompt = BatchPrompt(
+                            positive=row_data.get("positive", row_data.get("prompt", "")),
+                            negative=row_data.get("negative", ""),
+                            seed=_safe_int(row_data.get("seed", ""), -1),
+                            steps=_safe_int(row_data.get("steps", ""), 0),
+                            cfg_scale=_safe_float(row_data.get("cfg", row_data.get("cfg_scale", "")), 0.0),
+                            width=_safe_int(row_data.get("width", ""), 0),
+                            height=_safe_int(row_data.get("height", ""), 0),
+                            count=_safe_int(row_data.get("count", ""), 1),
+                        )
+                        self._add_row(prompt)
+                        count += 1
+                    except Exception as row_exc:
+                        log.warning("CSV row %d skipped: %s", row_num, row_exc)
+                        skipped += 1
+            msg = f"Imported {count} prompts from CSV"
+            if skipped:
+                msg += f" ({skipped} rows skipped)"
+            show_toast(self, msg, "success")
         except Exception as exc:
             log.warning("CSV import failed: %s", exc)
             show_toast(self, f"CSV import failed: {exc}", "warning")
