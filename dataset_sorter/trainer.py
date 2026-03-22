@@ -1579,13 +1579,18 @@ class Trainer:
 
                 # Use GradScaler if active (fp16 training) to avoid
                 # unscaled gradients that may underflow.
+                # Collect all trainable params (not just group 0) so TE
+                # gradients are also clipped when train_text_encoder is on.
+                _dpo_params = [
+                    p for g in self.optimizer.param_groups
+                    for p in g["params"] if p.grad is not None
+                ]
                 if self.grad_scaler is not None:
                     self.grad_scaler.scale(total_dpo_loss).backward()
                     self.grad_scaler.unscale_(self.optimizer)
                     if config.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
-                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
-                            config.max_grad_norm,
+                            _dpo_params, config.max_grad_norm,
                         )
                     self.grad_scaler.step(self.optimizer)
                     self.grad_scaler.update()
@@ -1593,8 +1598,7 @@ class Trainer:
                     total_dpo_loss.backward()
                     if config.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
-                            [p for p in self.optimizer.param_groups[0]["params"] if p.grad is not None],
-                            config.max_grad_norm,
+                            _dpo_params, config.max_grad_norm,
                         )
                     self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
@@ -2200,7 +2204,10 @@ class Trainer:
 
         dataset = getattr(self, "dataset", None)
         if dataset is not None:
-            dataset.clear_caches()
+            if hasattr(dataset, "clear_caches"):
+                dataset.clear_caches()
+            elif hasattr(dataset, "close"):
+                dataset.close()
 
         backend = getattr(self, "backend", None)
         if backend is not None:

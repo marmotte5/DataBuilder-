@@ -26,6 +26,18 @@ class _CombinedOptimizer:
         for opt in self.optimizers:
             self.param_groups.extend(opt.param_groups)
 
+    @property
+    def state(self) -> dict:
+        """Merged state dict from all sub-optimizers.
+
+        Required by GradScaler.unscale_() and GradScaler.step() which
+        access optimizer.state to track scaling metadata per-parameter.
+        """
+        merged = {}
+        for opt in self.optimizers:
+            merged.update(opt.state)
+        return merged
+
     def zero_grad(self, set_to_none: bool = True):
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=set_to_none)
