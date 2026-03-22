@@ -766,12 +766,50 @@ class Trainer:
         self.state.phase = "ready"
 
     def _build_param_groups(self) -> list[dict]:
-        """Build optimizer parameter groups with separate LR for text encoders."""
-        config = self.config
-        groups = [{"params": [p for p in self.backend.unet.parameters() if p.requires_grad],
-                   "lr": config.learning_rate}]
+        """Build optimizer parameter groups with separate LR for text encoders.
 
-        te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else config.learning_rate
+        When LoRA+ is enabled (lora_plus_ratio > 0), lora_B weights get a
+        higher learning rate (base_lr * ratio) while lora_A weights keep the
+        base LR.  This asymmetric scaling converges ~30% faster per the
+        LoRA+ paper (2024).
+        """
+        config = self.config
+        base_lr = config.learning_rate
+        plus_ratio = getattr(config, "lora_plus_ratio", 0.0)
+
+        if plus_ratio > 0 and config.is_lora:
+            # Split UNet LoRA params into A (low LR) and B (high LR) groups
+            lora_a_params = []
+            lora_b_params = []
+            other_params = []
+            for name, param in self.backend.unet.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "lora_B" in name or "lora_up" in name:
+                    lora_b_params.append(param)
+                elif "lora_A" in name or "lora_down" in name:
+                    lora_a_params.append(param)
+                else:
+                    other_params.append(param)
+
+            groups = []
+            if lora_a_params:
+                groups.append({"params": lora_a_params, "lr": base_lr})
+            if lora_b_params:
+                groups.append({"params": lora_b_params, "lr": base_lr * plus_ratio})
+            if other_params:
+                groups.append({"params": other_params, "lr": base_lr})
+
+            if groups:
+                log.info(
+                    "LoRA+ enabled: lora_A LR=%.2e, lora_B LR=%.2e (ratio=%.0f)",
+                    base_lr, base_lr * plus_ratio, plus_ratio,
+                )
+        else:
+            groups = [{"params": [p for p in self.backend.unet.parameters() if p.requires_grad],
+                       "lr": base_lr}]
+
+        te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else base_lr
         for flag, encoder in [
             (config.train_text_encoder, self.backend.text_encoder),
             (config.train_text_encoder_2, self.backend.text_encoder_2),

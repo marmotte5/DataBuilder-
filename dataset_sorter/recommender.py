@@ -305,6 +305,14 @@ def recommend(
         if rank >= 64:
             config.use_rslora = True
 
+        # LoRA+: different LR for lora_A vs lora_B (2024 breakthrough).
+        # Ratio of 16 converges ~30% faster. Skip for DoRA (already
+        # decomposes magnitude/direction) and adaptive optimizers.
+        if network_type not in ("dora", "loha", "lokr") and optimizer not in (
+            "Prodigy", "DAdaptAdam", "AdamWScheduleFree"
+        ):
+            config.lora_plus_ratio = 16.0
+
         # PiSSA: faster convergence for concept/subject LoRAs
         # (but can overfit at high timesteps for diffusion, so only for small)
         if size_cat == "small" and not is_flux:
@@ -320,6 +328,7 @@ def recommend(
         config.use_dora = False
         config.use_rslora = False
         config.lora_init = "default"
+        config.lora_plus_ratio = 0.0
 
     # --- SpeeD timestep sampling (CVPR 2025, ~3x speedup) ---
     config.speed_asymmetric = True   # Always recommend: low overhead, high impact
@@ -869,9 +878,10 @@ def _build_notes(
     if config.ip_noise_gamma > 0:
         notes.append(f"IP noise gamma={config.ip_noise_gamma}: input perturbation regularization.")
 
-    if is_lora and optimizer in ("AdamW", "AdamW8bit"):
+    if getattr(config, "lora_plus_ratio", 0) > 0:
         notes.append(
-            "LoRA+ tip: set lora_B LR to 16x lora_A LR for faster convergence."
+            f"LoRA+ enabled (ratio={config.lora_plus_ratio:.0f}x): lora_B weights get "
+            f"{config.lora_plus_ratio:.0f}x higher LR than lora_A for ~30% faster convergence."
         )
 
     # GPU recommendation
@@ -968,6 +978,14 @@ def format_config(config: TrainingConfig) -> str:
         if config.conv_rank > 0:
             lines.append(f"    Conv rank        {config.conv_rank}")
             lines.append(f"    Conv alpha       {config.conv_alpha}")
+        if getattr(config, "lora_plus_ratio", 0) > 0:
+            lines.append(f"    LoRA+ ratio      {config.lora_plus_ratio:.0f}x (lora_B LR multiplier)")
+        if config.use_dora:
+            lines.append(f"    DoRA             Enabled")
+        if config.use_rslora:
+            lines.append(f"    rsLoRA           Enabled")
+        if config.lora_init != "default":
+            lines.append(f"    Init method      {config.lora_init}")
         lines.append("")
     else:
         lines.append(f"  -- Training Mode {thin[18:]}")
@@ -1297,6 +1315,8 @@ def export_kohya_json(config: TrainingConfig) -> str:
         if config.conv_rank > 0:
             data["conv_dim"] = config.conv_rank
             data["conv_alpha"] = config.conv_alpha
+        if getattr(config, "lora_plus_ratio", 0) > 0:
+            data["loraplus_lr_ratio"] = config.lora_plus_ratio
 
     # EMA
     if config.use_ema:

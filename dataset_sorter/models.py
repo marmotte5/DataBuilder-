@@ -54,6 +54,7 @@ class TrainingConfig:
     use_dora: bool = False          # DoRA: weight-decomposed LoRA (ICML 2024)
     use_rslora: bool = False        # rsLoRA: rank-stabilized scaling (alpha/sqrt(r))
     lora_init: str = "default"      # Initialization: default, pissa, olora, gaussian
+    lora_plus_ratio: float = 0.0    # LoRA+: LR multiplier for lora_B (0=disabled, 16=recommended)
 
     # ── Optimizer ──────────────────────────────────────────────────────
     optimizer: str = "Adafactor"
