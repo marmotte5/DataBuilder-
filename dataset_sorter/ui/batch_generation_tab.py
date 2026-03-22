@@ -304,6 +304,7 @@ class BatchGenerationTab(QWidget):
 
         btn_clear = QPushButton("Clear All")
         btn_clear.setToolTip("Remove all prompts from the queue")
+        btn_clear.setStyleSheet(DANGER_BUTTON_STYLE)
         btn_clear.clicked.connect(self._clear_queue)
         btn_row.addWidget(btn_clear)
 
@@ -437,6 +438,17 @@ class BatchGenerationTab(QWidget):
         self._update_count()
 
     def _clear_queue(self):
+        if not self._queue:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Clear Queue",
+            f"Remove all {len(self._queue)} prompts from the queue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self._table.setRowCount(0)
         self._queue.clear()
         self._update_count()

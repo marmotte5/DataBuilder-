@@ -318,6 +318,7 @@ class ModelMergeTab(QWidget):
         self._model_a_edit.setPlaceholderText("Path to first model (.safetensors)")
         mg.addWidget(self._model_a_edit, 0, 1)
         btn_a = QPushButton("Browse")
+        btn_a.setToolTip("Browse for Model A checkpoint")
         btn_a.clicked.connect(lambda: self._browse_model(self._model_a_edit))
         mg.addWidget(btn_a, 0, 2)
 
@@ -327,6 +328,7 @@ class ModelMergeTab(QWidget):
         self._model_b_edit.setPlaceholderText("Path to second model (.safetensors)")
         mg.addWidget(self._model_b_edit, 1, 1)
         btn_b = QPushButton("Browse")
+        btn_b.setToolTip("Browse for Model B checkpoint")
         btn_b.clicked.connect(lambda: self._browse_model(self._model_b_edit))
         mg.addWidget(btn_b, 1, 2)
 
@@ -337,6 +339,7 @@ class ModelMergeTab(QWidget):
         self._model_c_edit.setPlaceholderText("Base model for difference (only for Add Difference)")
         mg.addWidget(self._model_c_edit, 2, 1)
         btn_c = QPushButton("Browse")
+        btn_c.setToolTip("Browse for Model C checkpoint (base for Add Difference)")
         btn_c.clicked.connect(lambda: self._browse_model(self._model_c_edit))
         mg.addWidget(btn_c, 2, 2)
         self._btn_c = btn_c
@@ -400,6 +403,7 @@ class ModelMergeTab(QWidget):
         self._output_edit.setPlaceholderText("Output .safetensors path")
         og.addWidget(self._output_edit, 1)
         btn_out = QPushButton("Browse")
+        btn_out.setToolTip("Choose where to save the merged model")
         btn_out.clicked.connect(self._browse_output)
         og.addWidget(btn_out)
 
