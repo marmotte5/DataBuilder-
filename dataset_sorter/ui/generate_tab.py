@@ -10,6 +10,7 @@ Full-featured inference UI supporting:
 - One-click save to disk
 """
 
+import weakref
 from pathlib import Path
 from datetime import datetime
 
@@ -915,8 +916,12 @@ class GenerateTab(QWidget):
         )
         thumb_label.setCursor(Qt.CursorShape.PointingHandCursor)
         # Use widget position in layout at click time (not captured index)
-        # to stay correct after eviction shifts indices
-        thumb_label.mousePressEvent = lambda e, w=thumb_label: self._goto_thumbnail(w)
+        # to stay correct after eviction shifts indices.
+        # weakref avoids thumb_label → closure → self → thumb_layout → thumb_label cycle.
+        weak_self = weakref.ref(self)
+        thumb_label.mousePressEvent = lambda e, w=thumb_label, ws=weak_self: (
+            ws() and ws()._goto_thumbnail(w)
+        )
         self.thumb_layout.addWidget(thumb_label)
         self.thumb_layout.addStretch()
 

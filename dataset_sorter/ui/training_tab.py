@@ -50,6 +50,9 @@ class LossChartWidget(QWidget):
     def append_point(self, step: int, loss: float):
         """Append a single (step, loss) data point and refresh the chart."""
         self._points.append((step, loss))
+        # Downsample when exceeding cap to prevent unbounded memory growth
+        if len(self._points) > 50_000:
+            self._points = self._points[::2]  # keep every other point
         self.update()
 
     def clear_data(self):
@@ -780,6 +783,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log(f"WARNING: Non-finite loss at step {step}: {loss}")
             return
         self._loss_history.append((step, loss))
+        # Cap UI history to prevent unbounded memory growth in long runs
+        if len(self._loss_history) > 50_000:
+            self._loss_history = self._loss_history[-25_000:]
         self.loss_label.setText(f"Step {step}  |  Loss: {loss:.6f}  |  LR: {lr:.2e}")
         self.loss_chart.append_point(step, loss)
         if not self.loss_chart.isVisible():
@@ -802,7 +808,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             path = sample_dir / f"sample_step{step:06d}_{i}.png"
             img.save(str(path))
 
-        # Display first sample
+        # Display first sample, then free all PIL images
         if images:
             img = images[0].convert("RGB")  # Ensure RGB mode
             data = img.tobytes("raw", "RGB")
@@ -814,6 +820,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
             self.sample_label.setPixmap(pixmap)
+        # Free PIL images — they can be 1-4 MB each and accumulate across
+        # sampling intervals during long training runs.
+        for img in images:
+            img.close()
+        del images
 
     def _on_phase(self, phase):
         """Log a training phase transition (e.g. caching, training, saving)."""
