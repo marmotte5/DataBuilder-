@@ -897,6 +897,9 @@ class ZImageBackend(TrainBackendBase):
                 loss = loss * weights
             self._adaptive_sample_weights = None
 
+        # Store per-sample loss for adaptive tag weighting (before .mean())
+        self._per_sample_loss = loss.detach()
+
         # Z-exclusive: update timestep bandit with observed losses
         if getattr(self, '_timestep_bandit', None) is not None:
             per_sample = loss.detach()

@@ -268,5 +268,8 @@ class HunyuanDiTBackend(TrainBackendBase):
                 loss = loss * weights
             self._adaptive_sample_weights = None
 
+        # Store per-sample loss for adaptive tag weighting (before .mean())
+        self._per_sample_loss = loss.detach()
+
         return loss.mean()
 
