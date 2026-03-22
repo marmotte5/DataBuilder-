@@ -1,8 +1,9 @@
-"""Main application window — Dataset Sorter.
+"""Main application window — DataBuilder.
 
-Optimized for datasets up to 1,000,000 images.
-Supports drag-and-drop, keyboard shortcuts, dark/light theme toggle,
-and progress persistence across restarts.
+High-performance desktop app for text-to-image AI model training,
+generation, and model library management. Optimized for datasets up
+to 1,000,000 images with drag-and-drop, keyboard shortcuts, dark/light
+theme toggle, and progress persistence across restarts.
 """
 
 import json
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
+    QStackedWidget, QFrame, QScrollArea,
 )
 
 from dataset_sorter.constants import (
@@ -117,7 +119,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         """Initialize the main window, build UI, wire signals, and restore previous session state."""
         super().__init__()
-        self.setWindowTitle("Dataset Sorter")
+        self.setWindowTitle("DataBuilder")
         self.setMinimumSize(1400, 900)
         self.setAcceptDrops(True)
 
@@ -146,8 +148,8 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._load_progress_state()
         self.statusBar().showMessage(
-            "Ready! Start by choosing a source folder above, then click \"Scan Images\". "
-            "See the \"Getting Started\" tab for a full guide."
+            "Ready! Select Dataset in the sidebar, set source folder, then click Scan. "
+            "See Help for a full guide."
         )
 
     def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
@@ -156,17 +158,108 @@ class MainWindow(QMainWindow):
         if central:
             show_toast(central, text, variant, duration_ms)
 
+    # ── Sidebar navigation constants ──
+    _NAV_ITEMS = [
+        # (id, icon_char, label, tooltip, section)
+        ("dataset",  "DB",  "Dataset",   "Prepare your training dataset",   "data"),
+        ("train",    "TR",  "Train",     "Configure and run training",      "work"),
+        ("generate", "GN",  "Generate",  "Generate images with your model", "work"),
+        ("library",  "LB",  "Library",   "Browse models, LoRAs, embeddings","work"),
+        ("settings", "ST",  "Settings",  "Training recommendations",        "util"),
+        ("help",     "?",   "Help",      "Getting started guide",           "util"),
+    ]
+
     def _build_ui(self):
-        """Construct all widgets: compact top bar, 2-column layout, action bar."""
+        """Construct all widgets: sidebar nav, top bar, content area, action bar."""
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 10)
-        root.setSpacing(8)
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # ── Step indicator bar ──
+        # ── Left sidebar navigation ──
+        sidebar = QWidget()
+        sidebar.setFixedWidth(72)
+        sidebar.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border-right: 1px solid {COLORS['border']};"
+        )
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 8, 0, 8)
+        sidebar_layout.setSpacing(2)
+
+        # App logo / branding
+        brand = QLabel("DB")
+        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 800; "
+            f"background: transparent; padding: 8px 0 12px 0; "
+            f"letter-spacing: -0.5px;"
+        )
+        brand.setToolTip("DataBuilder")
+        sidebar_layout.addWidget(brand)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {COLORS['border']}; background: {COLORS['border']}; max-height: 1px;")
+        sidebar_layout.addWidget(sep)
+        sidebar_layout.addSpacing(4)
+
+        # Nav buttons
+        self._nav_buttons: dict[str, QPushButton] = {}
+        prev_section = None
+        for nav_id, icon, label, tooltip, section in self._NAV_ITEMS:
+            if prev_section and section != prev_section:
+                spacer = QFrame()
+                spacer.setFrameShape(QFrame.Shape.HLine)
+                spacer.setStyleSheet(
+                    f"color: {COLORS['border_subtle']}; background: {COLORS['border_subtle']}; "
+                    f"max-height: 1px; margin: 4px 12px;"
+                )
+                sidebar_layout.addWidget(spacer)
+            prev_section = section
+
+            btn = QPushButton(f"{icon}\n{label}")
+            btn.setToolTip(tooltip)
+            btn.setFixedSize(64, 52)
+            btn.setStyleSheet(self._nav_button_style(False))
+            btn.clicked.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
+            sidebar_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._nav_buttons[nav_id] = btn
+
+        sidebar_layout.addStretch()
+
+        # Theme toggle at bottom
+        self.btn_theme = QPushButton("Light")
+        self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
+        self.btn_theme.setFixedSize(64, 32)
+        self.btn_theme.setStyleSheet(
+            f"QPushButton {{ padding: 4px; font-size: 10px; font-weight: 500; "
+            f"border-radius: 6px; color: {COLORS['text_muted']}; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
+        )
+        self.btn_theme.clicked.connect(self._toggle_theme)
+        sidebar_layout.addWidget(self.btn_theme, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        outer.addWidget(sidebar)
+
+        # ── Right content area ──
+        right_area = QWidget()
+        right_layout = QVBoxLayout(right_area)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(8)
+
+        # ── Top bar: step indicators + path bar ──
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        # Step indicators (compact, for dataset workflow)
         self._step_indicators = []
-        step_bar = QHBoxLayout()
+        self._step_container = QWidget()
+        step_bar = QHBoxLayout(self._step_container)
+        step_bar.setContentsMargins(0, 0, 0, 0)
         step_bar.setSpacing(4)
         steps = [
             ("1. Folders", "Set source and output folders"),
@@ -187,20 +280,23 @@ class MainWindow(QMainWindow):
             )
             step_bar.addWidget(step_lbl)
             self._step_indicators.append(step_lbl)
-        step_bar.addStretch()
-        self.btn_theme = QPushButton("Light")
-        self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
-        self.btn_theme.setMaximumWidth(55)
-        self.btn_theme.setStyleSheet(
-            f"QPushButton {{ padding: 5px 10px; font-size: 11px; "
-            f"border-radius: 6px; }}"
-        )
-        self.btn_theme.clicked.connect(self._toggle_theme)
-        step_bar.addWidget(self.btn_theme)
-        root.addLayout(step_bar)
+        top_bar.addWidget(self._step_container)
+        top_bar.addStretch()
 
-        # ── Compact path bar — single row ──
-        path_bar = QHBoxLayout()
+        # Current section title
+        self._section_title = QLabel("Dataset")
+        self._section_title.setStyleSheet(
+            f"color: {COLORS['header']}; font-size: 16px; font-weight: 700; "
+            f"background: transparent; letter-spacing: 0.3px;"
+        )
+        top_bar.addWidget(self._section_title)
+
+        right_layout.addLayout(top_bar)
+
+        # ── Compact path bar — single row (visible in dataset mode) ──
+        self._path_bar_widget = QWidget()
+        path_bar = QHBoxLayout(self._path_bar_widget)
+        path_bar.setContentsMargins(0, 0, 0, 0)
         path_bar.setSpacing(6)
         src_lbl = QLabel("Source")
         src_lbl.setStyleSheet(
@@ -242,13 +338,13 @@ class MainWindow(QMainWindow):
         self.workers_spinner.setValue(DEFAULT_NUM_WORKERS)
         self.workers_spinner.setToolTip("Scan workers (higher = faster)")
         self.workers_spinner.setMaximumWidth(55)
-        self.workers_spinner.setVisible(False)  # Hidden by default, shown via menu
+        self.workers_spinner.setVisible(False)
         path_bar.addWidget(self.workers_spinner)
 
         self.gpu_checkbox = QCheckBox("GPU")
         self.gpu_checkbox.setToolTip("Use GPU for image validation")
         self.gpu_checkbox.setEnabled(self._gpu_available)
-        self.gpu_checkbox.setVisible(False)  # Hidden by default
+        self.gpu_checkbox.setVisible(False)
         path_bar.addWidget(self.gpu_checkbox)
 
         self.btn_cancel = QPushButton("Cancel")
@@ -263,20 +359,28 @@ class MainWindow(QMainWindow):
         self.btn_scan.clicked.connect(self._start_scan)
         path_bar.addWidget(self.btn_scan)
 
-        root.addLayout(path_bar)
+        right_layout.addWidget(self._path_bar_widget)
 
         # Progress bar (hidden until needed)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        root.addWidget(self.progress_bar)
+        right_layout.addWidget(self.progress_bar)
 
-        # ── Main content: 2-column layout (tags | everything else) ──
+        # ── Stacked content pages ──
+        self._content_stack = QStackedWidget()
+
+        # Page 0: Dataset — tag panel + sub-tabs (original layout)
+        dataset_page = QWidget()
+        dataset_layout = QVBoxLayout(dataset_page)
+        dataset_layout.setContentsMargins(0, 0, 0, 0)
+        dataset_layout.setSpacing(0)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
 
-        # Right side: all functionality in tabs
+        # Dataset sub-tabs
         right_tabs = QTabWidget()
 
         self.preview_tab = PreviewTab()
@@ -295,29 +399,13 @@ class MainWindow(QMainWindow):
         right_tabs.addTab(self.dataset_tab, "Analysis")
         right_tabs.setTabToolTip(3, "Captions, tokens, duplicates, tag quality")
 
-        self.reco_tab = RecoTab()
-        right_tabs.addTab(self.reco_tab, "Settings")
-        right_tabs.setTabToolTip(4, "Training parameter recommendations")
-
-        self.training_tab = TrainingTab()
-        right_tabs.addTab(self.training_tab, "Train")
-        right_tabs.setTabToolTip(5, "Configure and run training")
-
-        self.generate_tab = GenerateTab()
-        right_tabs.addTab(self.generate_tab, "Generate")
-        right_tabs.setTabToolTip(6, "Generate images with your model")
-
-        self.help_tab = HelpTab()
-        right_tabs.addTab(self.help_tab, "Help")
-        right_tabs.setTabToolTip(7, "Getting started guide")
-
         self._right_tabs = right_tabs
         splitter.addWidget(right_tabs)
-
         splitter.setSizes([350, 850])
-        root.addWidget(splitter, 1)
 
-        # ── Compact action bar ──
+        dataset_layout.addWidget(splitter, 1)
+
+        # Dataset action bar
         action_bar = QHBoxLayout()
         action_bar.setSpacing(8)
 
@@ -334,7 +422,6 @@ class MainWindow(QMainWindow):
 
         action_bar.addStretch()
 
-        # Inline stats
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
@@ -347,7 +434,88 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self._start_export)
         action_bar.addWidget(self.btn_export)
 
-        root.addLayout(action_bar)
+        dataset_layout.addLayout(action_bar)
+        self._content_stack.addWidget(dataset_page)  # index 0
+
+        # Page 1: Train
+        self.training_tab = TrainingTab()
+        self._content_stack.addWidget(self.training_tab)  # index 1
+
+        # Page 2: Generate
+        self.generate_tab = GenerateTab()
+        self._content_stack.addWidget(self.generate_tab)  # index 2
+
+        # Page 3: Library
+        try:
+            from dataset_sorter.ui.library_tab import LibraryTab
+            self.library_tab = LibraryTab()
+        except ImportError:
+            self.library_tab = QLabel("Library module loading...")
+            self.library_tab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.library_tab.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
+            )
+        self._content_stack.addWidget(self.library_tab)  # index 3
+
+        # Page 4: Settings (recommendations)
+        self.reco_tab = RecoTab()
+        self._content_stack.addWidget(self.reco_tab)  # index 4
+
+        # Page 5: Help
+        self.help_tab = HelpTab()
+        self._content_stack.addWidget(self.help_tab)  # index 5
+
+        right_layout.addWidget(self._content_stack, 1)
+        outer.addWidget(right_area, 1)
+
+        # Set initial nav state
+        self._current_nav = "dataset"
+        self._switch_nav("dataset")
+
+    def _nav_button_style(self, active: bool) -> str:
+        """Return stylesheet for a sidebar nav button."""
+        if active:
+            return (
+                f"QPushButton {{ background-color: {COLORS['accent_subtle']}; "
+                f"color: {COLORS['accent']}; border: none; border-radius: 8px; "
+                f"font-size: 10px; font-weight: 700; padding: 4px 2px; "
+                f"border-left: 3px solid {COLORS['accent']}; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }}"
+            )
+        return (
+            f"QPushButton {{ background-color: transparent; "
+            f"color: {COLORS['text_muted']}; border: none; border-radius: 8px; "
+            f"font-size: 10px; font-weight: 500; padding: 4px 2px; "
+            f"border-left: 3px solid transparent; }} "
+            f"QPushButton:hover {{ background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text']}; }}"
+        )
+
+    def _switch_nav(self, nav_id: str):
+        """Switch the active navigation section."""
+        nav_to_page = {
+            "dataset": 0, "train": 1, "generate": 2,
+            "library": 3, "settings": 4, "help": 5,
+        }
+        nav_to_title = {
+            "dataset": "Dataset", "train": "Train", "generate": "Generate",
+            "library": "Library", "settings": "Settings", "help": "Help",
+        }
+        page = nav_to_page.get(nav_id, 0)
+        self._content_stack.setCurrentIndex(page)
+        self._current_nav = nav_id
+
+        # Update button styles
+        for nid, btn in self._nav_buttons.items():
+            btn.setStyleSheet(self._nav_button_style(nid == nav_id))
+
+        # Update section title
+        self._section_title.setText(nav_to_title.get(nav_id, ""))
+
+        # Show path bar and step indicators only in dataset mode
+        is_dataset = nav_id == "dataset"
+        self._path_bar_widget.setVisible(is_dataset)
+        self._step_container.setVisible(is_dataset)
 
     def _label(self, text):
         """Create a styled muted label for form field headings."""
@@ -419,6 +587,25 @@ class MainWindow(QMainWindow):
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
 
+        # Library tab signals
+        if hasattr(self.library_tab, 'use_in_generate'):
+            self.library_tab.use_in_generate.connect(self._on_library_use_generate)
+        if hasattr(self.library_tab, 'use_in_train'):
+            self.library_tab.use_in_train.connect(self._on_library_use_train)
+
+    def _on_library_use_generate(self, path: str):
+        """Load a model from library into the generate tab."""
+        self.generate_tab.model_path_edit.setText(path)
+        self._switch_nav("generate")
+        self._toast("Model path set in Generate tab", "success")
+
+    def _on_library_use_train(self, path: str):
+        """Load a model from library into the training tab."""
+        if hasattr(self.training_tab, 'base_model_edit'):
+            self.training_tab.base_model_edit.setText(path)
+        self._switch_nav("train")
+        self._toast("Model path set in Train tab", "success")
+
     def _setup_shortcuts(self):
         """Register global keyboard shortcuts."""
         QShortcut(QKeySequence("Ctrl+S"), self, self._save_config)
@@ -430,12 +617,20 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
         QShortcut(QKeySequence("Escape"), self, self._cancel_operation)
+        # Navigation shortcuts
+        QShortcut(QKeySequence("Ctrl+1"), self, lambda: self._switch_nav("dataset"))
+        QShortcut(QKeySequence("Ctrl+2"), self, lambda: self._switch_nav("train"))
+        QShortcut(QKeySequence("Ctrl+3"), self, lambda: self._switch_nav("generate"))
+        QShortcut(QKeySequence("Ctrl+4"), self, lambda: self._switch_nav("library"))
 
     def _toggle_theme(self):
         """Switch between dark and light themes."""
         new_mode = toggle_theme()
         QApplication.instance().setStyleSheet(get_stylesheet())
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
+        # Refresh sidebar nav button styles
+        for nid, btn in self._nav_buttons.items():
+            btn.setStyleSheet(self._nav_button_style(nid == self._current_nav))
         self.statusBar().showMessage(f"Switched to {new_mode} theme.")
         self._toast(f"Switched to {new_mode} theme", "info")
 
@@ -1518,7 +1713,7 @@ class MainWindow(QMainWindow):
 
 
 def run():
-    """Launch the Dataset Sorter application."""
+    """Launch the DataBuilder application."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(get_stylesheet())

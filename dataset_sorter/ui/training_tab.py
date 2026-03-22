@@ -192,6 +192,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.model_path_input = QLineEdit()
         self.model_path_input.setPlaceholderText("Path to .safetensors / HuggingFace model ID...")
         self.model_path_input.setToolTip("Local path to a .safetensors/.ckpt file or a HuggingFace model ID")
+        self.base_model_edit = self.model_path_input  # Alias for library tab integration
         paths_grid.addWidget(self.model_path_input, 0, 1)
         btn_model = QPushButton("Browse")
         btn_model.setToolTip("Browse for a base model file")
@@ -304,22 +305,40 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.cuda_label = QLabel(_gpu_status_text())
         self.cuda_label.setWordWrap(True)
         self.cuda_label.setStyleSheet(
-            f"color: {COLORS['success']}; padding: 8px 12px; "
+            f"color: {COLORS['success']}; padding: 10px 14px; "
             f"background-color: {COLORS['success_bg']}; "
-            f"border: 1px solid #1a4a35; border-radius: 8px; font-size: 11px;"
+            f"border: 1px solid #1a4a35; border-left: 3px solid {COLORS['success']}; "
+            f"border-radius: 8px; font-size: 11px; font-weight: 500;"
         )
         right_layout.addWidget(self.cuda_label)
 
-        # Status
+        # Status + Loss in a compact card
+        status_card = QWidget()
+        status_card.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 10px;"
+        )
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(10, 8, 10, 8)
+        status_layout.setSpacing(4)
+
         self.status_label = QLabel("Ready. Configure settings and click Train.")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; padding: 6px; background: transparent; font-size: 12px;")
-        right_layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; padding: 2px; "
+            f"background: transparent; font-size: 12px;"
+        )
+        status_layout.addWidget(self.status_label)
 
-        # Loss display
         self.loss_label = QLabel("")
-        self.loss_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: 700; background: transparent; font-family: 'JetBrains Mono', monospace;")
-        right_layout.addWidget(self.loss_label)
+        self.loss_label.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 700; "
+            f"background: transparent; font-family: 'JetBrains Mono', monospace; "
+            f"padding: 2px;"
+        )
+        status_layout.addWidget(self.loss_label)
+
+        right_layout.addWidget(status_card)
 
         # Loss chart
         self.loss_chart = LossChartWidget()
@@ -402,12 +421,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         right_layout.addWidget(self.log_output, 1)
 
         # Sample preview
-        self.sample_label = QLabel("Samples will appear here during training")
+        self.sample_label = QLabel("Sample images will appear here\nduring training")
         self.sample_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sample_label.setMinimumHeight(200)
         self.sample_label.setStyleSheet(
-            f"background-color: {COLORS['surface']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 12px; color: {COLORS['text_muted']}; font-size: 12px;"
+            f"background-color: {COLORS['surface']}; "
+            f"border: 2px dashed {COLORS['border']}; "
+            f"border-radius: 16px; color: {COLORS['text_muted']}; font-size: 13px;"
         )
         right_layout.addWidget(self.sample_label)
 

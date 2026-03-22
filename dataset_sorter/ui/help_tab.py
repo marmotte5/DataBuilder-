@@ -112,11 +112,12 @@ class HelpTab(QWidget):
         layout.setSpacing(10)
 
         # ── Welcome ──
-        layout.addWidget(_heading("Welcome to Dataset Sorter!"))
+        layout.addWidget(_heading("Welcome to DataBuilder!"))
         layout.addWidget(_body(
-            "This app helps you organize your image dataset for AI model training "
-            "(like Stable Diffusion, Flux, etc.). Don't worry if you're new — "
-            "this guide will walk you through everything step by step."
+            "DataBuilder is the all-in-one desktop app for text-to-image AI. "
+            "Prepare datasets, train models (LoRA and full finetune), generate images, "
+            "and manage your model library — all in one place. "
+            "Don't worry if you're new — this guide will walk you through everything."
         ))
 
         layout.addWidget(_tip_box(
