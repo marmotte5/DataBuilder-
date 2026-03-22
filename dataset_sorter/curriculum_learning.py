@@ -269,11 +269,17 @@ class TimestepEMASampler:
             weights, batch_size, replacement=True,
         )
 
-        # Sample uniform timestep within each bucket
-        offsets = torch.randint(
-            0, self.bucket_size, (batch_size,), device=self.device,
+        # Sample uniform timestep within each bucket.
+        # For the last bucket, extend offset range to cover any remainder
+        # when num_train_timesteps isn't evenly divisible by num_buckets.
+        bucket_starts = bucket_indices * self.bucket_size
+        bucket_ends = ((bucket_indices + 1) * self.bucket_size).clamp(
+            max=self.num_train_timesteps,
         )
-        timesteps = (bucket_indices * self.bucket_size + offsets).clamp(
+        # Per-sample offset range (last bucket may be larger)
+        bucket_sizes = (bucket_ends - bucket_starts).clamp(min=1)
+        offsets = (torch.rand(batch_size, device=self.device) * bucket_sizes.float()).long()
+        timesteps = (bucket_starts + offsets).clamp(
             0, self.num_train_timesteps - 1,
         )
 

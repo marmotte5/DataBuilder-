@@ -142,9 +142,16 @@ class SpeedTimestepSampler:
         # Change-aware: weight = |current_ema - previous_ema| / prev (relative change)
         # Using relative change keeps the weighting effective throughout training,
         # not just when absolute loss values are large (early training).
+        # Only apply change weighting to timesteps that had a valid _loss_ema_prev.
+        # Timesteps unseen before the last prev snapshot have prev=0, causing
+        # astronomical weight spikes (change = |loss - 0| / 1e-8). Give those
+        # neutral weight (change=0) instead.
         t_idx = timesteps.long()
+        has_prev = self._loss_ema_prev[t_idx].abs() > 1e-6
         prev = self._loss_ema_prev[t_idx].abs().clamp(min=1e-8)
         change = (self._loss_ema[t_idx] - self._loss_ema_prev[t_idx]).abs() / prev
+        # Mask out timesteps with no prior observation to avoid 0→loss spike
+        change = torch.where(has_prev, change, torch.zeros_like(change))
         weights = 1.0 + change * 3.0  # Scale factor for impact (relative)
 
         # Normalize to mean=1 to not affect overall loss magnitude
