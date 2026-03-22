@@ -1561,10 +1561,14 @@ class Trainer:
                 indices = indices.tolist()
             elif isinstance(indices, (list, tuple)):
                 indices = [int(i) for i in indices]
-            # Use the scalar loss for all images in this batch
-            loss_val = loss.detach().item()
+            # Use per-sample losses when available, fall back to batch mean
+            _per_sample = getattr(self.backend, '_per_sample_loss', None)
+            if _per_sample is not None and _per_sample.numel() == len(indices):
+                sample_losses = _per_sample.tolist()
+            else:
+                sample_losses = [loss.detach().item()] * len(indices)
             self._curriculum_sampler.update_loss(
-                indices, [loss_val] * len(indices),
+                indices, sample_losses,
             )
 
         # ── Adaptive tag weighting: decompose and update per-tag losses ──
@@ -1573,9 +1577,18 @@ class Trainer:
             if isinstance(captions_for_decomp, str):
                 captions_for_decomp = [captions_for_decomp]
             from dataset_sorter.concept_probing import decompose_loss_by_tag
+            # Use per-sample losses from the backend (stored before .mean())
+            # so each caption gets its own loss value. Using the batch-mean
+            # scalar would assign identical loss to every tag in the batch,
+            # making adaptive weighting completely non-functional.
+            _per_sample = getattr(self.backend, '_per_sample_loss', None)
+            if _per_sample is not None and _per_sample.numel() == len(captions_for_decomp):
+                sample_losses = _per_sample.tolist()
+            else:
+                sample_losses = [loss.detach().item()] * len(captions_for_decomp)
             per_tag = decompose_loss_by_tag(
                 captions_for_decomp,
-                [loss.detach().item()] * len(captions_for_decomp),
+                sample_losses,
             )
             self._adaptive_tag_weighter.update(per_tag)
 
