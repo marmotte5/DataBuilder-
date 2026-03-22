@@ -1090,3 +1090,107 @@ class GenerateWorker(QThread):
             self.finished_generating.emit(False, f"All {total} image(s) failed to generate.")
         else:
             self.finished_generating.emit(True, f"Generated {succeeded}/{total} image(s).")
+
+    def _do_generate_blocking(self) -> list[tuple]:
+        """Synchronous generation — returns list of (PIL.Image, info_str).
+
+        Used by batch generation and A/B comparison tabs to generate images
+        without going through the QThread run() machinery. Caller is
+        responsible for setting generation params before calling.
+        """
+        import torch
+
+        with self._lock:
+            if self.pipe is None:
+                return []
+            pipe_ref = self.pipe
+
+        model_type = self._model_type
+        total = self.num_images
+        positive_prompt = self.positive_prompt
+        negative_prompt = self.negative_prompt
+        scheduler_name = self.scheduler_name
+        steps = self.steps
+        cfg_scale = self.cfg_scale
+        width = self.width
+        height = self.height
+        seed = self.seed
+        clip_skip = self.clip_skip
+        init_image = self.init_image
+        mask_image = self.mask_image
+        strength = self.strength
+
+        _load_scheduler(pipe_ref, scheduler_name, model_type)
+        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+
+        results = []
+        for i in range(total):
+            if self._stop_requested:
+                break
+
+            if seed < 0:
+                import random
+                current_seed = random.randint(0, 2**32 - 1)
+            else:
+                current_seed = seed + i
+
+            gen_device = "cpu" if self._device.type == "mps" else self._device
+            generator = torch.Generator(device=gen_device).manual_seed(current_seed)
+
+            kwargs = {
+                "prompt": positive_prompt,
+                "num_inference_steps": steps,
+                "generator": generator,
+            }
+
+            if init_image is not None:
+                init_img = init_image.convert("RGB").resize(
+                    (width, height), Image.Resampling.LANCZOS,
+                )
+                kwargs["image"] = init_img
+                kwargs["strength"] = strength
+                if mask_image is not None:
+                    mask = mask_image.convert("L").resize(
+                        (width, height), Image.Resampling.LANCZOS,
+                    )
+                    kwargs["mask_image"] = mask
+            else:
+                kwargs["width"] = width
+                kwargs["height"] = height
+
+            kwargs["guidance_scale"] = cfg_scale
+            if model_type in CFG_MODELS and negative_prompt:
+                kwargs["negative_prompt"] = negative_prompt
+
+            if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
+                kwargs["clip_skip"] = clip_skip
+
+            try:
+                with torch.inference_mode():
+                    result = active_pipe(**kwargs)
+                    img = result.images[0]
+
+                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                img.info["pnginfo"] = pnginfo
+                img.info["parameters"] = parameters_str
+
+                mode_str = "txt2img"
+                if mask_image is not None and init_image is not None:
+                    mode_str = "inpaint"
+                elif init_image is not None:
+                    mode_str = f"img2img (str={strength})"
+
+                info = (
+                    f"Seed: {current_seed} | "
+                    f"Steps: {steps} | "
+                    f"CFG: {cfg_scale} | "
+                    f"Sampler: {scheduler_name} | "
+                    f"{width}x{height} | "
+                    f"{mode_str}"
+                )
+                results.append((img, info))
+
+            except Exception as e:
+                log.error(f"Blocking generation failed for image {i + 1}: {e}")
+
+        return results

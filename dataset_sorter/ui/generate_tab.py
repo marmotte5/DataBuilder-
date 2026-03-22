@@ -154,6 +154,10 @@ class LoRAEntry(QWidget):
 class GenerateTab(QWidget):
     """Full image generation / model testing tab."""
 
+    # Emitted when the generate worker has a model loaded, so other tabs
+    # (batch, comparison) can get a reference to the worker.
+    worker_ready = pyqtSignal(object)  # GenerateWorker instance
+
     def __init__(self, parent=None):
         """Initialize the generate tab with empty gallery and build the UI."""
         super().__init__(parent)
@@ -717,6 +721,9 @@ class GenerateTab(QWidget):
         self.btn_load.setEnabled(True)
         self.btn_unload.setEnabled(True)
         self.btn_generate.setEnabled(True)
+        # Notify other tabs that the worker is ready
+        if self._worker is not None:
+            self.worker_ready.emit(self._worker)
         self.progress_bar.setVisible(False)
         show_toast(self, "Model loaded", "success")
 
