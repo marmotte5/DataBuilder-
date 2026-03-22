@@ -2328,11 +2328,24 @@ class Trainer:
         if config.smart_resume_auto_apply and analysis.adjustments:
             apply_adjustments_to_config(config, analysis.adjustments)
 
-            # Rebuild scheduler with new LR if it changed
+            # Update scheduler + optimizer base LRs if changed
             if "learning_rate" in analysis.adjustments:
                 new_lr = analysis.adjustments["learning_rate"]
-                for pg in self.optimizer.param_groups:
-                    pg["lr"] = new_lr
+                # Scale each param group proportionally (preserves TE LR ratio)
+                if self.scheduler is not None and hasattr(self.scheduler, "base_lrs"):
+                    for i, (pg, base_lr) in enumerate(
+                        zip(self.optimizer.param_groups, self.scheduler.base_lrs)
+                    ):
+                        if base_lr > 0:
+                            ratio = new_lr / config.learning_rate
+                            pg["lr"] = base_lr * ratio
+                            self.scheduler.base_lrs[i] = base_lr * ratio
+                        else:
+                            pg["lr"] = new_lr
+                            self.scheduler.base_lrs[i] = new_lr
+                else:
+                    for pg in self.optimizer.param_groups:
+                        pg["lr"] = new_lr
                 log.info(f"Smart Resume: Updated optimizer LR to {new_lr:.2e}")
 
             log.info("Smart Resume: Adjustments applied automatically.")
