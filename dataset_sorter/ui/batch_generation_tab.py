@@ -557,9 +557,13 @@ class BatchGenerationTab(QWidget):
         # Remove internal status field
         for d in data:
             d.pop("status", None)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        show_toast(self, f"Exported {len(data)} prompts", "success")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            show_toast(self, f"Exported {len(data)} prompts", "success")
+        except Exception as exc:
+            log.warning("Failed to export queue: %s", exc)
+            show_toast(self, f"Export failed: {exc}", "warning")
 
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select batch output folder")
