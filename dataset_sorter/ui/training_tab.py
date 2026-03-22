@@ -673,6 +673,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._training_worker.quit()
             if not self._training_worker.wait(5000):
                 self._log("WARNING: Previous training worker did not stop within timeout")
+            self._disconnect_training_worker()
             self._training_worker = None
 
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
@@ -1027,6 +1028,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _stop_vram_monitor(self):
         """Stop the VRAM monitor thread if running."""
         if hasattr(self, '_vram_monitor') and self._vram_monitor is not None:
+            try:
+                self._vram_monitor.vram_update.disconnect(self._on_vram_update)
+            except TypeError:
+                pass
             self._vram_monitor.stop()
             self._vram_monitor.wait(3000)
             self._vram_monitor = None
@@ -1051,4 +1056,28 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                 self._log(f"Peak VRAM: {snap.peak_allocated_gb:.2f} / {snap.total_gb:.1f} GB")
         except Exception:
             pass
+        self._disconnect_training_worker()
         self._training_worker = None
+
+    def _disconnect_training_worker(self):
+        """Disconnect all signals from the training worker to prevent stale callbacks."""
+        w = self._training_worker
+        if w is None:
+            return
+        for sig, slot in [
+            (w.progress, self._on_progress),
+            (w.loss_update, self._on_loss),
+            (w.sample_generated, self._on_sample),
+            (w.phase_changed, self._on_phase),
+            (w.error, self._on_error),
+            (w.finished_training, self._on_finished),
+            (w.paused_changed, self._on_paused_changed),
+            (w.smart_resume_report, self._on_smart_resume_report),
+            (w.pipeline_report, self._on_pipeline_report),
+            (w.rlhf_candidates_ready, self._on_rlhf_candidates),
+            (w.finished, self._stop_vram_monitor),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass

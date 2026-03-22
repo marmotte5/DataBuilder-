@@ -722,6 +722,7 @@ class GenerateTab(QWidget):
     def _on_unload_model(self):
         """Unload the current model, free GPU memory, and reset UI state."""
         if self._worker:
+            self._disconnect_generate_worker()
             self._worker.unload_model()
             # Wait for the worker thread to finish before dropping the
             # reference — destroying a running QThread causes a segfault.
@@ -733,6 +734,23 @@ class GenerateTab(QWidget):
         self.btn_unload.setEnabled(False)
         self.btn_generate.setEnabled(False)
         show_toast(self, "Model unloaded", "info")
+
+    def _disconnect_generate_worker(self):
+        """Disconnect all signals from the generate worker to prevent stale callbacks."""
+        w = self._worker
+        if w is None:
+            return
+        for sig, slot in [
+            (w.model_loaded, self._on_model_loaded),
+            (w.image_generated, self._on_image_generated),
+            (w.progress, self._on_progress),
+            (w.error, self._on_error),
+            (w.finished_generating, self._on_finished),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass
 
     # ── Generation ──────────────────────────────────────────────────────
 
@@ -807,10 +825,11 @@ class GenerateTab(QWidget):
         # Evict oldest images AND their thumbnails when gallery exceeds cap
         while len(self._generated_images) > self._max_gallery_images:
             self._generated_images.pop(0)
-            # Remove oldest thumbnail widget (index 0; last item is stretch)
-            item = self.thumb_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
+            # Remove oldest thumbnail widget (index 0; stretch is always last)
+            if self.thumb_layout.count() > 1:  # guard: keep the trailing stretch
+                item = self.thumb_layout.takeAt(0)
+                if item and item.widget():
+                    item.widget().deleteLater()
         self._current_gallery_idx = len(self._generated_images) - 1
         self._display_current_image()
         self._add_thumbnail(pil_image, len(self._generated_images) - 1)
