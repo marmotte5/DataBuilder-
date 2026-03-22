@@ -257,13 +257,13 @@ class Trainer:
                         f"error(s):\n" + "\n".join(self._integration_report.config_errors)
                     )
 
-            # Setup live training monitor
-            if config.live_loss_monitor:
-                self._live_monitor = LiveTrainingMonitor(
-                    config,
-                    check_every_n_steps=config.live_monitor_interval,
-                    auto_adjust=config.live_monitor_auto_adjust,
-                )
+        # Setup live training monitor (independent of pipeline integration)
+        if config.live_loss_monitor:
+            self._live_monitor = LiveTrainingMonitor(
+                config,
+                check_every_n_steps=config.live_monitor_interval,
+                auto_adjust=config.live_monitor_auto_adjust,
+            )
 
         if progress_fn:
             progress_fn(0, 8, "Loading model...")
@@ -302,6 +302,18 @@ class Trainer:
             log.warning(
                 "adversarial_enabled=True but adversarial training is not yet "
                 "implemented — the setting will be ignored."
+            )
+
+        if config.rescale_noise_schedule:
+            log.warning(
+                "rescale_noise_schedule=True but noise schedule rescaling is not yet "
+                "implemented — the setting will be ignored."
+            )
+        if config.dpo_chosen_dir or config.dpo_rejected_dir:
+            log.warning(
+                "dpo_chosen_dir/dpo_rejected_dir are set but batch DPO from "
+                "directories is not yet implemented. DPO currently only works "
+                "via RLHF preferences collected during training."
             )
 
         if progress_fn:
@@ -1610,6 +1622,7 @@ class Trainer:
                     ref_backend=self.backend,
                     beta=config.dpo_beta,
                     loss_type=config.dpo_loss_type,
+                    label_smoothing=config.dpo_label_smoothing,
                     device=self.device,
                     dtype=self.dtype,
                 )
