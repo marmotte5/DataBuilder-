@@ -1131,6 +1131,11 @@ class Trainer:
                                 self.optimizer.zero_grad(set_to_none=True)
                         else:
                             # No grad clipping
+                            # Unscale before VJP so it operates on real gradient
+                            # magnitudes (not scaled by 2^16). GradScaler.step()
+                            # skips re-unscaling if already done.
+                            if vjp_scaler is not None and self.grad_scaler is not None:
+                                self.grad_scaler.unscale_(self.optimizer)
                             # VJP approximation: reduce gradient compute (Feb 2026)
                             if vjp_scaler is not None:
                                 vjp_scaler.approximate_gradients(trainable_params)
