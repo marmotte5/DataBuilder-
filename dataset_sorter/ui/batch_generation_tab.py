@@ -439,15 +439,27 @@ class BatchGenerationTab(QWidget):
             except (ValueError, IndexError):
                 pass
 
+        def _safe_int(s: str, default: int) -> int:
+            try:
+                return int(s) if s else default
+            except ValueError:
+                return default
+
+        def _safe_float(s: str, default: float) -> float:
+            try:
+                return float(s) if s else default
+            except ValueError:
+                return default
+
         return BatchPrompt(
             positive=_text(0),
             negative=_text(1),
-            seed=int(_text(2) or "-1"),
-            steps=int(_text(3) or "0"),
-            cfg_scale=float(_text(4) or "0"),
+            seed=_safe_int(_text(2), -1),
+            steps=_safe_int(_text(3), 0),
+            cfg_scale=_safe_float(_text(4), 0.0),
             width=w,
             height=h,
-            count=max(1, int(_text(6) or "1")),
+            count=max(1, _safe_int(_text(6), 1)),
         )
 
     def _sync_queue_from_table(self):
@@ -617,12 +629,12 @@ class BatchGenerationTab(QWidget):
 
     def _stop_batch(self):
         if self._worker:
-            # Disconnect signals before stopping to prevent stale callbacks
+            # Disconnect live-update signals but keep finished connected
+            # so _on_batch_finished re-enables UI buttons properly.
             try:
                 self._worker.image_generated.disconnect(self._on_image_generated)
                 self._worker.prompt_status.disconnect(self._on_prompt_status)
                 self._worker.batch_progress.disconnect(self._on_batch_progress)
-                self._worker.finished.disconnect(self._on_batch_finished)
             except (TypeError, RuntimeError):
                 pass  # Already disconnected
             self._worker.stop()

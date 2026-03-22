@@ -615,9 +615,9 @@ class MainWindow(QMainWindow):
             self.library_tab.use_in_generate.connect(self._on_library_use_generate)
         if hasattr(self.library_tab, 'use_in_train'):
             self.library_tab.use_in_train.connect(self._on_library_use_train)
-        # Library → Merge tab
-        if hasattr(self.library_tab, 'use_in_generate'):
-            self.library_tab.use_in_generate.connect(self._on_library_use_merge)
+        # Library → Merge tab (use dedicated signal if available)
+        if hasattr(self.library_tab, 'use_in_merge'):
+            self.library_tab.use_in_merge.connect(self._on_library_use_merge)
 
     def _on_library_use_generate(self, path: str):
         """Load a model from library into the generate tab."""

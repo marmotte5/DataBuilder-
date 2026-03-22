@@ -1272,7 +1272,7 @@ class LibraryTab(QWidget):
 
     def _get_all_user_meta(self) -> dict:
         """Load the full user metadata dict from QSettings."""
-        settings = QSettings()
+        settings = QSettings("DataBuilder", "DataBuilder")
         raw = settings.value(self._META_KEY, "{}")
         if isinstance(raw, str):
             try:
@@ -1283,7 +1283,7 @@ class LibraryTab(QWidget):
 
     def _save_all_user_meta(self, meta: dict):
         """Persist the full user metadata dict to QSettings."""
-        settings = QSettings()
+        settings = QSettings("DataBuilder", "DataBuilder")
         settings.setValue(self._META_KEY, _json.dumps(meta))
 
     def _load_user_metadata(self, item: LibraryItem):

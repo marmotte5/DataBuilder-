@@ -67,6 +67,10 @@ class MergeWorker(QThread):
         self.method: str = "weighted_sum"
         self.alpha: float = 0.5
         self.fp16_output: bool = True
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         try:
@@ -96,6 +100,9 @@ class MergeWorker(QThread):
             merged = {}
 
             for ki, key in enumerate(all_keys):
+                if self._cancelled:
+                    self.finished.emit(False, "Merge cancelled by user")
+                    return
                 if ki % 50 == 0:
                     self.progress.emit(1, 3,
                         f"Merging tensor {ki}/{total_keys}...")
@@ -408,6 +415,7 @@ class ModelMergeTab(QWidget):
         self._btn_cancel = QPushButton("Cancel")
         self._btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
         self._btn_cancel.setEnabled(False)
+        self._btn_cancel.clicked.connect(self._cancel_merge)
         btn_row.addWidget(self._btn_cancel)
 
         btn_row.addStretch()
@@ -516,6 +524,11 @@ class ModelMergeTab(QWidget):
         self._progress_bar.setMaximum(total)
         self._progress_bar.setValue(current)
         self._status_label.setText(message)
+
+    def _cancel_merge(self):
+        if self._worker:
+            self._worker.cancel()
+        self._btn_cancel.setEnabled(False)
 
     def _on_finished(self, success: bool, message: str):
         self._status_label.setText(message)
