@@ -292,6 +292,18 @@ class Trainer:
             )
             config.cache_text_encoder = False
 
+        # Warn about config options that have UI but no backend implementation yet
+        if config.controlnet_enabled:
+            log.warning(
+                "controlnet_enabled=True but ControlNet training is not yet "
+                "implemented — the setting will be ignored."
+            )
+        if config.adversarial_enabled:
+            log.warning(
+                "adversarial_enabled=True but adversarial training is not yet "
+                "implemented — the setting will be ignored."
+            )
+
         if progress_fn:
             progress_fn(1, 8, "Applying speed optimizations...")
 
@@ -630,6 +642,8 @@ class Trainer:
             initial_weights = {}
             if self._concept_probe_result is not None:
                 initial_weights = self._concept_probe_result.suggested_weights
+            elif self._tag_weights:
+                initial_weights = self._tag_weights
             self._adaptive_tag_weighter = AdaptiveTagWeighter(
                 initial_weights=initial_weights,
                 warmup_steps=config.adaptive_tag_warmup,

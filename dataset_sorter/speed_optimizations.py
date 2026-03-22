@@ -933,8 +933,10 @@ def apply_liger_kernels(model: nn.Module) -> bool:
                 fused.weight.data.copy_(module.weight.data)
                 setattr(parent, attr, fused)
                 applied += 1
-    except (ImportError, Exception) as e:
-        log.debug(f"Liger RMSNorm not available: {e}")
+    except ImportError:
+        log.debug("Liger RMSNorm not available (liger_kernel not installed)")
+    except Exception as e:
+        log.warning(f"Failed to apply Liger RMSNorm: {e}")
 
     # Try to replace LayerNorm with fused version
     try:
@@ -951,8 +953,10 @@ def apply_liger_kernels(model: nn.Module) -> bool:
                     fused.bias.data.copy_(module.bias.data)
                 setattr(parent, attr, fused)
                 applied += 1
-    except (ImportError, Exception) as e:
-        log.debug(f"Liger LayerNorm not available: {e}")
+    except ImportError:
+        log.debug("Liger LayerNorm not available (liger_kernel not installed)")
+    except Exception as e:
+        log.warning(f"Failed to apply Liger LayerNorm: {e}")
 
     # Try to replace SwiGLU/GEGLU activations with fused version
     try:
@@ -969,8 +973,10 @@ def apply_liger_kernels(model: nn.Module) -> bool:
                     ).to(device=module.w1.weight.device, dtype=module.w1.weight.dtype)
                     setattr(parent, attr, fused)
                     applied += 1
-    except (ImportError, Exception) as e:
-        log.debug(f"Liger SwiGLU not available: {e}")
+    except ImportError:
+        log.debug("Liger SwiGLU not available (liger_kernel not installed)")
+    except Exception as e:
+        log.warning(f"Failed to apply Liger SwiGLU: {e}")
 
     if applied > 0:
         log.info(f"Liger-Kernel: replaced {applied} modules with fused Triton implementations")

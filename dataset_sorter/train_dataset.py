@@ -507,8 +507,10 @@ class CachedTrainDataset(Dataset):
                             raise ValueError(f"Empty safetensors cache: {sf_path}")
                         max_idx = max(int(k[1:]) for k in keys) + 1
                         loaded = tuple(data.get(f"t{i:02d}") for i in range(max_idx))
-                    except (ImportError, Exception):
-                        pass
+                    except ImportError:
+                        pass  # safetensors not installed, use torch fallback
+                    except Exception as e:
+                        log.warning(f"Failed to load safetensors TE cache {sf_path}: {e}")
                 if loaded is None and cache_path.exists():
                     loaded = torch.load(cache_path, map_location="cpu", weights_only=True)
                 if loaded is not None:
@@ -549,7 +551,11 @@ class CachedTrainDataset(Dataset):
                                     te_dict[f"t{ti:02d}"] = t
                             if te_dict:
                                 save_file(te_dict, str(sf_path))
-                        except (ImportError, Exception):
+                        except ImportError:
+                            cache_path = self.cache_dir / f"te_{cache_key}.pt"
+                            torch.save(te_result, cache_path)
+                        except Exception as e:
+                            log.warning(f"Failed to save TE cache {cache_key} as safetensors: {e}")
                             cache_path = self.cache_dir / f"te_{cache_key}.pt"
                             torch.save(te_result, cache_path)
 
@@ -673,7 +679,11 @@ class CachedTrainDataset(Dataset):
                     else:
                         cache_path = self.cache_dir / f"te_{cache_key}.pt"
                         torch.save(te_result, cache_path)
-                except (ImportError, Exception):
+                except ImportError:
+                    cache_path = self.cache_dir / f"te_{cache_key}.pt"
+                    torch.save(te_result, cache_path)
+                except Exception as e:
+                    log.warning(f"Failed to save TE cache {cache_key} as safetensors: {e}")
                     cache_path = self.cache_dir / f"te_{cache_key}.pt"
                     torch.save(te_result, cache_path)
 
