@@ -364,7 +364,17 @@ class Trainer:
             progress_fn(2, 8, "Preparing dataset...")
 
         # ── 6. Create dataset (with optional aspect ratio bucketing) ──
-        cache_dir = output_dir / ".cache" if config.cache_latents_to_disk else None
+        cache_dir = None
+        if config.cache_latents_to_disk:
+            if config.cache_to_ram_disk and Path("/dev/shm").is_dir():
+                # Use tmpfs RAM disk for faster cache I/O (Linux only)
+                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                log.info(f"Using RAM disk for cache: {cache_dir}")
+            else:
+                cache_dir = output_dir / ".cache"
+                if config.cache_to_ram_disk:
+                    log.warning("cache_to_ram_disk=True but /dev/shm not available, using disk cache")
 
         bucket_assignments = None
         self._bucket_sampler = None
@@ -813,10 +823,22 @@ class Trainer:
                 )
                 log.info("DataLoader using BucketBatchSampler for multi-aspect training")
             else:
+                _sampler = None
+                _shuffle = True
+                if self._curriculum_sampler is not None:
+                    from torch.utils.data import WeightedRandomSampler
+                    _weights = torch.ones(len(self.dataset), dtype=torch.double)
+                    _sampler = WeightedRandomSampler(
+                        _weights, num_samples=len(self.dataset), replacement=True,
+                    )
+                    _shuffle = False  # mutually exclusive with sampler
+                    log.info("DataLoader using WeightedRandomSampler for curriculum learning")
+
                 dataloader = DataLoader(
                     self.dataset,
                     batch_size=config.batch_size,
-                    shuffle=True,
+                    shuffle=_shuffle,
+                    sampler=_sampler,
                     num_workers=use_workers,
                     pin_memory=True,
                     drop_last=True,
@@ -931,9 +953,14 @@ class Trainer:
             # the end of the previous epoch (when num_batches % grad_accum != 0).
             self.optimizer.zero_grad(set_to_none=True)
 
-            # Curriculum learning: epoch callback
+            # Curriculum learning: epoch callback + update sampler weights
             if self._curriculum_sampler is not None:
                 self._curriculum_sampler.on_epoch_start()
+                if dataloader is not None and hasattr(dataloader, 'sampler'):
+                    _dl = getattr(dataloader, 'dataloader', dataloader)  # unwrap prefetcher
+                    if hasattr(_dl, 'sampler') and hasattr(_dl.sampler, 'weights'):
+                        _new_w = self._curriculum_sampler.get_sampling_weights()
+                        _dl.sampler.weights = torch.from_numpy(_new_w).double()
 
             if progress_fn:
                 progress_fn(
