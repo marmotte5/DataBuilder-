@@ -42,6 +42,21 @@ _DARK_COLORS = {
 
     # Headers
     "header":          "#e0e2f0",
+
+    # Card elevation (layered cards)
+    "card_bg":         "#1a1c2a",
+    "card_hover":      "#222436",
+    "card_selected":   "#2a2d4a",
+
+    # Gradient accents
+    "gradient_start":  "#6366f1",
+    "gradient_end":    "#8b5cf6",
+
+    # Category badge colors
+    "badge_model":     "#818cf8",
+    "badge_lora":      "#34d399",
+    "badge_embedding": "#fbbf24",
+    "badge_text":      "#0f1117",
 }
 
 _LIGHT_COLORS = {
@@ -86,6 +101,21 @@ _LIGHT_COLORS = {
 
     # Headers
     "header":          "#1a1c2b",
+
+    # Card elevation (layered cards)
+    "card_bg":         "#f3f4f8",
+    "card_hover":      "#eaebf2",
+    "card_selected":   "#dfe1f0",
+
+    # Gradient accents
+    "gradient_start":  "#6366f1",
+    "gradient_end":    "#8b5cf6",
+
+    # Category badge colors
+    "badge_model":     "#818cf8",
+    "badge_lora":      "#34d399",
+    "badge_embedding": "#fbbf24",
+    "badge_text":      "#0f1117",
 }
 
 # Active theme state
@@ -103,6 +133,8 @@ def set_theme(mode: str):
     global ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE
     global SECURITY_BANNER_STYLE, MUTED_LABEL_STYLE, STAT_VALUE_STYLE
     global STAT_LABEL_STYLE, TAG_BADGE_STYLE, NAV_BUTTON_STYLE
+    global MODEL_CARD_STYLE, SELECTED_CARD_STYLE, TOOLBAR_BUTTON_STYLE
+    global SEARCH_INPUT_STYLE, DETAIL_PANEL_STYLE, SIDEBAR_STYLE
     _current_mode = mode
     source = _LIGHT_COLORS if mode == "light" else _DARK_COLORS
     COLORS.clear()
@@ -120,6 +152,12 @@ def set_theme(mode: str):
     STAT_LABEL_STYLE = stat_label_style()
     TAG_BADGE_STYLE = tag_badge_style()
     NAV_BUTTON_STYLE = nav_button_style()
+    MODEL_CARD_STYLE = model_card_style()
+    SELECTED_CARD_STYLE = selected_card_style()
+    TOOLBAR_BUTTON_STYLE = toolbar_button_style()
+    SEARCH_INPUT_STYLE = search_input_style()
+    DETAIL_PANEL_STYLE = detail_panel_style()
+    SIDEBAR_STYLE = sidebar_style()
 
 
 def get_current_theme() -> str:
@@ -159,7 +197,13 @@ def get_stylesheet() -> str:
         border-color: {c['accent']};
     }}
     QLineEdit::placeholder {{ color: {c['text_muted']}; }}
-    QComboBox::drop-down {{ border: none; padding-right: 10px; }}
+    QComboBox::drop-down {{
+        border: none; padding-right: 10px; width: 28px;
+        subcontrol-origin: padding; subcontrol-position: top right;
+    }}
+    QComboBox::down-arrow {{
+        width: 10px; height: 10px;
+    }}
     QComboBox QAbstractItemView {{
         background-color: {c['surface']}; color: {c['text']};
         border: 1px solid {c['border']}; selection-background-color: {c['accent']};
@@ -220,12 +264,15 @@ def get_stylesheet() -> str:
         background-color: transparent; color: {c['text_muted']};
         border: none; border-bottom: 2px solid transparent;
         padding: 10px 22px; margin-right: 4px; font-weight: 500;
+        min-width: 60px;
     }}
     QTabBar::tab:selected {{
         color: {c['text']}; border-bottom: 2px solid {c['accent']};
+        background-color: {c['accent_glow']};
     }}
     QTabBar::tab:hover:!selected {{
         color: {c['text_secondary']};
+        border-bottom: 2px solid {c['border']};
     }}
 
     /* --- Scrollbar --- */
@@ -246,6 +293,7 @@ def get_stylesheet() -> str:
     QScrollBar::handle:horizontal:hover {{ background-color: {c['scrollbar_hover']}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+    QAbstractScrollArea::corner {{ background: {c['bg']}; }}
 
     /* --- Progress --- */
     QProgressBar {{
@@ -296,6 +344,7 @@ def get_stylesheet() -> str:
     /* --- Group Box (training tab) --- */
     QGroupBox {{
         background-color: {c['bg_alt']}; border: 1px solid {c['border']};
+        border-left: 2px solid {c['accent_subtle']};
         border-radius: 10px; margin-top: 14px; padding: 16px 12px 12px 12px;
         font-weight: 600; color: {c['text_secondary']};
     }}
@@ -320,7 +369,59 @@ def get_stylesheet() -> str:
     QToolTip {{
         background-color: {c['surface']}; color: {c['text']};
         border: 1px solid {c['border']}; border-radius: 6px;
-        padding: 6px 10px; font-size: 12px;
+        padding: 8px 12px; font-size: 12px;
+        opacity: 240;
+    }}
+
+    /* --- Slider --- */
+    QSlider::groove:horizontal {{
+        background-color: {c['surface']}; height: 6px;
+        border-radius: 3px;
+    }}
+    QSlider::handle:horizontal {{
+        background-color: {c['accent']}; width: 16px; height: 16px;
+        margin: -5px 0; border-radius: 8px;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background-color: {c['accent_hover']};
+    }}
+    QSlider::sub-page:horizontal {{
+        background-color: {c['accent']}; border-radius: 3px;
+    }}
+    QSlider::add-page:horizontal {{
+        background-color: {c['surface']}; border-radius: 3px;
+    }}
+    QSlider::groove:vertical {{
+        background-color: {c['surface']}; width: 6px;
+        border-radius: 3px;
+    }}
+    QSlider::handle:vertical {{
+        background-color: {c['accent']}; width: 16px; height: 16px;
+        margin: 0 -5px; border-radius: 8px;
+    }}
+    QSlider::handle:vertical:hover {{
+        background-color: {c['accent_hover']};
+    }}
+
+    /* --- Context Menus --- */
+    QMenu {{
+        background-color: {c['surface']}; color: {c['text']};
+        border: 1px solid {c['border']}; border-radius: 8px;
+        padding: 4px 0;
+    }}
+    QMenu::item {{
+        padding: 6px 28px 6px 16px; border-radius: 4px;
+        margin: 2px 4px;
+    }}
+    QMenu::item:selected {{
+        background-color: {c['accent_subtle']}; color: {c['text']};
+    }}
+    QMenu::separator {{
+        height: 1px; background-color: {c['border_subtle']};
+        margin: 4px 8px;
+    }}
+    QMenu::icon {{
+        padding-left: 8px;
     }}
     """
 
@@ -424,6 +525,80 @@ def nav_button_style() -> str:
         f"background-color: {COLORS['bg']}; border-color: {COLORS['border_subtle']}; }}"
     )
 
+def model_card_style() -> str:
+    """Card style for library model cards with hover and selection states."""
+    return (
+        f"background-color: {COLORS['card_bg']}; "
+        f"border: 1px solid {COLORS['border']}; "
+        f"border-radius: 12px; padding: 12px;"
+    )
+
+def selected_card_style() -> str:
+    """Style for selected/active card with accent border glow."""
+    return (
+        f"background-color: {COLORS['card_selected']}; "
+        f"border: 2px solid {COLORS['accent']}; "
+        f"border-radius: 12px; padding: 11px;"
+    )
+
+def category_badge_style(category: str) -> str:
+    """Return badge style for model/lora/embedding categories.
+
+    ``category`` should be one of 'model', 'lora', or 'embedding'.
+    Falls back to the model badge color for unknown categories.
+    """
+    color_key = {
+        "model": "badge_model",
+        "lora": "badge_lora",
+        "embedding": "badge_embedding",
+    }.get(category, "badge_model")
+    return (
+        f"background-color: {COLORS[color_key]}; "
+        f"color: {COLORS['badge_text']}; "
+        f"border-radius: 10px; padding: 2px 10px; "
+        f"font-size: 11px; font-weight: 700;"
+    )
+
+def toolbar_button_style() -> str:
+    """Compact button style for toolbars (smaller padding)."""
+    return (
+        f"QPushButton {{ background-color: {COLORS['surface']}; color: {COLORS['text']}; "
+        f"border: 1px solid {COLORS['border']}; border-radius: 6px; "
+        f"padding: 4px 10px; font-weight: 500; font-size: 12px; }} "
+        f"QPushButton:hover {{ background-color: {COLORS['surface_hover']}; "
+        f"border-color: {COLORS['accent']}; }} "
+        f"QPushButton:pressed {{ background-color: {COLORS['accent_subtle']}; }}"
+    )
+
+def search_input_style() -> str:
+    """Larger search input with icon space."""
+    return (
+        f"background-color: {COLORS['input_bg']}; color: {COLORS['text']}; "
+        f"border: 1px solid {COLORS['border']}; border-radius: 10px; "
+        f"padding: 10px 14px 10px 36px; font-size: 14px; min-height: 26px;"
+    )
+
+def detail_panel_style() -> str:
+    """Style for detail/info panels at bottom of views."""
+    return (
+        f"background-color: {COLORS['bg_alt']}; "
+        f"border: 1px solid {COLORS['border']}; "
+        f"border-top: 2px solid {COLORS['accent_subtle']}; "
+        f"border-radius: 0 0 10px 10px; padding: 14px;"
+    )
+
+def sidebar_style() -> str:
+    """Style for navigation sidebar buttons."""
+    return (
+        f"QPushButton {{ background-color: transparent; color: {COLORS['text_secondary']}; "
+        f"border: none; border-radius: 8px; "
+        f"padding: 10px 16px; font-weight: 500; text-align: left; }} "
+        f"QPushButton:hover {{ background-color: {COLORS['surface']}; "
+        f"color: {COLORS['text']}; }} "
+        f"QPushButton:checked {{ background-color: {COLORS['accent_subtle']}; "
+        f"color: {COLORS['accent']}; font-weight: 600; }}"
+    )
+
 
 # --- Backward-compatible constants (evaluated at import time, dark theme) ---
 # These are kept for any code that imports them directly.
@@ -439,3 +614,9 @@ STAT_VALUE_STYLE = stat_value_style()
 STAT_LABEL_STYLE = stat_label_style()
 TAG_BADGE_STYLE = tag_badge_style()
 NAV_BUTTON_STYLE = nav_button_style()
+MODEL_CARD_STYLE = model_card_style()
+SELECTED_CARD_STYLE = selected_card_style()
+TOOLBAR_BUTTON_STYLE = toolbar_button_style()
+SEARCH_INPUT_STYLE = search_input_style()
+DETAIL_PANEL_STYLE = detail_panel_style()
+SIDEBAR_STYLE = sidebar_style()

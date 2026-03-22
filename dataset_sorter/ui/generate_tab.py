@@ -18,7 +18,7 @@ from PIL import Image as PILImage
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QImage
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
     QTextEdit, QFileDialog, QGroupBox, QCheckBox,
     QScrollArea, QFrame, QProgressBar, QSplitter,
@@ -499,9 +499,13 @@ class GenerateTab(QWidget):
             f"border: 1px solid {COLORS['border']}; border-radius: 12px; "
             f"padding: 8px;"
         )
-        self.image_label.setText("Generated images will appear here")
+        self.image_label.setText(
+            "Load a model and click Generate\nto create images here"
+        )
         self.image_label.setStyleSheet(
-            self.image_label.styleSheet() + f" color: {COLORS['text_muted']};"
+            f"background-color: {COLORS['surface']}; "
+            f"border: 2px dashed {COLORS['border']}; border-radius: 16px; "
+            f"padding: 8px; color: {COLORS['text_muted']}; font-size: 14px;"
         )
         right_layout.addWidget(self.image_label, 1)
 
@@ -540,6 +544,18 @@ class GenerateTab(QWidget):
         self.btn_save_all.setEnabled(False)
         self.btn_save_all.clicked.connect(self._save_all_images)
         nav_row.addWidget(self.btn_save_all)
+
+        self.btn_copy_seed = QPushButton("Copy Seed")
+        self.btn_copy_seed.setToolTip("Copy the seed of the currently displayed image to clipboard")
+        self.btn_copy_seed.setEnabled(False)
+        self.btn_copy_seed.clicked.connect(self._copy_current_seed)
+        nav_row.addWidget(self.btn_copy_seed)
+
+        self.btn_send_to_img2img = QPushButton("Send to img2img")
+        self.btn_send_to_img2img.setToolTip("Use the current image as the init image for img2img")
+        self.btn_send_to_img2img.setEnabled(False)
+        self.btn_send_to_img2img.clicked.connect(self._send_to_img2img)
+        nav_row.addWidget(self.btn_send_to_img2img)
 
         right_layout.addLayout(nav_row)
 
@@ -850,6 +866,8 @@ class GenerateTab(QWidget):
         self.btn_next.setEnabled(self._current_gallery_idx < n - 1)
         self.btn_save.setEnabled(n > 0)
         self.btn_save_all.setEnabled(n > 0)
+        self.btn_copy_seed.setEnabled(n > 0)
+        self.btn_send_to_img2img.setEnabled(n > 0)
 
     def _prev_image(self):
         """Navigate to the previous image in the gallery."""
@@ -989,6 +1007,38 @@ class GenerateTab(QWidget):
                     return
                 except (ValueError, IndexError):
                     pass
+
+    def _copy_current_seed(self):
+        """Copy the seed of the current image to the system clipboard."""
+        if not self._generated_images:
+            return
+        _, info = self._generated_images[self._current_gallery_idx]
+        for part in info.split("|"):
+            part = part.strip()
+            if part.startswith("Seed:"):
+                try:
+                    seed = part.split(":")[1].strip()
+                    clipboard = QApplication.clipboard()
+                    clipboard.setText(seed)
+                    show_toast(self, f"Seed {seed} copied", "success")
+                    return
+                except (IndexError, AttributeError):
+                    pass
+        show_toast(self, "No seed found in image info", "warning")
+
+    def _send_to_img2img(self):
+        """Use the current gallery image as the init image for img2img."""
+        if not self._generated_images:
+            return
+        pil_img, _ = self._generated_images[self._current_gallery_idx]
+        # Save to temp file and set as init image
+        import tempfile
+        tmp = Path(tempfile.gettempdir()) / "databuilder_img2img_init.png"
+        pil_img.save(str(tmp))
+        self.init_image_path.setText(str(tmp))
+        self._show_init_preview(str(tmp))
+        self.strength_spin.setValue(0.65)
+        show_toast(self, "Image set as img2img input", "success")
 
     # ── Save images ─────────────────────────────────────────────────────
 

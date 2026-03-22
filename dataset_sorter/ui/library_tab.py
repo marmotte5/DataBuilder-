@@ -1,0 +1,891 @@
+"""Library tab — browse models, LoRAs, and embeddings on disk.
+
+Provides a card-grid UI for discovering and managing the user's collection
+of AI model files. Supports three categories (Models, LoRAs, Embeddings),
+each with configurable scan directories persisted via QSettings. Files are
+discovered by a background QThread worker to keep the UI responsive. Each
+file is displayed as a visual card with name, size, detected model type,
+and modification date. A detail panel at the bottom shows full metadata
+and provides action buttons (copy path, open folder, send to generate/train).
+
+Architecture:
+    LibraryTab(QWidget)
+        ├── category toggle (QButtonGroup)
+        ├── search bar + refresh button
+        ├── folder management bar
+        ├── QScrollArea → QGridLayout of ModelCard widgets
+        └── detail panel (selected item info + action buttons)
+
+    LibraryScanWorker(QThread)
+        Walks configured directories, collects file metadata,
+        emits results as a list of LibraryItem dataclasses.
+"""
+
+import logging
+import os
+import platform
+import subprocess
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from PyQt6.QtCore import (
+    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize,
+)
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QPushButton, QLineEdit, QScrollArea, QButtonGroup, QFrame,
+    QFileDialog, QApplication, QMenu, QComboBox, QSizePolicy,
+)
+
+from dataset_sorter.ui.theme import (
+    COLORS, card_style, accent_button_style, muted_label_style,
+    section_header_style, tag_badge_style, nav_button_style,
+)
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+MODEL_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".bin"}
+LORA_HINT_KEYWORDS = {"lora", "loha", "lokr", "lycoris", "adapter"}
+EMBEDDING_HINT_KEYWORDS = {"embedding", "embed", "ti", "textual_inversion", "textual-inversion"}
+
+MODEL_TYPE_KEYWORDS: dict[str, list[str]] = {
+    "SDXL":     ["sdxl", "pony", "animagine-xl"],
+    "SD 1.5":   ["sd15", "sd-1-5", "sd_1_5", "v1-5", "v1.5", "dreamshaper", "deliberate"],
+    "SD 2.x":   ["sd2", "sd-2", "v2-1", "v2.1"],
+    "SD3":      ["sd3", "sd-3", "stable-diffusion-3"],
+    "SD 3.5":   ["sd3.5", "sd35", "sd-3.5", "sd-35"],
+    "Flux":     ["flux"],
+    "Flux 2":   ["flux2", "flux-2"],
+    "Z-Image":  ["zimage", "z-image"],
+    "PixArt":   ["pixart"],
+    "Kolors":   ["kolors"],
+    "Cascade":  ["cascade"],
+    "Chroma":   ["chroma"],
+    "AuraFlow": ["auraflow"],
+    "Sana":     ["sana"],
+    "HunyuanDiT": ["hunyuan"],
+    "HiDream":  ["hidream"],
+}
+
+GRID_COLUMNS = 4
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LibraryItem:
+    """Metadata for a single discovered file or diffusers directory."""
+
+    name: str
+    path: str
+    size_bytes: int
+    modified: datetime
+    model_type: str  # detected heuristic label
+    category: str  # "models", "loras", "embeddings"
+    is_directory: bool = False
+
+    @property
+    def size_display(self) -> str:
+        """Human-readable file size."""
+        b = self.size_bytes
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 ** 2:
+            return f"{b / 1024:.1f} KB"
+        if b < 1024 ** 3:
+            return f"{b / 1024 ** 2:.1f} MB"
+        return f"{b / 1024 ** 3:.2f} GB"
+
+    @property
+    def modified_display(self) -> str:
+        """Short date string."""
+        return self.modified.strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Background scanner
+# ---------------------------------------------------------------------------
+
+
+class LibraryScanWorker(QThread):
+    """Walks directories in the background and emits discovered items.
+
+    Separates files into models, loras, and embeddings based on
+    directory hints and filename heuristics. Diffusers directories
+    (containing model_index.json) are treated as single model entries.
+    """
+
+    finished = pyqtSignal(list)  # list[LibraryItem]
+    error = pyqtSignal(str)
+
+    def __init__(self, directories: list[str], category: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._directories = directories
+        self._category = category
+
+    def run(self):
+        """Scan all directories and collect matching files."""
+        items: list[LibraryItem] = []
+        for dir_path in self._directories:
+            try:
+                self._scan_directory(Path(dir_path), items)
+            except Exception as exc:
+                log.warning("Error scanning %s: %s", dir_path, exc)
+                self.error.emit(f"Error scanning {dir_path}: {exc}")
+        self.finished.emit(items)
+
+    def _scan_directory(self, root: Path, items: list[LibraryItem]):
+        """Recursively scan *root* for model files and diffusers directories."""
+        if not root.is_dir():
+            return
+
+        # Check if this is a diffusers directory
+        if (root / "model_index.json").exists():
+            total_size = sum(
+                f.stat().st_size for f in root.rglob("*") if f.is_file()
+            )
+            stat = root.stat()
+            items.append(LibraryItem(
+                name=root.name,
+                path=str(root),
+                size_bytes=total_size,
+                modified=datetime.fromtimestamp(stat.st_mtime),
+                model_type=_detect_model_type(root.name),
+                category=self._category,
+                is_directory=True,
+            ))
+            return  # Don't recurse further into diffusers dirs
+
+        try:
+            entries = sorted(root.iterdir())
+        except PermissionError:
+            return
+
+        for entry in entries:
+            if entry.is_dir():
+                self._scan_directory(entry, items)
+            elif entry.suffix.lower() in MODEL_EXTENSIONS:
+                if self._matches_category(entry):
+                    try:
+                        stat = entry.stat()
+                    except OSError:
+                        continue
+                    items.append(LibraryItem(
+                        name=entry.name,
+                        path=str(entry),
+                        size_bytes=stat.st_size,
+                        modified=datetime.fromtimestamp(stat.st_mtime),
+                        model_type=_detect_model_type(entry.name),
+                        category=self._category,
+                    ))
+
+    def _matches_category(self, path: Path) -> bool:
+        """Determine whether *path* belongs to the current scan category."""
+        name_lower = path.name.lower()
+        parts_lower = str(path).lower()
+
+        if self._category == "loras":
+            return (
+                any(kw in name_lower for kw in LORA_HINT_KEYWORDS)
+                or any(kw in parts_lower for kw in LORA_HINT_KEYWORDS)
+                or "lora" in parts_lower
+            )
+        if self._category == "embeddings":
+            is_embedding = (
+                any(kw in name_lower for kw in EMBEDDING_HINT_KEYWORDS)
+                or any(kw in parts_lower for kw in EMBEDDING_HINT_KEYWORDS)
+            )
+            # Small files with .pt/.bin are often embeddings
+            if path.suffix.lower() in {".pt", ".bin"}:
+                try:
+                    if path.stat().st_size < 50 * 1024 * 1024:  # < 50 MB
+                        return True
+                except OSError:
+                    pass
+            return is_embedding
+        # models: anything not obviously a LoRA or embedding
+        return not (
+            any(kw in name_lower for kw in LORA_HINT_KEYWORDS)
+            or any(kw in name_lower for kw in EMBEDDING_HINT_KEYWORDS)
+        )
+
+
+def _detect_model_type(name: str) -> str:
+    """Guess model architecture from filename using keyword matching."""
+    lower = name.lower().replace(" ", "").replace("_", "")
+    for label, keywords in MODEL_TYPE_KEYWORDS.items():
+        for kw in keywords:
+            if kw.replace("-", "").replace("_", "") in lower:
+                return label
+    return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Model card widget
+# ---------------------------------------------------------------------------
+
+
+class ModelCard(QFrame):
+    """Visual card representing a single library item.
+
+    Displays file name, size, model type badge, and modification date.
+    Supports click selection with accent border highlight and hover effects.
+    """
+
+    clicked = pyqtSignal(object)  # emits LibraryItem
+
+    CARD_WIDTH = 200
+    CARD_HEIGHT = 150
+
+    def __init__(self, item: LibraryItem, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._item = item
+        self._selected = False
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setFixedSize(QSize(self.CARD_WIDTH, self.CARD_HEIGHT))
+        self.setToolTip(item.path)
+        self._build_ui()
+        self._apply_style(hovered=False)
+
+    @property
+    def item(self) -> LibraryItem:
+        """The library item represented by this card."""
+        return self._item
+
+    def set_selected(self, selected: bool):
+        """Toggle visual selection state."""
+        self._selected = selected
+        self._apply_style(hovered=False)
+
+    # -- UI construction -----------------------------------------------------
+
+    def _build_ui(self):
+        """Construct card child widgets."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        # Icon/type indicator
+        icon_text = "\U0001F4E6" if self._item.is_directory else "\U0001F4C4"
+        icon_label = QLabel(icon_text)
+        icon_label.setStyleSheet(
+            f"font-size: 22px; background: transparent; color: {COLORS['text_secondary']};"
+        )
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(icon_label)
+
+        # File name (elided)
+        name_label = QLabel(self._item.name)
+        name_label.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 12px; font-weight: 600; "
+            f"background: transparent;"
+        )
+        name_label.setWordWrap(False)
+        metrics = name_label.fontMetrics()
+        elided = metrics.elidedText(self._item.name, Qt.TextElideMode.ElideMiddle, self.CARD_WIDTH - 28)
+        name_label.setText(elided)
+        layout.addWidget(name_label)
+
+        # Size
+        size_label = QLabel(self._item.size_display)
+        size_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;"
+        )
+        layout.addWidget(size_label)
+
+        # Model type badge
+        badge = QLabel(self._item.model_type)
+        badge.setStyleSheet(tag_badge_style())
+        badge.setFixedHeight(20)
+        badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        layout.addWidget(badge)
+
+        # Modified date
+        date_label = QLabel(self._item.modified_display)
+        date_label.setStyleSheet(muted_label_style())
+        layout.addWidget(date_label)
+
+        layout.addStretch()
+
+    def _apply_style(self, hovered: bool):
+        """Set the frame's stylesheet based on selection and hover state."""
+        if self._selected:
+            border_color = COLORS["accent"]
+            bg = COLORS["accent_subtle"]
+        elif hovered:
+            border_color = COLORS["surface_border"]
+            bg = COLORS["surface_hover"]
+        else:
+            border_color = COLORS["border"]
+            bg = COLORS["surface"]
+
+        self.setStyleSheet(
+            f"ModelCard {{ background-color: {bg}; "
+            f"border: 2px solid {border_color}; border-radius: 12px; }}"
+        )
+
+    # -- Events --------------------------------------------------------------
+
+    def enterEvent(self, event):
+        """Highlight on hover."""
+        if not self._selected:
+            self._apply_style(hovered=True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Remove hover highlight."""
+        self._apply_style(hovered=False)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        """Emit clicked signal on left click."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._item)
+        super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# Main Library Tab
+# ---------------------------------------------------------------------------
+
+
+class LibraryTab(QWidget):
+    """Full-featured library browser for models, LoRAs, and embeddings.
+
+    Signals:
+        use_in_generate(str): Emitted with a file path to load in the Generate tab.
+        use_in_train(str):    Emitted with a file path to load in the Training tab.
+    """
+
+    use_in_generate = pyqtSignal(str)
+    use_in_train = pyqtSignal(str)
+
+    _SETTINGS_KEY_PREFIX = "library/"
+    _CATEGORIES = ("models", "loras", "embeddings")
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._current_category: str = "models"
+        self._items: list[LibraryItem] = []
+        self._cards: list[ModelCard] = []
+        self._selected_item: LibraryItem | None = None
+        self._worker: LibraryScanWorker | None = None
+        self._sort_key: str = "name"  # "name", "size", "date"
+        self._sort_reverse: bool = False
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._apply_filter)
+
+        self._build_ui()
+        # Kick off initial scan after the event loop starts
+        QTimer.singleShot(100, self.refresh)
+
+    # ── UI Construction ─────────────────────────────────────────────────
+
+    def _build_ui(self):
+        """Assemble the full tab layout."""
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 12, 16, 12)
+        root.setSpacing(10)
+
+        root.addLayout(self._build_toolbar())
+        root.addLayout(self._build_folder_bar())
+        root.addWidget(self._build_card_area(), stretch=1)
+        root.addWidget(self._build_detail_panel())
+
+    def _build_toolbar(self) -> QHBoxLayout:
+        """Create the top toolbar with category toggles, search, sort, and refresh."""
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+
+        # Category toggle buttons
+        self._btn_group = QButtonGroup(self)
+        self._btn_group.setExclusive(True)
+        labels = {"models": "Models", "loras": "LoRAs", "embeddings": "Embeddings"}
+        for i, (key, label) in enumerate(labels.items()):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(key == "models")
+            btn.setFixedHeight(34)
+            btn.setMinimumWidth(90)
+            btn.setProperty("category", key)
+            btn.setStyleSheet(self._toggle_button_style(key == "models"))
+            btn.clicked.connect(lambda checked, k=key: self._on_category_changed(k))
+            self._btn_group.addButton(btn, i)
+            toolbar.addWidget(btn)
+
+        toolbar.addStretch()
+
+        # Sort dropdown
+        self._sort_combo = QComboBox()
+        self._sort_combo.addItems(["Name", "Size", "Date Modified"])
+        self._sort_combo.setFixedWidth(130)
+        self._sort_combo.setFixedHeight(34)
+        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        toolbar.addWidget(self._sort_combo)
+
+        # Search bar
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search...")
+        self._search_edit.setFixedWidth(200)
+        self._search_edit.setFixedHeight(34)
+        self._search_edit.textChanged.connect(lambda: self._search_timer.start())
+        toolbar.addWidget(self._search_edit)
+
+        # Refresh button
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setFixedHeight(34)
+        refresh_btn.setStyleSheet(nav_button_style())
+        refresh_btn.clicked.connect(self.refresh)
+        toolbar.addWidget(refresh_btn)
+
+        return toolbar
+
+    def _build_folder_bar(self) -> QHBoxLayout:
+        """Create the folder management bar with path display and add/browse buttons."""
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+
+        folder_label = QLabel("Folders:")
+        folder_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; "
+            f"font-weight: 600; background: transparent;"
+        )
+        bar.addWidget(folder_label)
+
+        self._folder_display = QLabel("")
+        self._folder_display.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            f"background: transparent;"
+        )
+        self._folder_display.setWordWrap(False)
+        bar.addWidget(self._folder_display, stretch=1)
+
+        browse_btn = QPushButton("Browse")
+        browse_btn.setFixedHeight(30)
+        browse_btn.setStyleSheet(nav_button_style())
+        browse_btn.clicked.connect(self._browse_folder)
+        bar.addWidget(browse_btn)
+
+        add_btn = QPushButton("+ Add Folder")
+        add_btn.setFixedHeight(30)
+        add_btn.setStyleSheet(nav_button_style())
+        add_btn.clicked.connect(self._add_folder)
+        bar.addWidget(add_btn)
+
+        remove_btn = QPushButton("Remove Folder")
+        remove_btn.setFixedHeight(30)
+        remove_btn.setStyleSheet(nav_button_style())
+        remove_btn.clicked.connect(self._remove_folder)
+        bar.addWidget(remove_btn)
+
+        self._update_folder_display()
+        return bar
+
+    def _build_card_area(self) -> QScrollArea:
+        """Create the scrollable card grid area."""
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self._grid_container = QWidget()
+        self._grid_container.setStyleSheet("background: transparent;")
+        self._grid_layout = QGridLayout(self._grid_container)
+        self._grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._grid_layout.setSpacing(12)
+        self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+        # Empty state label (shown when no items found)
+        self._empty_label = QLabel("No items found. Add a folder to get started.")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 14px; "
+            f"background: transparent; padding: 60px 0;"
+        )
+        self._empty_label.setVisible(False)
+
+        wrapper = QVBoxLayout()
+        wrapper.setContentsMargins(0, 0, 0, 0)
+        wrapper_widget = QWidget()
+        wrapper_widget.setStyleSheet("background: transparent;")
+        wrapper.addWidget(self._empty_label)
+        wrapper.addWidget(self._grid_container)
+        wrapper.addStretch()
+        wrapper_widget.setLayout(wrapper)
+
+        self._scroll_area.setWidget(wrapper_widget)
+        return self._scroll_area
+
+    def _build_detail_panel(self) -> QFrame:
+        """Create the bottom detail panel showing info for the selected item."""
+        self._detail_frame = QFrame()
+        self._detail_frame.setStyleSheet(
+            f"QFrame {{ {card_style()} }}"
+        )
+        self._detail_frame.setFixedHeight(130)
+
+        layout = QVBoxLayout(self._detail_frame)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(4)
+
+        # Top row: selected item name
+        self._detail_name = QLabel("No item selected")
+        self._detail_name.setStyleSheet(section_header_style())
+        layout.addWidget(self._detail_name)
+
+        # Path
+        self._detail_path = QLabel("")
+        self._detail_path.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self._detail_path.setWordWrap(True)
+        layout.addWidget(self._detail_path)
+
+        # Metadata row
+        self._detail_meta = QLabel("")
+        self._detail_meta.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;"
+        )
+        layout.addWidget(self._detail_meta)
+
+        # Action buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self._btn_copy_path = QPushButton("Copy Path")
+        self._btn_copy_path.setFixedHeight(30)
+        self._btn_copy_path.setStyleSheet(nav_button_style())
+        self._btn_copy_path.clicked.connect(self._copy_path)
+
+        self._btn_open_folder = QPushButton("Open Folder")
+        self._btn_open_folder.setFixedHeight(30)
+        self._btn_open_folder.setStyleSheet(nav_button_style())
+        self._btn_open_folder.clicked.connect(self._open_folder)
+
+        self._btn_use_generate = QPushButton("Use in Generate")
+        self._btn_use_generate.setFixedHeight(30)
+        self._btn_use_generate.setStyleSheet(accent_button_style())
+        self._btn_use_generate.clicked.connect(self._emit_use_generate)
+
+        self._btn_use_train = QPushButton("Use in Train")
+        self._btn_use_train.setFixedHeight(30)
+        self._btn_use_train.setStyleSheet(accent_button_style())
+        self._btn_use_train.clicked.connect(self._emit_use_train)
+
+        for btn in (self._btn_copy_path, self._btn_open_folder,
+                     self._btn_use_generate, self._btn_use_train):
+            btn.setEnabled(False)
+            btn_row.addWidget(btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        return self._detail_frame
+
+    # ── Toggle button styling ───────────────────────────────────────────
+
+    def _toggle_button_style(self, active: bool) -> str:
+        """Return stylesheet for a category toggle button."""
+        if active:
+            return (
+                f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "
+                f"border: none; border-radius: 8px; padding: 6px 16px; font-weight: 600; "
+                f"font-size: 12px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
+            )
+        return (
+            f"QPushButton {{ background-color: {COLORS['surface']}; color: {COLORS['text_secondary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 8px; padding: 6px 16px; "
+            f"font-weight: 500; font-size: 12px; }} "
+            f"QPushButton:hover {{ background-color: {COLORS['surface_hover']}; "
+            f"color: {COLORS['text']}; }}"
+        )
+
+    def _update_toggle_styles(self):
+        """Refresh toggle button styles to reflect the current category."""
+        for btn in self._btn_group.buttons():
+            is_active = btn.property("category") == self._current_category
+            btn.setStyleSheet(self._toggle_button_style(is_active))
+
+    # ── Settings persistence ────────────────────────────────────────────
+
+    def _settings_key(self, suffix: str) -> str:
+        """Build a QSettings key for the current category."""
+        return f"{self._SETTINGS_KEY_PREFIX}{self._current_category}/{suffix}"
+
+    def _load_folders(self) -> list[str]:
+        """Load saved scan folders for the current category from QSettings."""
+        settings = QSettings("DataBuilder", "DataBuilder")
+        raw = settings.value(self._settings_key("folders"), [])
+        if isinstance(raw, str):
+            return [raw] if raw else []
+        if isinstance(raw, list):
+            return [str(p) for p in raw if p]
+        return []
+
+    def _save_folders(self, folders: list[str]):
+        """Persist scan folders for the current category to QSettings."""
+        settings = QSettings("DataBuilder", "DataBuilder")
+        settings.setValue(self._settings_key("folders"), folders)
+
+    # ── Folder management ───────────────────────────────────────────────
+
+    def _update_folder_display(self):
+        """Update the folder path label from saved settings."""
+        folders = self._load_folders()
+        if folders:
+            display = "  |  ".join(folders)
+            # Truncate if too long
+            metrics = self._folder_display.fontMetrics()
+            max_width = max(400, self.width() - 350)
+            elided = metrics.elidedText(display, Qt.TextElideMode.ElideMiddle, max_width)
+            self._folder_display.setText(elided)
+            self._folder_display.setToolTip("\n".join(folders))
+        else:
+            self._folder_display.setText("No folders configured")
+            self._folder_display.setToolTip("")
+
+    def _browse_folder(self):
+        """Open a file dialog and replace the folder list with one selection."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder:
+            self._save_folders([folder])
+            self._update_folder_display()
+            self.refresh()
+
+    def _add_folder(self):
+        """Open a file dialog and append a folder to the scan list."""
+        folder = QFileDialog.getExistingDirectory(self, "Add Folder")
+        if folder:
+            folders = self._load_folders()
+            if folder not in folders:
+                folders.append(folder)
+                self._save_folders(folders)
+                self._update_folder_display()
+                self.refresh()
+
+    def _remove_folder(self):
+        """Remove the last folder from the scan list."""
+        folders = self._load_folders()
+        if folders:
+            folders.pop()
+            self._save_folders(folders)
+            self._update_folder_display()
+            self.refresh()
+
+    # ── Category switching ──────────────────────────────────────────────
+
+    def _on_category_changed(self, category: str):
+        """Handle category toggle button click."""
+        if category == self._current_category:
+            return
+        self._current_category = category
+        self._update_toggle_styles()
+        self._update_folder_display()
+        self._selected_item = None
+        self._update_detail_panel()
+        self.refresh()
+
+    # ── Sorting ─────────────────────────────────────────────────────────
+
+    def _on_sort_changed(self, index: int):
+        """Handle sort dropdown change."""
+        keys = ["name", "size", "date"]
+        self._sort_key = keys[index] if index < len(keys) else "name"
+        self._populate_grid(self._filtered_items())
+
+    def _sorted_items(self, items: list[LibraryItem]) -> list[LibraryItem]:
+        """Sort items by the current sort key."""
+        if self._sort_key == "size":
+            return sorted(items, key=lambda i: i.size_bytes, reverse=True)
+        if self._sort_key == "date":
+            return sorted(items, key=lambda i: i.modified, reverse=True)
+        return sorted(items, key=lambda i: i.name.lower())
+
+    # ── Scanning ────────────────────────────────────────────────────────
+
+    def refresh(self):
+        """Start a background scan of configured folders."""
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.quit()
+            self._worker.wait(2000)
+
+        folders = self._load_folders()
+        if not folders:
+            self._items = []
+            self._populate_grid([])
+            return
+
+        self._worker = LibraryScanWorker(folders, self._current_category, self)
+        self._worker.finished.connect(self._on_scan_finished)
+        self._worker.error.connect(lambda msg: log.warning("Scan error: %s", msg))
+        self._worker.start()
+        log.debug("Library scan started for %s in %s", self._current_category, folders)
+
+    def _on_scan_finished(self, items: list[LibraryItem]):
+        """Handle completed scan results."""
+        self._items = items
+        log.debug("Library scan finished: %d items found", len(items))
+        self._populate_grid(self._filtered_items())
+
+    # ── Filtering ───────────────────────────────────────────────────────
+
+    def _filtered_items(self) -> list[LibraryItem]:
+        """Return items filtered by the current search query."""
+        query = self._search_edit.text().strip().lower()
+        if not query:
+            return self._sorted_items(self._items)
+        filtered = [
+            item for item in self._items
+            if query in item.name.lower() or query in item.model_type.lower()
+        ]
+        return self._sorted_items(filtered)
+
+    def _apply_filter(self):
+        """Debounced search filter callback."""
+        self._populate_grid(self._filtered_items())
+
+    # ── Grid population ─────────────────────────────────────────────────
+
+    def _populate_grid(self, items: list[LibraryItem]):
+        """Clear and rebuild the card grid with the given items."""
+        # Clear existing cards
+        for card in self._cards:
+            card.setParent(None)
+            card.deleteLater()
+        self._cards.clear()
+
+        # Remove stretch items from grid
+        while self._grid_layout.count():
+            child = self._grid_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        self._empty_label.setVisible(len(items) == 0)
+
+        for idx, item in enumerate(items):
+            card = ModelCard(item, self._grid_container)
+            card.clicked.connect(self._on_card_clicked)
+            row = idx // GRID_COLUMNS
+            col = idx % GRID_COLUMNS
+            self._grid_layout.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop)
+            self._cards.append(card)
+
+        # Ensure the selected item remains highlighted if still present
+        if self._selected_item:
+            for card in self._cards:
+                if card.item.path == self._selected_item.path:
+                    card.set_selected(True)
+                    break
+
+    # ── Card selection ──────────────────────────────────────────────────
+
+    def _on_card_clicked(self, item: LibraryItem):
+        """Handle a card being clicked — update selection and detail panel."""
+        self._selected_item = item
+        for card in self._cards:
+            card.set_selected(card.item.path == item.path)
+        self._update_detail_panel()
+
+    def _update_detail_panel(self):
+        """Refresh the detail panel with the current selection."""
+        item = self._selected_item
+        has_selection = item is not None
+
+        for btn in (self._btn_copy_path, self._btn_open_folder,
+                     self._btn_use_generate, self._btn_use_train):
+            btn.setEnabled(has_selection)
+
+        if not has_selection:
+            self._detail_name.setText("No item selected")
+            self._detail_path.setText("")
+            self._detail_meta.setText("")
+            return
+
+        self._detail_name.setText(f"Selected: {item.name}")
+        self._detail_path.setText(f"Path: {item.path}")
+        kind = "Diffusers directory" if item.is_directory else "Single file"
+        self._detail_meta.setText(
+            f"Size: {item.size_display}  |  Type: {item.model_type}  |  "
+            f"Modified: {item.modified_display}  |  {kind}"
+        )
+
+    # ── Action buttons ──────────────────────────────────────────────────
+
+    def _copy_path(self):
+        """Copy the selected item's path to the system clipboard."""
+        if self._selected_item is None:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(self._selected_item.path)
+            log.info("Copied path to clipboard: %s", self._selected_item.path)
+
+    def _open_folder(self):
+        """Open the containing folder in the system file manager."""
+        if self._selected_item is None:
+            return
+        path = Path(self._selected_item.path)
+        target = path if path.is_dir() else path.parent
+
+        system = platform.system()
+        try:
+            if system == "Windows":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif system == "Darwin":
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+        except Exception as exc:
+            log.warning("Failed to open folder %s: %s", target, exc)
+
+    def _emit_use_generate(self):
+        """Emit the selected item's path for the Generate tab."""
+        if self._selected_item is not None:
+            self.use_in_generate.emit(self._selected_item.path)
+            log.info("Sent to generate: %s", self._selected_item.path)
+
+    def _emit_use_train(self):
+        """Emit the selected item's path for the Training tab."""
+        if self._selected_item is not None:
+            self.use_in_train.emit(self._selected_item.path)
+            log.info("Sent to train: %s", self._selected_item.path)
+
+    # ── Context menu ────────────────────────────────────────────────────
+
+    def contextMenuEvent(self, event):
+        """Show a right-click context menu with sorting and refresh options."""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background-color: {COLORS['surface']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 8px; padding: 4px; }} "
+            f"QMenu::item {{ padding: 6px 20px; border-radius: 4px; }} "
+            f"QMenu::item:selected {{ background-color: {COLORS['accent_subtle']}; }}"
+        )
+
+        sort_name = menu.addAction("Sort by Name")
+        sort_size = menu.addAction("Sort by Size")
+        sort_date = menu.addAction("Sort by Date Modified")
+        menu.addSeparator()
+        refresh_action = menu.addAction("Refresh")
+
+        action = menu.exec(event.globalPos())
+        if action == sort_name:
+            self._sort_combo.setCurrentIndex(0)
+        elif action == sort_size:
+            self._sort_combo.setCurrentIndex(1)
+        elif action == sort_date:
+            self._sort_combo.setCurrentIndex(2)
+        elif action == refresh_action:
+            self.refresh()

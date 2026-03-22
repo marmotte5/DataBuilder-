@@ -11,9 +11,9 @@ from dataset_sorter.ui.theme import COLORS
 
 
 class PreviewTab(QWidget):
-    MAX_THUMBNAILS = 12
-    THUMB_W = 280
-    THUMB_H = 200
+    MAX_THUMBNAILS = 24
+    THUMB_W = 220
+    THUMB_H = 180
 
     def __init__(self, parent=None):
         """Initialize the preview tab with an info label and scrollable thumbnail grid."""
@@ -23,12 +23,13 @@ class PreviewTab(QWidget):
         layout.setSpacing(10)
 
         self.info_label = QLabel(
-            "Click on any tag in the left panel to see thumbnail previews of its images here."
+            "Select a tag in the left panel to preview its images here."
         )
         self.info_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 13px; "
-            f"padding: 8px 12px; background: {COLORS['surface']}; "
-            f"border-radius: 8px; border: 1px solid {COLORS['border']};"
+            f"padding: 10px 14px; background: {COLORS['surface']}; "
+            f"border-radius: 10px; border: 1px solid {COLORS['border']}; "
+            f"border-left: 3px solid {COLORS['accent']};"
         )
         layout.addWidget(self.info_label)
 
@@ -55,7 +56,7 @@ class PreviewTab(QWidget):
         # Filter out stale indices that may be out of bounds
         valid_indices = [idx for idx in entry_indices if 0 <= idx < len(entries)]
         shown = valid_indices[:self.MAX_THUMBNAILS]
-        cols = 3 if len(shown) > 6 else 2 if len(shown) > 1 else 1
+        cols = 4 if len(shown) > 12 else 3 if len(shown) > 4 else 2 if len(shown) > 1 else 1
 
         for i, idx in enumerate(shown):
             entry = entries[idx]
@@ -93,7 +94,7 @@ class PreviewTab(QWidget):
     def clear(self):
         """Clear the thumbnail grid and reset the info label to default text."""
         self._clear()
-        self.info_label.setText("Click on any tag in the left panel to see thumbnail previews of its images here.")
+        self.info_label.setText("Select a tag in the left panel to preview its images here.")
 
     def _clear(self):
         """Remove and delete all widgets from the thumbnail grid."""
