@@ -869,6 +869,9 @@ class GenerateTab(QWidget):
         if not self._generated_images:
             return
         idx = self._current_gallery_idx
+        if idx < 0 or idx >= len(self._generated_images):
+            idx = len(self._generated_images) - 1
+            self._current_gallery_idx = idx
         pil_img, info = self._generated_images[idx]
 
         # Get available space

@@ -796,35 +796,39 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _on_sample(self, images, step):
         """Handle sample signal: save generated images to disk and display the first one."""
         self._log(f"Samples generated at step {step}")
-        # Save samples to disk
-        output_text = self.output_dir_input.text().strip()
-        if not output_text:
-            self._log("Warning: output directory not set, skipping sample save")
-            return
-        output_dir = Path(output_text)
-        sample_dir = output_dir / "samples"
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        for i, img in enumerate(images):
-            path = sample_dir / f"sample_step{step:06d}_{i}.png"
-            img.save(str(path))
+        try:
+            # Save samples to disk
+            output_text = self.output_dir_input.text().strip()
+            if not output_text:
+                self._log("Warning: output directory not set, skipping sample save")
+            else:
+                output_dir = Path(output_text)
+                sample_dir = output_dir / "samples"
+                sample_dir.mkdir(parents=True, exist_ok=True)
+                for i, img in enumerate(images):
+                    path = sample_dir / f"sample_step{step:06d}_{i}.png"
+                    img.save(str(path))
 
-        # Display first sample, then free all PIL images
-        if images:
-            img = images[0].convert("RGB")  # Ensure RGB mode
-            data = img.tobytes("raw", "RGB")
-            qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
-            # .copy() ensures Qt owns the pixel data (avoids dangling pointer
-            # if Python's `data` bytes object is garbage-collected first).
-            pixmap = QPixmap.fromImage(qimg.copy()).scaled(
-                400, 300, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.sample_label.setPixmap(pixmap)
-        # Free PIL images — they can be 1-4 MB each and accumulate across
-        # sampling intervals during long training runs.
-        for img in images:
-            img.close()
-        del images
+            # Display first sample
+            if images:
+                img = images[0].convert("RGB")  # Ensure RGB mode
+                data = img.tobytes("raw", "RGB")
+                qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+                # .copy() ensures Qt owns the pixel data (avoids dangling pointer
+                # if Python's `data` bytes object is garbage-collected first).
+                pixmap = QPixmap.fromImage(qimg.copy()).scaled(
+                    400, 300, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.sample_label.setPixmap(pixmap)
+        except Exception as e:
+            self._log(f"Warning: failed to save/display sample at step {step}: {e}")
+        finally:
+            # Free PIL images — they can be 1-4 MB each and accumulate across
+            # sampling intervals during long training runs.
+            for img in images:
+                img.close()
+            del images
 
     def _on_phase(self, phase):
         """Log a training phase transition (e.g. caching, training, saving)."""
