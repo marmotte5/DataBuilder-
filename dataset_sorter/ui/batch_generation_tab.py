@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -717,7 +718,7 @@ class BatchGenerationTab(QWidget):
             item = self._table.item(qi, col)
             if item:
                 item.setForeground(
-                    __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor(color)
+                    QColor(color)
                 )
 
     def _on_batch_progress(self, completed: int, total: int, message: str):

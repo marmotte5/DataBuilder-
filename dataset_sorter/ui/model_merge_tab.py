@@ -551,6 +551,10 @@ class ModelMergeTab(QWidget):
         self._progress_bar.setVisible(False)
         variant = "success" if success else "warning"
         show_toast(self, message, variant)
+        # Clean up the worker thread to release file handles and memory
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
 
     def load_model_path(self, path: str):
         """Called externally to pre-fill Model A from the library."""
