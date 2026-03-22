@@ -220,6 +220,38 @@ class HiDreamBackend(TrainBackendBase):
             weight = 1.0 / torch.clamp(1.0 - t.float() + 1e-6, min=0.01)
             loss = loss * weight
 
+        # Apply the same weighting features as flow_training_step so that
+        # SpeeD, EMA timestep weighting, token weighting, and adaptive sample
+        # weights work correctly for HiDream (not just silently ignored).
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
+
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
+        if getattr(self, '_token_weight_mask', None) is not None:
+            mask = self._token_weight_mask
+            if mask.device != loss.device:
+                mask = mask.to(loss.device)
+            if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
+                sample_weight = mask.mean(dim=-1)
+                while sample_weight.dim() < loss.dim():
+                    sample_weight = sample_weight.unsqueeze(-1)
+                loss = loss * sample_weight
+            self._token_weight_mask = None
+
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 
     def freeze_text_encoders(self):

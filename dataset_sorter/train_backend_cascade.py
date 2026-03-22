@@ -124,6 +124,32 @@ class StableCascadeBackend(TrainBackendBase):
             snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
             loss = loss * snr_weights
 
+        # Apply the same weighting features as the base training_step so that
+        # SpeeD, EMA timestep weighting, token weighting, and adaptive sample
+        # weights work correctly for Cascade (not just silently ignored).
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
+
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
+        if config.token_weighting_enabled and hasattr(self, '_token_weight_mask') and self._token_weight_mask is not None:
+            from dataset_sorter.token_weighting import apply_token_weights_to_loss
+            loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
+            self._token_weight_mask = None
+
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
         return loss.mean()
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:

@@ -363,7 +363,10 @@ class CachedTrainDataset(Dataset):
                             encoded = encoded * vae.config.scaling_factor
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() and vae_batch_size > 1:
-                        # OOM: reduce batch size and retry this batch one-by-one
+                        # OOM: reduce batch size and retry this batch one-by-one.
+                        # Free batch_tensor first — it's the large GPU allocation
+                        # that caused the OOM and must be freed before retrying.
+                        del batch_tensor
                         vae_batch_size = max(1, vae_batch_size // 2)
                         log.warning(f"VAE OOM, reducing batch size to {vae_batch_size}")
                         if torch.cuda.is_available():
