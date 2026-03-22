@@ -1407,9 +1407,16 @@ class Trainer:
 
                 _model = getattr(self.backend, 'model_name', '')
                 if _model in ('flux', 'flux2'):
-                    # Flux: T5 hidden (h2) is the primary encoder_hidden,
-                    # CLIP pooled (p1) is the pooled projection
-                    encoder_hidden = h2 if h2 is not None else h1
+                    # Flux: concatenate CLIP-L + T5 hidden states
+                    # (matching the live encode path in train_backend_flux)
+                    if h1 is not None and h2 is not None:
+                        if h1.shape[-1] < h2.shape[-1]:
+                            h1 = torch.nn.functional.pad(
+                                h1, (0, h2.shape[-1] - h1.shape[-1])
+                            )
+                        encoder_hidden = torch.cat([h1, h2], dim=1)
+                    else:
+                        encoder_hidden = h2 if h2 is not None else h1
                     pooled = p1
                     te_out = (encoder_hidden, pooled)
                 elif _model == 'hunyuan':
