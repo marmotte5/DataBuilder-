@@ -136,24 +136,32 @@ class LibraryScanWorker(QThread):
         super().__init__(parent)
         self._directories = directories
         self._category = category
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the current scan."""
+        self._cancelled = True
 
     def run(self):
         """Scan all directories and collect matching files."""
         items: list[LibraryItem] = []
         total = len(self._directories)
         for i, dir_path in enumerate(self._directories):
+            if self._cancelled:
+                return
             self.progress.emit(i, total)
             try:
                 self._scan_directory(Path(dir_path), items)
             except Exception as exc:
                 log.warning("Error scanning %s: %s", dir_path, exc)
                 self.error.emit(f"Error scanning {dir_path}: {exc}")
-        self.progress.emit(total, total)
-        self.finished.emit(items)
+        if not self._cancelled:
+            self.progress.emit(total, total)
+            self.finished.emit(items)
 
     def _scan_directory(self, root: Path, items: list[LibraryItem]):
         """Recursively scan *root* for model files and diffusers directories."""
-        if not root.is_dir():
+        if self._cancelled or not root.is_dir():
             return
 
         # Check if this is a diffusers directory
@@ -179,6 +187,8 @@ class LibraryScanWorker(QThread):
             return
 
         for entry in entries:
+            if self._cancelled:
+                return
             if entry.is_dir():
                 self._scan_directory(entry, items)
             elif entry.suffix.lower() in MODEL_EXTENSIONS:
@@ -309,9 +319,14 @@ class ModelCard(QFrame):
         super().__init__(parent)
         self._item = item
         self._selected = False
+        self._pending_click = False
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setFixedSize(QSize(self.CARD_WIDTH, self.CARD_HEIGHT))
         self.setToolTip(item.path)
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(QApplication.doubleClickInterval())
+        self._click_timer.timeout.connect(self._emit_single_click)
         self._build_ui()
         self._apply_style(hovered=False)
 
@@ -405,15 +420,23 @@ class ModelCard(QFrame):
         self._apply_style(hovered=False)
         super().leaveEvent(event)
 
+    def _emit_single_click(self):
+        """Emit single click after confirming it's not a double-click."""
+        self._pending_click = False
+        self.clicked.emit(self._item)
+
     def mousePressEvent(self, event):
-        """Emit clicked signal on left click."""
+        """Defer single-click emission to distinguish from double-click."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._item)
+            self._pending_click = True
+            self._click_timer.start()
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """Emit double_clicked signal on left double-click."""
+        """Cancel pending single-click and emit double_clicked instead."""
         if event.button() == Qt.MouseButton.LeftButton:
+            self._click_timer.stop()
+            self._pending_click = False
             self.double_clicked.emit(self._item)
         super().mouseDoubleClickEvent(event)
 
@@ -836,9 +859,7 @@ class LibraryTab(QWidget):
 
     def refresh(self):
         """Start a background scan of configured folders."""
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
-            self._worker.wait(2000)
+        self._stop_worker()
 
         folders = self._load_folders()
         if not folders:
@@ -857,6 +878,24 @@ class LibraryTab(QWidget):
         self._worker.error.connect(lambda msg: log.warning("Scan error: %s", msg))
         self._worker.start()
         log.debug("Library scan started for %s in %s", self._current_category, folders)
+
+    def _stop_worker(self):
+        """Cancel and disconnect any running scan worker."""
+        if self._worker is None:
+            return
+        # Disconnect all signals to prevent stale callbacks
+        try:
+            self._worker.finished.disconnect(self._on_scan_finished)
+        except TypeError:
+            pass
+        try:
+            self._worker.progress.disconnect(self._on_scan_progress)
+        except TypeError:
+            pass
+        if self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(3000)
+        self._worker = None
 
     def _on_scan_progress(self, current: int, total: int):
         """Update the progress bar during scanning."""
