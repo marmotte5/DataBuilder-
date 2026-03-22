@@ -633,8 +633,12 @@ class ComparisonTab(QWidget):
             "PNG (*.png);;JPEG (*.jpg);;All files (*)"
         )
         if path:
-            combined.save(path)
-            show_toast(self, "Comparison saved", "success")
+            try:
+                combined.save(path)
+                show_toast(self, "Comparison saved", "success")
+            except Exception as exc:
+                log.warning("Failed to save comparison: %s", exc)
+                show_toast(self, f"Save failed: {exc}", "warning")
 
     def _save_all(self):
         """Save all A/B pairs to a folder."""
@@ -655,10 +659,16 @@ class ComparisonTab(QWidget):
                 continue
             combined = self._make_side_by_side(img_a, img_b)
             save_path = Path(folder) / f"comparison_{timestamp}_{i:03d}.png"
-            combined.save(str(save_path))
-            saved += 1
+            try:
+                combined.save(str(save_path))
+                saved += 1
+            except Exception as exc:
+                log.warning("Failed to save comparison %d: %s", i, exc)
 
-        show_toast(self, f"Saved {saved} comparisons", "success")
+        if saved > 0:
+            show_toast(self, f"Saved {saved} comparisons", "success")
+        else:
+            show_toast(self, "No comparisons could be saved", "warning")
 
     @staticmethod
     def _make_side_by_side(img_a, img_b, gap: int = 8):

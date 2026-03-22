@@ -1703,7 +1703,7 @@ class MainWindow(QMainWindow):
         # Clean up previous worker
         if self._export_worker is not None:
             if self._export_worker.isRunning():
-                self._export_worker.wait()
+                self._export_worker.wait(5000)
             self._export_worker.deleteLater()
             self._export_worker = None
 

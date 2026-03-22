@@ -639,7 +639,12 @@ class BatchGenerationTab(QWidget):
         else:
             save_dir = output_root
 
-        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log.warning("Failed to create batch output directory %s: %s", save_dir, exc)
+            return
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         save_path = save_dir / f"batch_{qi:03d}_{img_idx:03d}_{timestamp}.png"
 
