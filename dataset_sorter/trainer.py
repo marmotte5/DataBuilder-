@@ -2246,11 +2246,11 @@ class Trainer:
                     from safetensors.torch import load_file
                     weight_files = list(model_dir.glob("*.safetensors"))
                     if weight_files:
-                        state = {}
+                        weight_state = {}
                         for wf in weight_files:
-                            state.update(load_file(str(wf)))
+                            weight_state.update(load_file(str(wf)))
                         missing, unexpected = self.backend.unet.load_state_dict(
-                            state, strict=False,
+                            weight_state, strict=False,
                         )
                         if missing:
                             log.warning(f"Full finetune resume: {len(missing)} missing keys")
