@@ -735,7 +735,7 @@ class GenerateWorker(QThread):
         self.progress.emit(30, 100, "Loading fine-tuned weights...")
 
         try:
-            state_dict = load_file(model_path)
+            state_dict = load_file(model_path, device="cpu")
 
             # Strip known component prefixes (transformer., unet., model.diffusion_model., etc.)
             # Reuse the shared utility from TrainBackendBase to avoid duplication.

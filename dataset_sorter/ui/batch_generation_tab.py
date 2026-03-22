@@ -602,6 +602,9 @@ class BatchGenerationTab(QWidget):
             show_toast(self, "Load a model in the Generate tab first", "warning")
             return
 
+        # Clean up any previous worker before creating a new one
+        self._cleanup_worker()
+
         # Build worker
         self._worker = BatchGenerationWorker(self)
         self._worker.set_queue(self._queue)
@@ -716,3 +719,20 @@ class BatchGenerationTab(QWidget):
         self._eta_label.setText("")
         variant = "success" if success else "warning"
         show_toast(self, message, variant)
+        # Clean up worker thread to avoid memory/VRAM leaks
+        self._cleanup_worker()
+
+    def _cleanup_worker(self):
+        """Clean up batch generation worker thread."""
+        if self._worker is not None:
+            try:
+                self._worker.image_generated.disconnect()
+                self._worker.prompt_status.disconnect()
+                self._worker.batch_progress.disconnect()
+                self._worker.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            if self._worker.isRunning():
+                self._worker.wait(5000)
+            self._worker.deleteLater()
+            self._worker = None

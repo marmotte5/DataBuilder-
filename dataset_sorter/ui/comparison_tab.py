@@ -488,6 +488,9 @@ class ComparisonTab(QWidget):
 
         self._status.setText(f"Generating {count} A/B pairs...")
 
+        # Clean up any previous worker before creating a new one
+        self._cleanup_comparison_worker()
+
         # Run generation in background thread to avoid blocking the UI
         self._comparison_worker = _ComparisonWorker(self)
         self._comparison_worker.setup(gw, gen_queue)
@@ -520,6 +523,22 @@ class ComparisonTab(QWidget):
         n = min(len(self._results_a), len(self._results_b))
         variant = "success" if success else "warning"
         show_toast(self, f"{n} A/B pairs generated" if success else message, variant)
+        # Clean up worker thread to avoid memory/VRAM leaks
+        self._cleanup_comparison_worker()
+
+    def _cleanup_comparison_worker(self):
+        """Clean up comparison worker thread."""
+        if self._comparison_worker is not None:
+            try:
+                self._comparison_worker.image_ready.disconnect()
+                self._comparison_worker.progress.disconnect()
+                self._comparison_worker.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            if self._comparison_worker.isRunning():
+                self._comparison_worker.wait(5000)
+            self._comparison_worker.deleteLater()
+            self._comparison_worker = None
 
     def _stop(self):
         if self._comparison_worker:

@@ -505,7 +505,11 @@ class ModelMergeTab(QWidget):
             show_toast(self, "Add Difference requires Model C", "warning")
             return
 
-        for p, label in [(model_a, "A"), (model_b, "B")]:
+        check_models = [(model_a, "A"), (model_b, "B")]
+        if method == "add_difference":
+            model_c = self._model_c_edit.text().strip()
+            check_models.append((model_c, "C"))
+        for p, label in check_models:
             if not Path(p).is_file():
                 show_toast(self, f"Model {label} not found: {p}", "warning")
                 return
