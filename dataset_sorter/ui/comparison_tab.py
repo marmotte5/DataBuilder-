@@ -173,17 +173,20 @@ class _ComparisonWorker(QThread):
                 self.finished.emit(False, "Stopped by user")
                 return
 
-            gw.positive_prompt = config["prompt"]
-            gw.negative_prompt = config["negative"]
-            gw.steps = config["steps"]
-            gw.cfg_scale = config["cfg"]
-            gw.seed = config["seed"]
-            gw.width = config["width"]
-            gw.height = config["height"]
-            gw.num_images = 1
+            # Build params dict — thread-safe, no shared state mutation
+            params = {
+                "positive_prompt": config["prompt"],
+                "negative_prompt": config["negative"],
+                "steps": config["steps"],
+                "cfg_scale": config["cfg"],
+                "seed": config["seed"],
+                "width": config["width"],
+                "height": config["height"],
+                "num_images": 1,
+            }
 
             try:
-                images = gw._do_generate_blocking()
+                images = gw._do_generate_blocking(params)
                 if images and len(images) > 0:
                     pil_img, info = images[0]
                     self.image_ready.emit(config["side"], pil_img, info)

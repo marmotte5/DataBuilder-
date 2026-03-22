@@ -127,21 +127,23 @@ class BatchGenerationWorker(QThread):
             self.batch_progress.emit(completed, total,
                 f"Prompt {qi + 1}/{total}: {prompt.positive[:60]}...")
 
-            # Apply parameters (0 = use default)
-            gw.positive_prompt = prompt.positive
-            gw.negative_prompt = prompt.negative or self.default_negative
-            gw.scheduler_name = self.default_scheduler
-            gw.steps = prompt.steps if prompt.steps > 0 else self.default_steps
-            gw.cfg_scale = prompt.cfg_scale if prompt.cfg_scale > 0 else self.default_cfg
-            gw.width = prompt.width if prompt.width > 0 else self.default_width
-            gw.height = prompt.height if prompt.height > 0 else self.default_height
-            gw.seed = prompt.seed
-            gw.num_images = prompt.count
-            gw.clip_skip = self.default_clip_skip
+            # Build params dict — thread-safe, no shared state mutation
+            params = {
+                "positive_prompt": prompt.positive,
+                "negative_prompt": prompt.negative or self.default_negative,
+                "scheduler_name": self.default_scheduler,
+                "steps": prompt.steps if prompt.steps > 0 else self.default_steps,
+                "cfg_scale": prompt.cfg_scale if prompt.cfg_scale > 0 else self.default_cfg,
+                "width": prompt.width if prompt.width > 0 else self.default_width,
+                "height": prompt.height if prompt.height > 0 else self.default_height,
+                "seed": prompt.seed,
+                "num_images": prompt.count,
+                "clip_skip": self.default_clip_skip,
+            }
 
             # Block-generate via the worker's synchronous path
             try:
-                images = gw._do_generate_blocking()
+                images = gw._do_generate_blocking(params)
                 if images is None:
                     images = []
             except Exception as exc:

@@ -1091,12 +1091,15 @@ class GenerateWorker(QThread):
         else:
             self.finished_generating.emit(True, f"Generated {succeeded}/{total} image(s).")
 
-    def _do_generate_blocking(self) -> list[tuple]:
+    def _do_generate_blocking(self, params: dict | None = None) -> list[tuple]:
         """Synchronous generation — returns list of (PIL.Image, info_str).
 
         Used by batch generation and A/B comparison tabs to generate images
-        without going through the QThread run() machinery. Caller is
-        responsible for setting generation params before calling.
+        without going through the QThread run() machinery.
+
+        Thread safety: accepts an explicit params dict so callers don't need
+        to set attributes on the shared worker. If params is None, reads from
+        self (legacy / single-thread usage).
         """
         import torch
 
@@ -1105,20 +1108,22 @@ class GenerateWorker(QThread):
                 return []
             pipe_ref = self.pipe
 
+        # Snapshot params from dict (thread-safe) or self (legacy)
+        p = params or {}
         model_type = self._model_type
-        total = self.num_images
-        positive_prompt = self.positive_prompt
-        negative_prompt = self.negative_prompt
-        scheduler_name = self.scheduler_name
-        steps = self.steps
-        cfg_scale = self.cfg_scale
-        width = self.width
-        height = self.height
-        seed = self.seed
-        clip_skip = self.clip_skip
-        init_image = self.init_image
-        mask_image = self.mask_image
-        strength = self.strength
+        total = p.get("num_images", self.num_images)
+        positive_prompt = p.get("positive_prompt", self.positive_prompt)
+        negative_prompt = p.get("negative_prompt", self.negative_prompt)
+        scheduler_name = p.get("scheduler_name", self.scheduler_name)
+        steps = p.get("steps", self.steps)
+        cfg_scale = p.get("cfg_scale", self.cfg_scale)
+        width = p.get("width", self.width)
+        height = p.get("height", self.height)
+        seed = p.get("seed", self.seed)
+        clip_skip = p.get("clip_skip", self.clip_skip)
+        init_image = p.get("init_image", self.init_image)
+        mask_image = p.get("mask_image", self.mask_image)
+        strength = p.get("strength", self.strength)
 
         _load_scheduler(pipe_ref, scheduler_name, model_type)
         active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
@@ -1192,5 +1197,16 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Blocking generation failed for image {i + 1}: {e}")
+
+        # Free fragmented CUDA memory between calls — critical for long
+        # batch queues on 24GB cards (RTX 4090).
+        gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
 
         return results
