@@ -24,24 +24,27 @@ Architecture:
 import logging
 import os
 import platform
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize,
+    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize, QMimeData,
 )
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QLineEdit, QScrollArea, QButtonGroup, QFrame,
     QFileDialog, QApplication, QMenu, QComboBox, QSizePolicy,
+    QMessageBox, QProgressBar,
 )
 
 from dataset_sorter.ui.theme import (
     COLORS, card_style, accent_button_style, muted_label_style,
     section_header_style, tag_badge_style, nav_button_style,
+    danger_button_style,
 )
 
 log = logging.getLogger(__name__)
@@ -91,6 +94,8 @@ class LibraryItem:
     model_type: str  # detected heuristic label
     category: str  # "models", "loras", "embeddings"
     is_directory: bool = False
+    lora_rank: int | None = None
+    base_model_hint: str = ""
 
     @property
     def size_display(self) -> str:
@@ -124,6 +129,7 @@ class LibraryScanWorker(QThread):
     """
 
     finished = pyqtSignal(list)  # list[LibraryItem]
+    progress = pyqtSignal(int, int)  # (current, total_dirs)
     error = pyqtSignal(str)
 
     def __init__(self, directories: list[str], category: str, parent: QWidget | None = None):
@@ -134,12 +140,15 @@ class LibraryScanWorker(QThread):
     def run(self):
         """Scan all directories and collect matching files."""
         items: list[LibraryItem] = []
-        for dir_path in self._directories:
+        total = len(self._directories)
+        for i, dir_path in enumerate(self._directories):
+            self.progress.emit(i, total)
             try:
                 self._scan_directory(Path(dir_path), items)
             except Exception as exc:
                 log.warning("Error scanning %s: %s", dir_path, exc)
                 self.error.emit(f"Error scanning {dir_path}: {exc}")
+        self.progress.emit(total, total)
         self.finished.emit(items)
 
     def _scan_directory(self, root: Path, items: list[LibraryItem]):
@@ -178,6 +187,9 @@ class LibraryScanWorker(QThread):
                         stat = entry.stat()
                     except OSError:
                         continue
+                    lora_rank, base_hint = None, ""
+                    if self._category == "loras":
+                        lora_rank, base_hint = _detect_lora_metadata(entry)
                     items.append(LibraryItem(
                         name=entry.name,
                         path=str(entry),
@@ -185,6 +197,8 @@ class LibraryScanWorker(QThread):
                         modified=datetime.fromtimestamp(stat.st_mtime),
                         model_type=_detect_model_type(entry.name),
                         category=self._category,
+                        lora_rank=lora_rank,
+                        base_model_hint=base_hint,
                     ))
 
     def _matches_category(self, path: Path) -> bool:
@@ -228,6 +242,51 @@ def _detect_model_type(name: str) -> str:
     return "Unknown"
 
 
+def _detect_lora_metadata(path: Path) -> tuple[int | None, str]:
+    """Try to detect LoRA rank and base model from a safetensors file.
+
+    Reads only the header (first 8 bytes + header JSON) to avoid loading
+    the full file into memory. Returns (rank, base_model_hint).
+    """
+    rank: int | None = None
+    base_hint = ""
+
+    if path.suffix.lower() != ".safetensors":
+        return rank, base_hint
+
+    try:
+        import struct
+        import json as _json
+
+        with open(path, "rb") as f:
+            header_size = struct.unpack("<Q", f.read(8))[0]
+            if header_size > 10 * 1024 * 1024:  # sanity: skip if >10 MB header
+                return rank, base_hint
+            header_bytes = f.read(header_size)
+
+        header = _json.loads(header_bytes)
+        metadata = header.get("__metadata__", {})
+
+        # Base model hint from metadata
+        base_hint = metadata.get("ss_base_model_version", "")
+        if not base_hint:
+            base_hint = metadata.get("ss_sd_model_name", "")
+
+        # Detect rank from first lora_down weight shape
+        for key, info in header.items():
+            if key.startswith("__"):
+                continue
+            if "lora_down" in key and "shape" in info:
+                shape = info["shape"]
+                if len(shape) >= 2:
+                    rank = shape[0]
+                    break
+    except Exception:
+        pass
+
+    return rank, base_hint
+
+
 # ---------------------------------------------------------------------------
 # Model card widget
 # ---------------------------------------------------------------------------
@@ -241,6 +300,7 @@ class ModelCard(QFrame):
     """
 
     clicked = pyqtSignal(object)  # emits LibraryItem
+    double_clicked = pyqtSignal(object)  # emits LibraryItem
 
     CARD_WIDTH = 200
     CARD_HEIGHT = 150
@@ -351,6 +411,12 @@ class ModelCard(QFrame):
             self.clicked.emit(self._item)
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        """Emit double_clicked signal on left double-click."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit(self._item)
+        super().mouseDoubleClickEvent(event)
+
 
 # ---------------------------------------------------------------------------
 # Main Library Tab
@@ -380,11 +446,15 @@ class LibraryTab(QWidget):
         self._worker: LibraryScanWorker | None = None
         self._sort_key: str = "name"  # "name", "size", "date"
         self._sort_reverse: bool = False
+        self._grid_columns: int = GRID_COLUMNS
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(150)
         self._search_timer.timeout.connect(self._apply_filter)
+
+        # Enable drag-and-drop for folders
+        self.setAcceptDrops(True)
 
         self._build_ui()
         # Kick off initial scan after the event loop starts
@@ -399,6 +469,18 @@ class LibraryTab(QWidget):
         root.setSpacing(10)
 
         root.addLayout(self._build_toolbar())
+
+        # Progress bar (hidden until scanning)
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setFixedHeight(3)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setStyleSheet(
+            f"QProgressBar {{ border: none; background: {COLORS['border']}; }} "
+            f"QProgressBar::chunk {{ background: {COLORS['accent']}; }}"
+        )
+        self._progress_bar.setVisible(False)
+        root.addWidget(self._progress_bar)
+
         root.addLayout(self._build_folder_bar())
         root.addWidget(self._build_card_area(), stretch=1)
         root.addWidget(self._build_detail_panel())
@@ -423,6 +505,13 @@ class LibraryTab(QWidget):
             btn.clicked.connect(lambda checked, k=key: self._on_category_changed(k))
             self._btn_group.addButton(btn, i)
             toolbar.addWidget(btn)
+
+        # Stats label
+        self._stats_label = QLabel("")
+        self._stats_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        toolbar.addWidget(self._stats_label)
 
         toolbar.addStretch()
 
@@ -583,10 +672,18 @@ class LibraryTab(QWidget):
         self._btn_use_train.setStyleSheet(accent_button_style())
         self._btn_use_train.clicked.connect(self._emit_use_train)
 
+        self._btn_delete = QPushButton("Delete")
+        self._btn_delete.setFixedHeight(30)
+        self._btn_delete.setStyleSheet(danger_button_style())
+        self._btn_delete.clicked.connect(self._delete_selected)
+
         for btn in (self._btn_copy_path, self._btn_open_folder,
                      self._btn_use_generate, self._btn_use_train):
             btn.setEnabled(False)
             btn_row.addWidget(btn)
+
+        self._btn_delete.setEnabled(False)
+        btn_row.addWidget(self._btn_delete)
 
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -676,10 +773,32 @@ class LibraryTab(QWidget):
                 self.refresh()
 
     def _remove_folder(self):
-        """Remove the last folder from the scan list."""
+        """Show a menu to pick which folder to remove from the scan list."""
         folders = self._load_folders()
-        if folders:
-            folders.pop()
+        if not folders:
+            return
+
+        if len(folders) == 1:
+            # Only one folder, remove it directly
+            self._save_folders([])
+            self._update_folder_display()
+            self.refresh()
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background-color: {COLORS['surface']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 8px; padding: 4px; }} "
+            f"QMenu::item {{ padding: 6px 20px; border-radius: 4px; }} "
+            f"QMenu::item:selected {{ background-color: {COLORS['accent_subtle']}; }}"
+        )
+        for folder in folders:
+            menu.addAction(folder)
+
+        action = menu.exec(QCursor.pos())
+        if action:
+            chosen = action.text()
+            folders = [f for f in folders if f != chosen]
             self._save_folders(folders)
             self._update_folder_display()
             self.refresh()
@@ -725,19 +844,31 @@ class LibraryTab(QWidget):
         if not folders:
             self._items = []
             self._populate_grid([])
+            self._update_stats()
             return
+
+        self._progress_bar.setRange(0, len(folders))
+        self._progress_bar.setValue(0)
+        self._progress_bar.setVisible(True)
 
         self._worker = LibraryScanWorker(folders, self._current_category, self)
         self._worker.finished.connect(self._on_scan_finished)
+        self._worker.progress.connect(self._on_scan_progress)
         self._worker.error.connect(lambda msg: log.warning("Scan error: %s", msg))
         self._worker.start()
         log.debug("Library scan started for %s in %s", self._current_category, folders)
 
+    def _on_scan_progress(self, current: int, total: int):
+        """Update the progress bar during scanning."""
+        self._progress_bar.setValue(current)
+
     def _on_scan_finished(self, items: list[LibraryItem]):
         """Handle completed scan results."""
         self._items = items
+        self._progress_bar.setVisible(False)
         log.debug("Library scan finished: %d items found", len(items))
         self._populate_grid(self._filtered_items())
+        self._update_stats()
 
     # ── Filtering ───────────────────────────────────────────────────────
 
@@ -777,8 +908,9 @@ class LibraryTab(QWidget):
         for idx, item in enumerate(items):
             card = ModelCard(item, self._grid_container)
             card.clicked.connect(self._on_card_clicked)
-            row = idx // GRID_COLUMNS
-            col = idx % GRID_COLUMNS
+            card.double_clicked.connect(self._on_card_double_clicked)
+            row = idx // self._grid_columns
+            col = idx % self._grid_columns
             self._grid_layout.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop)
             self._cards.append(card)
 
@@ -804,7 +936,7 @@ class LibraryTab(QWidget):
         has_selection = item is not None
 
         for btn in (self._btn_copy_path, self._btn_open_folder,
-                     self._btn_use_generate, self._btn_use_train):
+                     self._btn_use_generate, self._btn_use_train, self._btn_delete):
             btn.setEnabled(has_selection)
 
         if not has_selection:
@@ -816,10 +948,17 @@ class LibraryTab(QWidget):
         self._detail_name.setText(f"Selected: {item.name}")
         self._detail_path.setText(f"Path: {item.path}")
         kind = "Diffusers directory" if item.is_directory else "Single file"
-        self._detail_meta.setText(
-            f"Size: {item.size_display}  |  Type: {item.model_type}  |  "
-            f"Modified: {item.modified_display}  |  {kind}"
-        )
+        meta_parts = [
+            f"Size: {item.size_display}",
+            f"Type: {item.model_type}",
+            f"Modified: {item.modified_display}",
+            kind,
+        ]
+        if item.lora_rank is not None:
+            meta_parts.append(f"Rank: {item.lora_rank}")
+        if item.base_model_hint:
+            meta_parts.append(f"Base: {item.base_model_hint}")
+        self._detail_meta.setText("  |  ".join(meta_parts))
 
     # ── Action buttons ──────────────────────────────────────────────────
 
@@ -861,6 +1000,98 @@ class LibraryTab(QWidget):
         if self._selected_item is not None:
             self.use_in_train.emit(self._selected_item.path)
             log.info("Sent to train: %s", self._selected_item.path)
+
+    def _delete_selected(self):
+        """Delete the selected item after user confirmation."""
+        item = self._selected_item
+        if item is None:
+            return
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Delete File")
+        msg.setText(f"Permanently delete '{item.name}'?")
+        msg.setInformativeText(f"Path: {item.path}\nSize: {item.size_display}\n\nThis cannot be undone.")
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        path = Path(item.path)
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            log.info("Deleted: %s", item.path)
+        except Exception as exc:
+            log.warning("Failed to delete %s: %s", item.path, exc)
+            QMessageBox.critical(self, "Delete Failed", f"Could not delete:\n{exc}")
+            return
+
+        self._selected_item = None
+        self._update_detail_panel()
+        self.refresh()
+
+    def _on_card_double_clicked(self, item: LibraryItem):
+        """Double-click sends the item to the Generate tab."""
+        self._selected_item = item
+        self._update_detail_panel()
+        self.use_in_generate.emit(item.path)
+        log.info("Double-click sent to generate: %s", item.path)
+
+    def _update_stats(self):
+        """Update the stats label with item count and total size."""
+        items = self._filtered_items()
+        count = len(items)
+        total_bytes = sum(i.size_bytes for i in items)
+        if total_bytes < 1024 ** 3:
+            size_str = f"{total_bytes / 1024 ** 2:.1f} MB"
+        else:
+            size_str = f"{total_bytes / 1024 ** 3:.2f} GB"
+        self._stats_label.setText(f"{count} items  |  {size_str}")
+
+    # ── Responsive grid ────────────────────────────────────────────────
+
+    def resizeEvent(self, event):
+        """Recalculate grid columns when the widget is resized."""
+        super().resizeEvent(event)
+        available = self._scroll_area.viewport().width() if hasattr(self, "_scroll_area") else self.width()
+        new_cols = max(1, available // (ModelCard.CARD_WIDTH + 16))
+        if new_cols != self._grid_columns:
+            self._grid_columns = new_cols
+            self._populate_grid(self._filtered_items())
+
+    # ── Drag and drop (folders) ────────────────────────────────────────
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Accept drag events that contain directory URLs."""
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile() and Path(url.toLocalFile()).is_dir():
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Add dropped directories to the folder list."""
+        mime = event.mimeData()
+        if mime is None:
+            return
+        folders = self._load_folders()
+        added = False
+        for url in mime.urls():
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if Path(path).is_dir() and path not in folders:
+                    folders.append(path)
+                    added = True
+        if added:
+            self._save_folders(folders)
+            self._update_folder_display()
+            self.refresh()
 
     # ── Context menu ────────────────────────────────────────────────────
 
