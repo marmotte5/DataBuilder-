@@ -417,26 +417,32 @@ class ExportWorker(QThread):
         self.status.emit(f"Exporting {len(export_tasks)} images ({num_workers} workers)...")
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(_export_one, task): i
-                for i, task in enumerate(export_tasks)
-            }
-            for future in as_completed(futures):
+            # Submit in chunks to avoid creating 1M+ Future objects at once
+            # for large datasets (mirrors ScanWorker's chunked approach).
+            for chunk_start in range(0, len(export_tasks), _SCAN_CHUNK):
                 if self._cancelled:
-                    executor.shutdown(wait=False, cancel_futures=True)
                     break
-                try:
-                    success, err = future.result()
-                except Exception as exc:
-                    success, err = False, str(exc)
-                if success:
-                    copied += 1
-                else:
-                    errors += 1
-                    if err:
-                        error_log.append(err)
-                if (copied + errors) % _PROGRESS_INTERVAL == 0 or (copied + errors) == total:
-                    self.progress.emit(copied + errors, total)
+                chunk = export_tasks[chunk_start:chunk_start + _SCAN_CHUNK]
+                futures = {
+                    executor.submit(_export_one, task): i
+                    for i, task in enumerate(chunk, start=chunk_start)
+                }
+                for future in as_completed(futures):
+                    if self._cancelled:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    try:
+                        success, err = future.result()
+                    except Exception as exc:
+                        success, err = False, str(exc)
+                    if success:
+                        copied += 1
+                    else:
+                        errors += 1
+                        if err:
+                            error_log.append(err)
+                    if (copied + errors) % _PROGRESS_INTERVAL == 0 or (copied + errors) == total:
+                        self.progress.emit(copied + errors, total)
 
         if error_log:
             try:

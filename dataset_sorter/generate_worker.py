@@ -343,7 +343,8 @@ class GenerateWorker(QThread):
     @property
     def is_loaded(self) -> bool:
         """Return True if a pipeline is currently loaded and ready for generation."""
-        return self.pipe is not None
+        with self._lock:
+            return self.pipe is not None
 
     # ── Thread entry point ──────────────────────────────────────────────
 
