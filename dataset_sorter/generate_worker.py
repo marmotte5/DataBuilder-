@@ -71,6 +71,13 @@ CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
 # Models that use guidance_scale in a different way (no negative prompt)
 FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
+# Maximum safetensors header size (bytes) for sanity checks during inspection.
+_MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
+
+# Threshold: if more than this fraction of state dict keys share a prefix,
+# we strip it (e.g. "transformer." → "").
+_PREFIX_DOMINANT_THRESHOLD = 0.5
+
 
 def _detect_model_type_from_keys(model_path: str) -> str:
     """Detect model architecture by reading safetensors file header keys.
@@ -460,7 +467,8 @@ class GenerateWorker(QThread):
             else:
                 try:
                     pipe = pipe.to(self._device, dtype=dtype)
-                except Exception:
+                except Exception as e:
+                    log.debug("Pipeline .to(device, dtype) failed, retrying without dtype: %s", e)
                     pipe = pipe.to(self._device)
 
             if hasattr(pipe, "enable_vae_slicing"):
@@ -576,7 +584,8 @@ class GenerateWorker(QThread):
             if is_single_file and hasattr(pipe_cls, "from_single_file"):
                 try:
                     pipe = pipe_cls.from_single_file(model_path, **kwargs)
-                except Exception:
+                except Exception as e:
+                    log.debug("from_single_file retry without safety_checker failed: %s", e)
                     pipe = self._load_single_file_custom(
                         model_path, model_type, dtype, kwargs
                     )
@@ -608,10 +617,11 @@ class GenerateWorker(QThread):
                 if len(raw) < 8:
                     return False
                 header_size = struct.unpack("<Q", raw)[0]
-                if header_size > 50_000_000:
+                if header_size > _MAX_SAFETENSORS_HEADER_SIZE:
                     return False
                 header = json.loads(f.read(header_size))
-        except Exception:
+        except Exception as e:
+            log.debug("Cannot inspect checkpoint header: %s", e)
             return False
 
         keys = set(header.keys())
@@ -723,21 +733,9 @@ class GenerateWorker(QThread):
             state_dict = load_file(model_path)
 
             # Strip known component prefixes (transformer., unet., model.diffusion_model., etc.)
-            prefixes_to_try = [
-                "model.diffusion_model.",
-                "transformer.",
-                "unet.",
-                "model.",
-            ]
-            for prefix in prefixes_to_try:
-                prefixed_keys = [k for k in state_dict if k.startswith(prefix)]
-                if len(prefixed_keys) > len(state_dict) * 0.5:
-                    state_dict = {
-                        k[len(prefix):] if k.startswith(prefix) else k: v
-                        for k, v in state_dict.items()
-                    }
-                    log.info(f"Stripped prefix '{prefix}' from {len(prefixed_keys)} keys")
-                    break
+            # Reuse the shared utility from TrainBackendBase to avoid duplication.
+            from dataset_sorter.train_backend_base import TrainBackendBase
+            state_dict = TrainBackendBase._strip_state_dict_prefix(state_dict)
 
             missing, unexpected = model_component.load_state_dict(state_dict, strict=False)
             if missing:

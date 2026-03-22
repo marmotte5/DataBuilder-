@@ -29,18 +29,15 @@ class SD2Backend(TrainBackendBase):
     default_resolution = 768
     supports_dual_te = False
     prediction_type = "v_prediction"
+    _HF_FALLBACK_REPO = "stabilityai/stable-diffusion-2-1"
 
     def load_model(self, model_path: str):
         from diffusers import DDPMScheduler, StableDiffusionPipeline
 
-        if model_path.endswith((".safetensors", ".ckpt")):
-            pipe = StableDiffusionPipeline.from_single_file(
-                model_path, torch_dtype=self.dtype,
-            )
-        else:
-            pipe = StableDiffusionPipeline.from_pretrained(
-                model_path, torch_dtype=self.dtype,
-            )
+        pipe = self._load_single_file_or_pretrained(
+            model_path, StableDiffusionPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
+        )
 
         self.pipeline = pipe
         self.tokenizer = pipe.tokenizer

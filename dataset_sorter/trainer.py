@@ -124,6 +124,9 @@ class Trainer:
         trainer.train(progress_fn, loss_fn, sample_fn)
     """
 
+    # Maximum loss/LR history entries (~3.2 MB cap per list)
+    MAX_HISTORY_LEN = 100_000
+
     def __init__(self, config: TrainingConfig):
         self.config = config
         self.state = TrainingState()
@@ -155,7 +158,7 @@ class Trainer:
         # Loss history for Smart Resume (capped to prevent unbounded growth)
         self._loss_history: list[tuple[int, float]] = []
         self._lr_history: list[tuple[int, float]] = []
-        self._max_history_len = 100_000  # ~3.2 MB cap per list
+        self._max_history_len = self.MAX_HISTORY_LEN
 
         # RLHF collection flag (set from UI thread when ready)
         self._rlhf_collect = threading.Event()

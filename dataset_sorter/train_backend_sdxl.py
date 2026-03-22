@@ -36,17 +36,15 @@ class SDXLBackend(TrainBackendBase):
         # buckets the cache in _time_ids_cache is used instead.
         self._cached_time_ids: Optional[torch.Tensor] = None
 
+    _HF_FALLBACK_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
+
     def load_model(self, model_path: str):
         from diffusers import StableDiffusionXLPipeline, DDPMScheduler
 
-        if model_path.endswith((".safetensors", ".ckpt")):
-            pipe = StableDiffusionXLPipeline.from_single_file(
-                model_path, torch_dtype=self.dtype,
-            )
-        else:
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                model_path, torch_dtype=self.dtype,
-            )
+        pipe = self._load_single_file_or_pretrained(
+            model_path, StableDiffusionXLPipeline,
+            fallback_repo=self._HF_FALLBACK_REPO,
+        )
 
         self.pipeline = pipe
         self.tokenizer = pipe.tokenizer

@@ -152,6 +152,10 @@ class TrainingWorker(QThread):
                     self.trainer.cleanup()
                 except Exception as e:
                     log.warning(f"Trainer cleanup failed: {e}")
+                finally:
+                    # Clear reference so partially-initialised trainers
+                    # don't linger and leak GPU memory.
+                    self.trainer = None
             self.phase_changed.emit("idle")
 
     def stop(self):
@@ -198,12 +202,14 @@ class TrainingWorker(QThread):
 
         Pauses training, generates pairs, emits signal for UI, then waits.
         """
-        if not self.trainer or not self.trainer.backend:
+        # Snapshot ref to avoid TOCTOU race
+        t = self.trainer
+        if not t or not t.backend:
             return
 
         from dataset_sorter.dpo_trainer import generate_candidate_pairs
 
-        self.trainer.pause()
+        t.pause()
         self.phase_changed.emit("rlhf_collecting")
 
         try:
@@ -214,7 +220,7 @@ class TrainingWorker(QThread):
                 num_steps = self.config.sample_steps
                 cfg_scale = self.config.sample_cfg_scale
             candidates = generate_candidate_pairs(
-                backend=self.trainer.backend,
+                backend=t.backend,
                 prompts=prompts,
                 num_pairs=num_pairs,
                 num_steps=num_steps,
@@ -226,10 +232,10 @@ class TrainingWorker(QThread):
                 # No candidates generated — resume training to avoid a
                 # permanent hang (the UI never gets the signal to resume).
                 log.warning("RLHF: no candidates generated, resuming training")
-                self.trainer.resume()
+                t.resume()
         except Exception as e:
             self.error.emit(f"RLHF candidate generation failed: {e}")
-            self.trainer.resume()
+            t.resume()
 
     def apply_rlhf_preferences(self, selections: list[dict]):
         """Apply RLHF preferences via DPO fine-tuning step.
@@ -289,8 +295,11 @@ class TrainingWorker(QThread):
 
     @property
     def is_paused(self) -> bool:
-        if self.trainer:
-            return self.trainer.state.paused
+        # Snapshot ref to avoid TOCTOU race (trainer may be set to None
+        # on worker thread while this property is read from UI thread).
+        t = self.trainer
+        if t:
+            return t.state.paused
         return False
 
     def _on_progress(self, current, total, message):
