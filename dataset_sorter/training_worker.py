@@ -141,6 +141,7 @@ class TrainingWorker(QThread):
                 self.error.emit(f"{e}\n\n{traceback.format_exc()}")
             self.finished_training.emit(False, str(e))
         except Exception as e:
+            log.error("Training failed: %s", e, exc_info=True)
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
             self.finished_training.emit(False, str(e))

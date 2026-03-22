@@ -1133,10 +1133,13 @@ class Trainer:
                     # Each micro-batch loss was divided by grad_accum_steps.
                     # If NaN skips reduced the count, rescale to get the
                     # correct mean rather than a biased-low value.
-                    if _valid_microbatches > 0 and _valid_microbatches < grad_accum_steps:
-                        self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
-                    else:
-                        self.state.loss = running_loss
+                    if _valid_microbatches > 0:
+                        if _valid_microbatches < grad_accum_steps:
+                            self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
+                        else:
+                            self.state.loss = running_loss
+                    # else: all microbatches were NaN — keep previous loss
+                    # to avoid corrupting loss history with artificial zeros
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
                     _valid_microbatches = 0
@@ -1633,11 +1636,12 @@ class Trainer:
 
                 # Use GradScaler if active (fp16 training) to avoid
                 # unscaled gradients that may underflow.
-                # Collect all trainable params (not just group 0) so TE
-                # gradients are also clipped when train_text_encoder is on.
+                # Collect all trainable params by requires_grad (not by
+                # p.grad is not None) because grads don't exist yet before
+                # backward().
                 _dpo_params = [
                     p for g in self.optimizer.param_groups
-                    for p in g["params"] if p.grad is not None
+                    for p in g["params"] if p.requires_grad
                 ]
                 if self.grad_scaler is not None:
                     self.grad_scaler.scale(total_dpo_loss).backward()
