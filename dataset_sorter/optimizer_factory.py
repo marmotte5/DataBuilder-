@@ -5,6 +5,7 @@ training loop.
 """
 
 import logging
+from collections import ChainMap
 
 import torch
 
@@ -27,16 +28,15 @@ class _CombinedOptimizer:
             self.param_groups.extend(opt.param_groups)
 
     @property
-    def state(self) -> dict:
-        """Merged state dict from all sub-optimizers.
+    def state(self):
+        """Merged view of all sub-optimizer states.
 
-        Required by GradScaler.unscale_() and GradScaler.step() which
-        access optimizer.state to track scaling metadata per-parameter.
+        Returns a ChainMap so that writes from GradScaler.unscale_()
+        (which stores found_inf_per_device in optimizer.state) persist
+        in the first sub-optimizer's state dict rather than being lost
+        in an ephemeral dict.
         """
-        merged = {}
-        for opt in self.optimizers:
-            merged.update(opt.state)
-        return merged
+        return ChainMap(*(opt.state for opt in self.optimizers))
 
     def zero_grad(self, set_to_none: bool = True):
         for opt in self.optimizers:

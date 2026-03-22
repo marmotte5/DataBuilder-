@@ -859,7 +859,7 @@ class Trainer:
                 _dl_generator = None
                 if _shuffle:
                     _dl_generator = torch.Generator()
-                    _dl_generator.manual_seed(config.seed if config.seed >= 0 else 42)
+                    _dl_generator.manual_seed(config.sample_seed if config.sample_seed >= 0 else 42)
                     self._dl_generator = _dl_generator
 
                 dataloader = DataLoader(
