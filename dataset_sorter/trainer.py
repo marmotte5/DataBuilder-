@@ -851,6 +851,17 @@ class Trainer:
                     _shuffle = False  # mutually exclusive with sampler
                     log.info("DataLoader using WeightedRandomSampler for curriculum learning")
 
+                # Use a seeded generator for reproducible shuffling so that
+                # the batch-skip logic on resume sees the same batch ordering.
+                # The DataLoader internally advances this generator each epoch,
+                # so the same seed produces consistent per-epoch orderings.
+                self._dl_generator = None
+                _dl_generator = None
+                if _shuffle:
+                    _dl_generator = torch.Generator()
+                    _dl_generator.manual_seed(config.seed if config.seed >= 0 else 42)
+                    self._dl_generator = _dl_generator
+
                 dataloader = DataLoader(
                     self.dataset,
                     batch_size=config.batch_size,
@@ -862,7 +873,13 @@ class Trainer:
                     persistent_workers=use_workers > 0,
                     prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
                     collate_fn=training_collate_fn,
+                    generator=_dl_generator,
                 )
+
+                # Restore generator state from checkpoint for reproducible resume
+                if _dl_generator is not None and hasattr(self, '_resume_dl_generator_state'):
+                    _dl_generator.set_state(self._resume_dl_generator_state)
+                    del self._resume_dl_generator_state
 
             # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
             if config.async_dataload and self.device.type == "cuda":
@@ -1008,8 +1025,11 @@ class Trainer:
                     continue
                 _skip_batches = 0  # Only skip once
 
-                # Track position within epoch for checkpoint resume
-                self.state.epoch_step = step
+                # Track position within epoch for checkpoint resume.
+                # Store step + 1 so the saved value is the NEXT batch to
+                # process, not the one already completed. Without this,
+                # the last-trained batch gets trained again after resume.
+                self.state.epoch_step = step + 1
 
                 # ── Pause gate ──
                 self._handle_pause(progress_fn)
@@ -1765,6 +1785,9 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
+        # Save DataLoader generator state for reproducible shuffle on resume
+        if getattr(self, '_dl_generator', None) is not None:
+            state_dict["dl_generator"] = self._dl_generator.get_state()
         state_path = save_dir / "training_state.pt"
         tmp_path = save_dir / "training_state.pt.tmp"
         torch.save(state_dict, str(tmp_path))
@@ -2174,6 +2197,10 @@ class Trainer:
                 self.grad_scaler.load_state_dict(state["grad_scaler"])
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore GradScaler state: {e}")
+
+        # Restore DataLoader generator state for reproducible shuffle on resume
+        if "dl_generator" in state:
+            self._resume_dl_generator_state = state["dl_generator"]
 
         # Restore model weights (LoRA or full)
         is_lora = self.config.model_type.endswith("_lora")
