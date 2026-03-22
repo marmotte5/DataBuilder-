@@ -240,7 +240,8 @@ class HiDreamBackend(TrainBackendBase):
             if mask.device != loss.device:
                 mask = mask.to(loss.device)
             if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
-                sample_weight = mask.mean(dim=-1)
+                non_zero = mask > 0
+                sample_weight = mask.sum(dim=-1) / non_zero.sum(dim=-1).clamp(min=1)
                 while sample_weight.dim() < loss.dim():
                     sample_weight = sample_weight.unsqueeze(-1)
                 loss = loss * sample_weight

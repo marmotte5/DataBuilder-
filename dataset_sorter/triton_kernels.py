@@ -155,6 +155,7 @@ if _TRITON_AVAILABLE:
         inner_size,  # C * H * W
         n_samples,
         BLOCK_SIZE: tl.constexpr,
+        OUT_IS_FP16: tl.constexpr,
     ):
         """Fused flow interpolation: noisy = (1-t)*latent + t*noise.
 
@@ -182,7 +183,8 @@ if _TRITON_AVAILABLE:
             noi = tl.load(noise_ptr + base + offsets, mask=mask, other=0.0).to(tl.float32)
 
             result = one_minus_t * lat + t_val * noi
-            tl.store(output_ptr + base + offsets, result.to(tl.bfloat16), mask=mask)
+            out_val = result.to(tl.float16) if OUT_IS_FP16 else result.to(tl.bfloat16)
+            tl.store(output_ptr + base + offsets, out_val, mask=mask)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -415,7 +417,7 @@ def fused_flow_interpolate(
     inner_size = latents[0].numel()
 
     if (_TRITON_AVAILABLE and latents.is_cuda and inner_size >= 1024
-            and latents.dtype == torch.bfloat16):
+            and latents.dtype in (torch.bfloat16, torch.float16)):
         output = torch.empty_like(latents)
         BLOCK_SIZE = 1024
         grid = (batch_size,)
@@ -432,6 +434,7 @@ def fused_flow_interpolate(
             t_c,
             inner_size, batch_size,
             BLOCK_SIZE=BLOCK_SIZE,
+            OUT_IS_FP16=(latents.dtype == torch.float16),
         )
         return output
     else:

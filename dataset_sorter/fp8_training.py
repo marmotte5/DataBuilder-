@@ -15,6 +15,7 @@ FP8 training. Falls back to manual FP8 casting when TE is unavailable.
 """
 
 import logging
+import math
 from typing import Optional
 from contextlib import contextmanager
 
@@ -67,6 +68,14 @@ class FP8ScalingTracker:
 
         amax = tensor.abs().max().item()
 
+        # Guard against NaN/Inf from diverged training — don't poison the
+        # scale history, just skip this observation and use existing history.
+        if not math.isfinite(amax):
+            if name in history and history[name]:
+                amax = max(history[name])  # Reuse last valid amax
+            else:
+                return 1.0  # No valid history, use identity scale
+
         if name not in history:
             history[name] = []
         history[name].append(amax)
@@ -115,6 +124,9 @@ def quantize_to_fp8(
     # Clamp to the representable range of the target FP8 dtype to prevent
     # overflow to inf/NaN from outlier values (especially on early steps
     # when the amax history has few entries).
+    # Guard against zero or non-finite scale (e.g. from all-zeros tensor)
+    if scale == 0.0 or not math.isfinite(scale):
+        scale = 1.0
     scaled = tensor.float() * scale
     _fp8_max = 448.0 if fp8_dtype == _fp8_e4m3 else 57344.0
     scaled = scaled.clamp(-_fp8_max, _fp8_max)
