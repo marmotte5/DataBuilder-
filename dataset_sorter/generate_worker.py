@@ -831,7 +831,7 @@ class GenerateWorker(QThread):
             try:
                 pipe.set_adapters(adapter_names, adapter_weights)
             except Exception as e:
-                log.debug(f"Could not set adapter weights: {e}")
+                log.warning(f"Could not set adapter weight to {adapter_weights[0]}: {e}")
 
     # ── Image generation ────────────────────────────────────────────────
 
