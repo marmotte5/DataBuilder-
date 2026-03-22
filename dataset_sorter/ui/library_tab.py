@@ -21,12 +21,12 @@ Architecture:
         emits results as a list of LibraryItem dataclasses.
 """
 
+import json as _json
 import logging
 import os
 import platform
 import shutil
 import subprocess
-import json as _json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -983,18 +983,30 @@ class LibraryTab(QWidget):
         """Return items filtered by the current search query and favorites toggle."""
         items = self._items
 
+        # Load metadata once for the entire filter pass (avoids O(n) QSettings reads)
+        all_meta = self._get_all_user_meta()
+
         # Favorites filter
         if self._fav_filter_btn.isChecked():
-            items = [i for i in items if self._is_favorite(i.path)]
+            items = [
+                i for i in items
+                if all_meta.get(i.path, {}).get("favorite", False)
+            ]
 
         query = self._search_edit.text().strip().lower()
         if not query:
             return self._sorted_items(items)
-        filtered = [
-            item for item in items
-            if query in item.name.lower() or query in item.model_type.lower()
-               or any(query in t.lower() for t in item.user_tags)
-        ]
+
+        filtered = []
+        for item in items:
+            if query in item.name.lower() or query in item.model_type.lower():
+                filtered.append(item)
+                continue
+            # Also search user tags
+            tags = all_meta.get(item.path, {}).get("tags", [])
+            if any(query in t.lower() for t in tags):
+                filtered.append(item)
+
         return self._sorted_items(filtered)
 
     def _apply_filter(self):

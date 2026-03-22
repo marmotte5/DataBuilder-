@@ -14,18 +14,18 @@ Architecture:
         ├── side A image  | side B image  (gallery)
         └── navigation + save controls
 
-The tab reuses the existing GenerateWorker for inference by swapping
-parameters between A and B configurations.
+The tab reuses the existing GenerateWorker for inference via a background
+QThread that calls _do_generate_blocking() to avoid blocking the UI.
 """
 
 import logging
-import tempfile
+import random
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image as PILImage
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QPixmap, QImage, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
@@ -136,16 +136,79 @@ class _SideConfig(QGroupBox):
         return overrides
 
 
+class _ComparisonWorker(QThread):
+    """Background thread that generates A/B image pairs without blocking the UI."""
+
+    # (side "A"/"B", PIL.Image or None, info_str)
+    image_ready = pyqtSignal(str, object, str)
+    # (completed_steps, total_steps)
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._generate_worker = None
+        self._gen_queue: list[dict] = []
+        self._stop_flag = False
+
+    def setup(self, generate_worker, gen_queue: list[dict]):
+        self._generate_worker = generate_worker
+        self._gen_queue = gen_queue
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+        if self._generate_worker:
+            self._generate_worker.stop()
+
+    def run(self):
+        gw = self._generate_worker
+        if gw is None or not gw.is_loaded:
+            self.finished.emit(False, "No model loaded")
+            return
+
+        total = len(self._gen_queue)
+        for i, config in enumerate(self._gen_queue):
+            if self._stop_flag:
+                self.finished.emit(False, "Stopped by user")
+                return
+
+            gw.positive_prompt = config["prompt"]
+            gw.negative_prompt = config["negative"]
+            gw.steps = config["steps"]
+            gw.cfg_scale = config["cfg"]
+            gw.seed = config["seed"]
+            gw.width = config["width"]
+            gw.height = config["height"]
+            gw.num_images = 1
+
+            try:
+                images = gw._do_generate_blocking()
+                if images and len(images) > 0:
+                    pil_img, info = images[0]
+                    self.image_ready.emit(config["side"], pil_img, info)
+                else:
+                    self.image_ready.emit(config["side"], None, "No image generated")
+            except Exception as exc:
+                log.warning("Comparison generation failed: %s", exc)
+                self.image_ready.emit(config["side"], None, f"Error: {exc}")
+
+            self.progress.emit(i + 1, total)
+
+        n_pairs = total // 2
+        self.finished.emit(True, f"Comparison complete: {n_pairs} A/B pairs generated")
+
+
 class ComparisonTab(QWidget):
     """A/B comparison tab for side-by-side generation."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._generate_worker = None
+        self._comparison_worker: _ComparisonWorker | None = None
         self._results_a: list[tuple] = []  # [(PIL.Image, info)]
         self._results_b: list[tuple] = []
         self._current_idx = 0
-        self._is_generating = False
         self._build_ui()
 
     def set_generate_worker(self, worker):
@@ -371,7 +434,6 @@ class ComparisonTab(QWidget):
         self._results_a.clear()
         self._results_b.clear()
         self._current_idx = 0
-        self._is_generating = True
 
         self._btn_compare.setEnabled(False)
         self._btn_stop.setEnabled(True)
@@ -392,18 +454,16 @@ class ComparisonTab(QWidget):
         overrides_a = self._side_a.get_overrides()
         overrides_b = self._side_b.get_overrides()
 
-        # Use a timer to process pairs sequentially without blocking the UI
-        self._gen_queue = []
-        import random
+        # Build generation queue
+        gen_queue = []
         for i in range(count):
-            # Determine seed for this pair
             if seed == -1:
                 pair_seed = random.randint(0, 2147483647)
             else:
                 pair_seed = seed + i
 
             # Side A config
-            self._gen_queue.append({
+            gen_queue.append({
                 "side": "A", "index": i,
                 "prompt": prompt,
                 "negative": overrides_a.get("negative", negative),
@@ -413,7 +473,7 @@ class ComparisonTab(QWidget):
                 "width": res[0], "height": res[1],
             })
             # Side B config
-            self._gen_queue.append({
+            gen_queue.append({
                 "side": "B", "index": i,
                 "prompt": prompt,
                 "negative": overrides_b.get("negative", negative),
@@ -423,77 +483,44 @@ class ComparisonTab(QWidget):
                 "width": res[0], "height": res[1],
             })
 
-        self._gen_progress = 0
         self._status.setText(f"Generating {count} A/B pairs...")
-        QTimer.singleShot(10, self._process_next_gen)
 
-    def _process_next_gen(self):
-        if not self._is_generating or not self._gen_queue:
-            self._finish_comparison()
-            return
+        # Run generation in background thread to avoid blocking the UI
+        self._comparison_worker = _ComparisonWorker(self)
+        self._comparison_worker.setup(gw, gen_queue)
+        self._comparison_worker.image_ready.connect(self._on_image_ready)
+        self._comparison_worker.progress.connect(self._on_worker_progress)
+        self._comparison_worker.finished.connect(self._on_worker_finished)
+        self._comparison_worker.start()
 
-        gw = self._generate_worker
-        if gw is None:
-            self._finish_comparison()
-            return
-
-        config = self._gen_queue.pop(0)
-
-        # Set worker parameters
-        gw.positive_prompt = config["prompt"]
-        gw.negative_prompt = config["negative"]
-        gw.steps = config["steps"]
-        gw.cfg_scale = config["cfg"]
-        gw.seed = config["seed"]
-        gw.width = config["width"]
-        gw.height = config["height"]
-        gw.num_images = 1
-
-        try:
-            images = gw._do_generate_blocking()
-            if images and len(images) > 0:
-                pil_img, info = images[0]
-                if config["side"] == "A":
-                    self._results_a.append((pil_img, info))
-                else:
-                    self._results_b.append((pil_img, info))
-        except Exception as exc:
-            log.warning("Comparison generation failed: %s", exc)
-            info = f"Error: {exc}"
-            if config["side"] == "A":
-                self._results_a.append((None, info))
-            else:
-                self._results_b.append((None, info))
-
-        self._gen_progress += 1
-        self._progress.setValue(self._gen_progress)
-        self._status.setText(
-            f"Generating... ({self._gen_progress}/{self._progress.maximum()})"
-        )
-
-        # Display as we go
+    def _on_image_ready(self, side: str, pil_img, info: str):
+        """Handle an image generated by the background worker."""
+        if side == "A":
+            self._results_a.append((pil_img, info))
+        else:
+            self._results_b.append((pil_img, info))
+        self._current_idx = max(0, min(len(self._results_a), len(self._results_b)) - 1)
         self._display_pair()
         self._update_nav()
 
-        # Schedule next
-        QTimer.singleShot(10, self._process_next_gen)
+    def _on_worker_progress(self, current: int, total: int):
+        self._progress.setValue(current)
+        self._status.setText(f"Generating... ({current}/{total})")
 
-    def _finish_comparison(self):
-        self._is_generating = False
+    def _on_worker_finished(self, success: bool, message: str):
         self._btn_compare.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._progress.setVisible(False)
-        n = min(len(self._results_a), len(self._results_b))
-        self._status.setText(f"Comparison complete: {n} A/B pairs generated")
+        self._status.setText(message)
         self._display_pair()
         self._update_nav()
-        show_toast(self, f"{n} A/B pairs generated", "success")
+        n = min(len(self._results_a), len(self._results_b))
+        variant = "success" if success else "warning"
+        show_toast(self, f"{n} A/B pairs generated" if success else message, variant)
 
     def _stop(self):
-        self._is_generating = False
-        self._gen_queue.clear()
-        if self._generate_worker:
-            self._generate_worker.stop()
+        if self._comparison_worker:
+            self._comparison_worker.stop()
         self._btn_stop.setEnabled(False)
 
     # ── Display ───────────────────────────────────────────────────────
