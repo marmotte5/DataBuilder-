@@ -1433,13 +1433,13 @@ class Trainer:
             elif isinstance(indices, (int, float)):
                 indices = [int(indices)]
             # Load and stack masks for this batch
-            from dataset_sorter.masked_loss import load_mask_for_image
+            from dataset_sorter.masked_loss import load_mask_direct
             masks = []
             has_any = False
             for idx in indices:
                 idx = int(idx)
                 if idx in self._mask_map:
-                    mask = load_mask_for_image(
+                    mask = load_mask_direct(
                         self._mask_map[idx],
                         self.config.resolution,
                         self.device,
