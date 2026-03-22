@@ -405,7 +405,11 @@ def recommend(
     config.warmup_steps = max(10, min(config.total_steps // 10, 200))
 
     # --- Scheduler ---
-    if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):
+    # Prodigy: cosine is preferred over constant (official repo recommendation).
+    # DAdaptAdam/ScheduleFree: constant is correct (built-in adaptation).
+    if optimizer == "Prodigy":
+        config.lr_scheduler = "cosine"
+    elif optimizer in ("DAdaptAdam", "AdamWScheduleFree"):
         config.lr_scheduler = "constant"
     elif optimizer == "Muon":
         config.lr_scheduler = "cosine"
@@ -494,7 +498,15 @@ def recommend(
         config.fp8_base_model = False
 
     # --- Advanced parameters ---
-    config.noise_offset = 0.05
+    # Noise offset: model-specific values from community research.
+    # Pony was trained with 0.0357 — matching it preserves style fidelity.
+    # Flow models (Flux, SD3, Z-Image) use lower values or zero.
+    if is_pony:
+        config.noise_offset = 0.0357
+    elif is_flux or is_sd3 or is_sd35 or is_zimage:
+        config.noise_offset = 0.05
+    else:
+        config.noise_offset = 0.1
     config.adaptive_noise_scale = 0.0
 
     if is_flux or is_sd3 or is_sd35:
@@ -527,8 +539,13 @@ def recommend(
         config.multires_noise_discount = 0.2
         config.multires_noise_iterations = 6
 
-    # Gradient clipping
-    config.max_grad_norm = 1.0
+    # Gradient clipping — flow model full finetunes benefit from tighter
+    # clipping (0.01) which allows training at higher LR for longer without
+    # overcooking. LoRA and epsilon models use standard 1.0.
+    if not is_lora and (is_flux or is_sd3 or is_sd35):
+        config.max_grad_norm = 0.01
+    else:
+        config.max_grad_norm = 1.0
 
     # --- Contextual notes ---
     config.notes = _build_notes(
@@ -653,8 +670,8 @@ def _build_notes(
         notes.append(
             "Prodigy: LR=1.0 is intentional (self-adjusting). "
             "d_coef stabilizes in ~200-300 steps. "
-            "Best with cosine scheduler (avoid restarts). "
-            "Recommended args: decouple=True, d_coef=0.8, "
+            "Using cosine scheduler (official recommendation — avoid restarts). "
+            "Args applied: decouple=True, d_coef=0.8, "
             "safeguard_warmup=True, bias_correction=True."
         )
         if is_lora and is_flux:
@@ -800,7 +817,8 @@ def _build_notes(
     if is_pony:
         notes.append(
             "Pony: clip_skip=2, enable tag shuffling, include score tags "
-            "(score_9, score_8_up, etc.) in captions."
+            "(score_9, score_8_up, etc.) in captions. "
+            f"Noise offset set to {config.noise_offset} (matches Pony's original training value)."
         )
 
     if is_zimage:
@@ -822,6 +840,12 @@ def _build_notes(
 
     if not is_lora:
         notes.append("Full finetune: save checkpoints every 100-200 steps.")
+        if config.max_grad_norm <= 0.1 and (is_flux or is_sd3 or is_sd35):
+            notes.append(
+                f"Gradient clipping set to {config.max_grad_norm} (tighter than default). "
+                "This allows training at higher LR for longer without overcooking — "
+                "proven for flow model full finetunes."
+            )
         if config.use_ema:
             if is_flux or is_zimage:
                 notes.append(

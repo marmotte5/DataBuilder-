@@ -248,30 +248,41 @@ class TrainingTabBuildersMixin:
         if not ema_on:
             # Give context-specific recommendation on whether to enable
             if is_lora:
-                advice = (
-                    "EMA is off. For LoRA training, EMA smooths weight updates and "
-                    "reduces noise — recommended for datasets with 50+ images."
-                )
+                if vram_gb <= 12:
+                    advice = (
+                        "EMA is off. At this VRAM level, keeping EMA off saves ~2-3 GB. "
+                        "Enable only with CPU offload if you have 16+ GB system RAM."
+                    )
+                else:
+                    advice = (
+                        "EMA is off. For LoRA, EMA is most beneficial with 50+ images "
+                        "and 2000+ training steps. For short runs (<1000 steps), the "
+                        "smoothing effect has little time to accumulate — skip it."
+                    )
             elif base_model in large_models:
                 if vram_gb < 48:
                     advice = (
                         f"EMA is off. For {base_model.upper()} full finetune at {vram_gb} GB, "
-                        "enabling EMA with CPU offload is recommended if you have 32+ GB system RAM."
+                        "enabling EMA with CPU offload is strongly recommended. "
+                        "Large transformers benefit significantly from weight averaging."
                     )
                 else:
                     advice = (
                         f"EMA is off. For {base_model.upper()} full finetune, EMA significantly "
-                        "improves generalization — recommended for 200+ image datasets."
+                        "improves generalization — almost always recommended. "
+                        "Use decay 0.9999 for standard runs, 0.99999 for very long runs (5k+ steps)."
                     )
             elif base_model in medium_models:
                 advice = (
                     "EMA is off. For full finetune, EMA helps prevent overfitting "
-                    "and produces smoother final weights — recommended with 200+ images."
+                    "and produces smoother final weights. Recommended with 200+ images "
+                    "and 2000+ total steps."
                 )
             else:
                 advice = (
-                    "EMA is off. Recommended for most training runs — it maintains "
-                    "a smoothed copy of weights that often produces better results."
+                    "EMA is off. For training runs over 2000 steps, EMA typically "
+                    "produces better generalization. For short runs (<1000 steps), "
+                    "the benefit is minimal and you can skip it."
                 )
         else:
             # EMA is enabled — give relevant advice based on context
@@ -360,64 +371,87 @@ class TrainingTabBuildersMixin:
 
         parts = []
 
-        # Rank guidance per model
+        # Rank guidance per model (SOTA values from community research)
         flux_models = {"flux", "flux2"}
         if base_model in flux_models:
             if rank > 64:
                 parts.append(
-                    f"Rank {rank} is high for Flux LoRA. Community consensus: "
-                    "rank 16-48 is optimal. Higher ranks rarely improve quality "
-                    "and increase overfitting risk."
+                    f"Rank {rank} is high for Flux LoRA. Community sweet spot: "
+                    "32 for characters, 64 for complex photorealistic subjects. "
+                    "Higher ranks rarely improve quality."
                 )
-            elif rank < 8:
+            elif rank < 16:
                 parts.append(
-                    f"Rank {rank} is very low for Flux. Minimum 16 recommended "
-                    "for character/style LoRAs."
+                    f"Rank {rank} is low for Flux. Recommended: 16 for simple "
+                    "concepts, 32 for characters, 64 for photorealistic."
                 )
             else:
-                parts.append(f"Rank {rank} — good for Flux LoRA training.")
+                parts.append(f"Rank {rank} — good for Flux LoRA.")
         elif base_model in ("sdxl", "pony"):
-            if rank < 16:
+            if rank < 32:
                 parts.append(
-                    f"Rank {rank} may be too low for SDXL/Pony. "
-                    "Rank 32-128 is typical; higher for complex subjects."
+                    f"Rank {rank} may be low for SDXL/Pony. Recommended: "
+                    "64 for characters, 128 for styles/complex subjects."
                 )
             elif rank > 128:
                 parts.append(
-                    f"Rank {rank} is very high. Consider enabling rsLoRA for "
-                    "stability at high ranks, and lower the learning rate."
+                    f"Rank {rank} is very high. Enable rsLoRA for stability. "
+                    "Lower LR proportionally. Alpha should be rank/2."
                 )
             else:
-                parts.append(f"Rank {rank} — standard range for SDXL/Pony.")
+                parts.append(f"Rank {rank} — good for SDXL/Pony.")
         elif base_model == "sd15":
             if rank > 64:
                 parts.append(
-                    f"Rank {rank} is high for SD 1.5 — 32-64 is usually sufficient."
+                    f"Rank {rank} is high for SD 1.5. Recommended: "
+                    "32 for characters, 64 for complex styles."
                 )
             else:
                 parts.append(f"Rank {rank} — good for SD 1.5.")
         elif base_model == "zimage":
-            if rank < 16:
-                parts.append(f"Rank {rank} may be low for Z-Image. 16-64 recommended.")
+            if rank > 64:
+                parts.append(
+                    f"Rank {rank} is high for Z-Image. Start at 8-16 for "
+                    "characters, 64 only for photorealistic skin texture."
+                )
+            elif rank < 8:
+                parts.append(f"Rank {rank} is very low for Z-Image. Minimum 8 recommended.")
             else:
                 parts.append(f"Rank {rank} — suitable for Z-Image.")
+        elif base_model in ("sd3", "sd35"):
+            if rank < 64:
+                parts.append(
+                    f"Rank {rank} may be low for SD3. Recommended: 64-128, "
+                    "up to 768 if VRAM allows."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for SD3/3.5.")
+        elif base_model == "chroma":
+            if rank > 32:
+                parts.append(
+                    f"Rank {rank} may be higher than needed for Chroma. "
+                    "Start at 16, increase to 32 for large-capacity styles."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for Chroma.")
 
-        # DoRA advice
+        # DoRA advice (research: strongest at low ranks, narrows at high)
         if use_dora:
             if rank <= 8:
                 parts.append(
-                    "DoRA shines at low ranks (<=8) — up to 2x the effective "
-                    "capacity of standard LoRA at the same rank."
+                    "DoRA at low rank: strongest advantage over LoRA here. "
+                    "DoRA at rank 8 often matches LoRA at rank 16."
                 )
             elif rank >= 64:
                 parts.append(
-                    "DoRA at high ranks: ~30% slower training, ~15% more VRAM. "
-                    "Consider standard LoRA at this rank — the quality gap narrows."
+                    "DoRA at high ranks: ~30% slower, ~15% more VRAM. "
+                    "Quality gap vs LoRA narrows at rank 64+. "
+                    "Consider standard LoRA for faster iteration."
                 )
             else:
                 parts.append(
-                    "DoRA: better generalization than LoRA, especially for "
-                    "complex subjects. ~30% slower but often fewer steps needed."
+                    "DoRA: better generalization than LoRA for complex subjects. "
+                    "~30% slower but often needs fewer epochs to converge."
                 )
         elif network_type == "loha":
             parts.append(
@@ -427,7 +461,19 @@ class TrainingTabBuildersMixin:
         elif network_type == "lokr":
             parts.append(
                 "LoKr: very compact adapter. Best for simple styles, "
-                "less effective for complex characters or multi-concept."
+                "less effective for complex characters."
+            )
+
+        # rsLoRA and LoRA+ tips
+        if rank >= 64 and not self.rslora_check.isChecked():
+            parts.append(
+                f"Tip: enable rsLoRA for rank {rank} — stabilizes training "
+                "at high ranks."
+            )
+        if not use_dora and network_type == "lora":
+            parts.append(
+                "Tip: LoRA+ (16x LR ratio for lora_B) converges ~30% faster. "
+                "Set in optimizer extra args if supported."
             )
 
         self.network_advice_label.setText(" ".join(parts))
