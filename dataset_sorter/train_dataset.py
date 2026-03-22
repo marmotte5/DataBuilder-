@@ -645,7 +645,7 @@ class CachedTrainDataset(Dataset):
                     ).input_ids.to(device)
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-                    _skip2 = min(_skip, len(encoder_output_2.hidden_states) - 2)
+                    _skip2 = min(max(clip_skip, 1), len(encoder_output_2.hidden_states) - 2)
                     hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].squeeze(0).cpu()
                     pooled_2 = (
                         encoder_output_2.pooler_output.squeeze(0).cpu()

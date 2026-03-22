@@ -565,11 +565,8 @@ class Trainer:
         # ── 9. Build parameter groups (separate LR for text encoders) ──
         if config.triton_fused_adamw:
             from dataset_sorter.triton_kernels import FusedAdamW
-            all_params = []
-            for group in self._build_param_groups():
-                all_params.extend(group["params"])
             self.optimizer = FusedAdamW(
-                all_params, lr=config.learning_rate,
+                self._build_param_groups(), lr=config.learning_rate,
                 weight_decay=config.weight_decay,
             )
             log.info("Using Triton FusedAdamW (8 ops → 1 kernel)")
