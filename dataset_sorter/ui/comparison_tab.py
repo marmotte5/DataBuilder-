@@ -173,17 +173,20 @@ class _ComparisonWorker(QThread):
                 self.finished.emit(False, "Stopped by user")
                 return
 
-            gw.positive_prompt = config["prompt"]
-            gw.negative_prompt = config["negative"]
-            gw.steps = config["steps"]
-            gw.cfg_scale = config["cfg"]
-            gw.seed = config["seed"]
-            gw.width = config["width"]
-            gw.height = config["height"]
-            gw.num_images = 1
+            # Build params dict — thread-safe, no shared state mutation
+            params = {
+                "positive_prompt": config["prompt"],
+                "negative_prompt": config["negative"],
+                "steps": config["steps"],
+                "cfg_scale": config["cfg"],
+                "seed": config["seed"],
+                "width": config["width"],
+                "height": config["height"],
+                "num_images": 1,
+            }
 
             try:
-                images = gw._do_generate_blocking()
+                images = gw._do_generate_blocking(params)
                 if images and len(images) > 0:
                     pil_img, info = images[0]
                     self.image_ready.emit(config["side"], pil_img, info)
@@ -520,6 +523,13 @@ class ComparisonTab(QWidget):
 
     def _stop(self):
         if self._comparison_worker:
+            # Disconnect live-update signals but keep finished connected
+            # so _on_worker_finished re-enables UI buttons properly.
+            try:
+                self._comparison_worker.image_ready.disconnect(self._on_image_ready)
+                self._comparison_worker.progress.disconnect(self._on_worker_progress)
+            except (TypeError, RuntimeError):
+                pass  # Already disconnected
             self._comparison_worker.stop()
         self._btn_stop.setEnabled(False)
 
@@ -623,8 +633,12 @@ class ComparisonTab(QWidget):
             "PNG (*.png);;JPEG (*.jpg);;All files (*)"
         )
         if path:
-            combined.save(path)
-            show_toast(self, "Comparison saved", "success")
+            try:
+                combined.save(path)
+                show_toast(self, "Comparison saved", "success")
+            except Exception as exc:
+                log.warning("Failed to save comparison: %s", exc)
+                show_toast(self, f"Save failed: {exc}", "warning")
 
     def _save_all(self):
         """Save all A/B pairs to a folder."""
@@ -645,10 +659,16 @@ class ComparisonTab(QWidget):
                 continue
             combined = self._make_side_by_side(img_a, img_b)
             save_path = Path(folder) / f"comparison_{timestamp}_{i:03d}.png"
-            combined.save(str(save_path))
-            saved += 1
+            try:
+                combined.save(str(save_path))
+                saved += 1
+            except Exception as exc:
+                log.warning("Failed to save comparison %d: %s", i, exc)
 
-        show_toast(self, f"Saved {saved} comparisons", "success")
+        if saved > 0:
+            show_toast(self, f"Saved {saved} comparisons", "success")
+        else:
+            show_toast(self, "No comparisons could be saved", "warning")
 
     @staticmethod
     def _make_side_by_side(img_a, img_b, gap: int = 8):

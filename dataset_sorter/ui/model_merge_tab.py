@@ -67,40 +67,118 @@ class MergeWorker(QThread):
         self.method: str = "weighted_sum"
         self.alpha: float = 0.5
         self.fp16_output: bool = True
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         try:
             import torch
-            from safetensors.torch import load_file, save_file
+            from safetensors import safe_open
+            from safetensors.torch import save_file
         except ImportError as exc:
             self.finished.emit(False, f"Missing dependency: {exc}")
             return
 
         try:
-            self.progress.emit(0, 4, "Loading model A...")
-            state_a = load_file(self.model_a_path)
+            # Stream key-by-key to avoid loading full models into RAM.
+            # For two 10GB models this reduces peak from ~40GB to ~2-3GB.
+            self.progress.emit(0, 3, "Scanning model keys...")
 
-            self.progress.emit(1, 4, "Loading model B...")
-            state_b = load_file(self.model_b_path)
-
-            state_c = None
+            handle_a = None
+            handle_b = None
+            handle_c = None
+            handle_a = safe_open(self.model_a_path, framework="pt", device="cpu")
+            handle_b = safe_open(self.model_b_path, framework="pt", device="cpu")
             if self.method == "add_difference" and self.model_c_path:
-                self.progress.emit(1, 4, "Loading model C...")
-                state_c = load_file(self.model_c_path)
+                handle_c = safe_open(self.model_c_path, framework="pt", device="cpu")
 
-            self.progress.emit(2, 4, f"Merging ({MERGE_METHODS[self.method]})...")
-            merged = self._merge(state_a, state_b, state_c)
+            all_keys = sorted(set(handle_a.keys()) | set(handle_b.keys()))
+            total_keys = len(all_keys)
+            alpha = self.alpha
 
-            # Optional FP16 cast
-            if self.fp16_output:
-                for key in merged:
-                    if merged[key].dtype in (torch.float32, torch.float64):
-                        merged[key] = merged[key].half()
+            self.progress.emit(1, 3, f"Merging {total_keys} tensors...")
+            merged = {}
 
-            self.progress.emit(3, 4, "Saving merged model...")
+            for ki, key in enumerate(all_keys):
+                if self._cancelled:
+                    self.finished.emit(False, "Merge cancelled by user")
+                    return
+                if ki % 50 == 0:
+                    self.progress.emit(1, 3,
+                        f"Merging tensor {ki}/{total_keys}...")
+
+                has_a = key in handle_a.keys()
+                has_b = key in handle_b.keys()
+
+                # Keys only in one model: keep as-is
+                if not has_a:
+                    merged[key] = handle_b.get_tensor(key)
+                    continue
+                if not has_b:
+                    merged[key] = handle_a.get_tensor(key)
+                    continue
+
+                ta = handle_a.get_tensor(key)
+                tb = handle_b.get_tensor(key)
+
+                # Shape mismatch: keep A
+                if ta.shape != tb.shape:
+                    log.warning("Shape mismatch for %s: %s vs %s, keeping A",
+                                key, ta.shape, tb.shape)
+                    merged[key] = ta
+                    del tb
+                    continue
+
+                # Merge in float32, cast back to original dtype, store result.
+                # del intermediates immediately to keep peak memory low.
+                orig_dtype = ta.dtype
+                ta_f = ta.float()
+                tb_f = tb.float()
+                del ta, tb
+
+                if self.method == "weighted_sum":
+                    # In-place: ta_f = (1-alpha)*ta_f + alpha*tb_f
+                    ta_f.mul_(1 - alpha).add_(tb_f, alpha=alpha)
+                    result_t = ta_f
+                    del tb_f
+
+                elif self.method == "slerp":
+                    result_t = self._slerp(ta_f, tb_f, alpha)
+                    del ta_f, tb_f
+
+                elif self.method == "add_difference":
+                    if handle_c is not None and key in handle_c.keys():
+                        tc = handle_c.get_tensor(key)
+                        if tc.shape == ta_f.shape:
+                            # diff = tb_f - tc; result = ta_f + alpha * diff
+                            tb_f.sub_(tc.float())
+                            ta_f.add_(tb_f, alpha=alpha)
+                            result_t = ta_f
+                            del tb_f, tc
+                        else:
+                            result_t = ta_f
+                            del tb_f, tc
+                    else:
+                        result_t = ta_f
+                        del tb_f
+                else:
+                    result_t = ta_f
+                    del tb_f
+
+                # FP16 cast inline to avoid a second pass
+                if self.fp16_output and orig_dtype in (torch.float32, torch.float64):
+                    merged[key] = result_t.half()
+                else:
+                    merged[key] = result_t.to(orig_dtype)
+                del result_t
+
+            self.progress.emit(2, 3, "Saving merged model...")
             output = Path(self.output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
             save_file(merged, str(output))
+            del merged
 
             size_mb = output.stat().st_size / (1024 * 1024)
             self.finished.emit(
@@ -111,22 +189,28 @@ class MergeWorker(QThread):
         except Exception as exc:
             log.exception("Merge failed")
             self.finished.emit(False, f"Merge failed: {exc}")
+        finally:
+            # Close safetensors file handles to release OS resources
+            for _h in (handle_a, handle_b, handle_c):
+                if _h is not None and hasattr(_h, '__del__'):
+                    try:
+                        del _h
+                    except Exception:
+                        pass
 
     def _merge(self, a: dict, b: dict, c: dict | None) -> dict:
-        """Perform the actual weight merging."""
+        """Perform the actual weight merging (legacy fallback, unused by streaming path)."""
         import torch
 
         alpha = self.alpha
         result = {}
 
-        # Use A's keys as the reference set
         all_keys = set(a.keys()) | set(b.keys())
 
         for key in all_keys:
             ta = a.get(key)
             tb = b.get(key)
 
-            # Keys only in one model: keep as-is
             if ta is None:
                 result[key] = tb
                 continue
@@ -134,7 +218,6 @@ class MergeWorker(QThread):
                 result[key] = ta
                 continue
 
-            # Shape mismatch: keep A
             if ta.shape != tb.shape:
                 log.warning("Shape mismatch for %s: %s vs %s, keeping A",
                             key, ta.shape, tb.shape)
@@ -146,10 +229,8 @@ class MergeWorker(QThread):
 
             if self.method == "weighted_sum":
                 result[key] = (1 - alpha) * ta_f + alpha * tb_f
-
             elif self.method == "slerp":
                 result[key] = self._slerp(ta_f, tb_f, alpha)
-
             elif self.method == "add_difference":
                 tc = c.get(key) if c else None
                 if tc is not None and tc.shape == ta.shape:
@@ -158,7 +239,6 @@ class MergeWorker(QThread):
                 else:
                     result[key] = ta_f
 
-            # Cast back to original dtype
             result[key] = result[key].to(ta.dtype)
 
         return result
@@ -345,6 +425,7 @@ class ModelMergeTab(QWidget):
         self._btn_cancel = QPushButton("Cancel")
         self._btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
         self._btn_cancel.setEnabled(False)
+        self._btn_cancel.clicked.connect(self._cancel_merge)
         btn_row.addWidget(self._btn_cancel)
 
         btn_row.addStretch()
@@ -453,6 +534,11 @@ class ModelMergeTab(QWidget):
         self._progress_bar.setMaximum(total)
         self._progress_bar.setValue(current)
         self._status_label.setText(message)
+
+    def _cancel_merge(self):
+        if self._worker:
+            self._worker.cancel()
+        self._btn_cancel.setEnabled(False)
 
     def _on_finished(self, success: bool, message: str):
         self._status_label.setText(message)

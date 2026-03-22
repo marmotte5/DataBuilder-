@@ -127,21 +127,23 @@ class BatchGenerationWorker(QThread):
             self.batch_progress.emit(completed, total,
                 f"Prompt {qi + 1}/{total}: {prompt.positive[:60]}...")
 
-            # Apply parameters (0 = use default)
-            gw.positive_prompt = prompt.positive
-            gw.negative_prompt = prompt.negative or self.default_negative
-            gw.scheduler_name = self.default_scheduler
-            gw.steps = prompt.steps if prompt.steps > 0 else self.default_steps
-            gw.cfg_scale = prompt.cfg_scale if prompt.cfg_scale > 0 else self.default_cfg
-            gw.width = prompt.width if prompt.width > 0 else self.default_width
-            gw.height = prompt.height if prompt.height > 0 else self.default_height
-            gw.seed = prompt.seed
-            gw.num_images = prompt.count
-            gw.clip_skip = self.default_clip_skip
+            # Build params dict — thread-safe, no shared state mutation
+            params = {
+                "positive_prompt": prompt.positive,
+                "negative_prompt": prompt.negative or self.default_negative,
+                "scheduler_name": self.default_scheduler,
+                "steps": prompt.steps if prompt.steps > 0 else self.default_steps,
+                "cfg_scale": prompt.cfg_scale if prompt.cfg_scale > 0 else self.default_cfg,
+                "width": prompt.width if prompt.width > 0 else self.default_width,
+                "height": prompt.height if prompt.height > 0 else self.default_height,
+                "seed": prompt.seed,
+                "num_images": prompt.count,
+                "clip_skip": self.default_clip_skip,
+            }
 
             # Block-generate via the worker's synchronous path
             try:
-                images = gw._do_generate_blocking()
+                images = gw._do_generate_blocking(params)
                 if images is None:
                     images = []
             except Exception as exc:
@@ -179,6 +181,7 @@ class BatchGenerationTab(QWidget):
         self._worker: BatchGenerationWorker | None = None
         self._generate_worker = None  # will be set by MainWindow
         self._output_folder = str(Path.home() / "DataBuilder_batch_outputs")
+        self._batch_start: float = 0.0  # set in _run_batch, used for ETA
         self._build_ui()
 
     # ── UI Construction ──────────────────────────────────────────────
@@ -436,15 +439,27 @@ class BatchGenerationTab(QWidget):
             except (ValueError, IndexError):
                 pass
 
+        def _safe_int(s: str, default: int) -> int:
+            try:
+                return int(s) if s else default
+            except ValueError:
+                return default
+
+        def _safe_float(s: str, default: float) -> float:
+            try:
+                return float(s) if s else default
+            except ValueError:
+                return default
+
         return BatchPrompt(
             positive=_text(0),
             negative=_text(1),
-            seed=int(_text(2) or "-1"),
-            steps=int(_text(3) or "0"),
-            cfg_scale=float(_text(4) or "0"),
+            seed=_safe_int(_text(2), -1),
+            steps=_safe_int(_text(3), 0),
+            cfg_scale=_safe_float(_text(4), 0.0),
             width=w,
             height=h,
-            count=max(1, int(_text(6) or "1")),
+            count=max(1, _safe_int(_text(6), 1)),
         )
 
     def _sync_queue_from_table(self):
@@ -455,10 +470,13 @@ class BatchGenerationTab(QWidget):
 
     def _update_count(self):
         n = self._table.rowCount()
-        total_images = sum(
-            max(1, int((self._table.item(r, 6).text() if self._table.item(r, 6) else "1") or "1"))
-            for r in range(n)
-        )
+        total_images = 0
+        for r in range(n):
+            raw = (self._table.item(r, 6).text() if self._table.item(r, 6) else "1") or "1"
+            try:
+                total_images += max(1, int(raw))
+            except (ValueError, TypeError):
+                total_images += 1
         self._queue_count_label.setText(f"{n} prompts, ~{total_images} images")
 
     # ── Import / Export ───────────────────────────────────────────────
@@ -554,9 +572,13 @@ class BatchGenerationTab(QWidget):
         # Remove internal status field
         for d in data:
             d.pop("status", None)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        show_toast(self, f"Exported {len(data)} prompts", "success")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            show_toast(self, f"Exported {len(data)} prompts", "success")
+        except Exception as exc:
+            log.warning("Failed to export queue: %s", exc)
+            show_toast(self, f"Export failed: {exc}", "warning")
 
     def _browse_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Select batch output folder")
@@ -610,6 +632,14 @@ class BatchGenerationTab(QWidget):
 
     def _stop_batch(self):
         if self._worker:
+            # Disconnect live-update signals but keep finished connected
+            # so _on_batch_finished re-enables UI buttons properly.
+            try:
+                self._worker.image_generated.disconnect(self._on_image_generated)
+                self._worker.prompt_status.disconnect(self._on_prompt_status)
+                self._worker.batch_progress.disconnect(self._on_batch_progress)
+            except (TypeError, RuntimeError):
+                pass  # Already disconnected
             self._worker.stop()
         self._btn_stop.setEnabled(False)
 
@@ -628,7 +658,12 @@ class BatchGenerationTab(QWidget):
         else:
             save_dir = output_root
 
-        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log.warning("Failed to create batch output directory %s: %s", save_dir, exc)
+            return
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         save_path = save_dir / f"batch_{qi:03d}_{img_idx:03d}_{timestamp}.png"
 

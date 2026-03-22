@@ -615,9 +615,9 @@ class MainWindow(QMainWindow):
             self.library_tab.use_in_generate.connect(self._on_library_use_generate)
         if hasattr(self.library_tab, 'use_in_train'):
             self.library_tab.use_in_train.connect(self._on_library_use_train)
-        # Library → Merge tab
-        if hasattr(self.library_tab, 'use_in_generate'):
-            self.library_tab.use_in_generate.connect(self._on_library_use_merge)
+        # Library → Merge tab (use dedicated signal if available)
+        if hasattr(self.library_tab, 'use_in_merge'):
+            self.library_tab.use_in_merge.connect(self._on_library_use_merge)
 
     def _on_library_use_generate(self, path: str):
         """Load a model from library into the generate tab."""
@@ -761,6 +761,30 @@ class MainWindow(QMainWindow):
                 gt._worker.stop()
                 if gt._worker.isRunning():
                     gt._worker.wait(5000)
+
+        # Stop batch generation worker
+        if hasattr(self, 'batch_tab'):
+            bt = self.batch_tab
+            if hasattr(bt, '_worker') and bt._worker is not None:
+                if hasattr(bt._worker, 'stop'):
+                    bt._worker.stop()
+                if bt._worker.isRunning():
+                    bt._worker.wait(3000)
+
+        # Stop comparison worker
+        if hasattr(self, 'comparison_tab'):
+            ct = self.comparison_tab
+            if hasattr(ct, '_comparison_worker') and ct._comparison_worker is not None:
+                if hasattr(ct._comparison_worker, 'stop'):
+                    ct._comparison_worker.stop()
+                if ct._comparison_worker.isRunning():
+                    ct._comparison_worker.wait(3000)
+
+        # Stop library scan worker
+        if hasattr(self, 'library_tab'):
+            lt = self.library_tab
+            if hasattr(lt, '_stop_worker'):
+                lt._stop_worker()
 
         # Shutdown shared async I/O executor
         try:
@@ -1703,7 +1727,7 @@ class MainWindow(QMainWindow):
         # Clean up previous worker
         if self._export_worker is not None:
             if self._export_worker.isRunning():
-                self._export_worker.wait()
+                self._export_worker.wait(5000)
             self._export_worker.deleteLater()
             self._export_worker = None
 

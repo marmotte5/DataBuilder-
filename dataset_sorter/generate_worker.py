@@ -383,8 +383,8 @@ class GenerateWorker(QThread):
             if self._mode == "load":
                 try:
                     self.unload_model()
-                except Exception as e:
-                    log.debug(f"Unload model during error cleanup failed: {e}")
+                except Exception as ue:
+                    log.debug(f"Unload model during error cleanup failed: {ue}")
 
     # ── Model loading ───────────────────────────────────────────────────
 
@@ -487,8 +487,12 @@ class GenerateWorker(QThread):
             with self._lock:
                 self.pipe = pipe
         except Exception:
-            # Free the local pipeline to release VRAM before re-raising
+            # Free the local pipeline to release VRAM before re-raising.
+            # gc.collect() is needed before empty_cache() because Python's
+            # refcount alone may not reclaim GPU tensors held by cycles.
             del pipe
+            import gc
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             raise
@@ -830,7 +834,17 @@ class GenerateWorker(QThread):
 
     # ── Image generation ────────────────────────────────────────────────
 
-    def _build_png_metadata(self, seed: int) -> tuple[PngInfo, str]:
+    def _build_png_metadata(self, seed: int, *,
+                            positive_prompt: str | None = None,
+                            negative_prompt: str | None = None,
+                            steps: int | None = None,
+                            scheduler_name: str | None = None,
+                            cfg_scale: float | None = None,
+                            width: int | None = None,
+                            height: int | None = None,
+                            clip_skip: int | None = None,
+                            init_image=None,
+                            strength: float | None = None) -> tuple[PngInfo, str]:
         """Build PNG tEXt metadata chunks in Automatic1111's format.
 
         Writes a 'parameters' chunk with the prompt, negative prompt, and
@@ -840,26 +854,42 @@ class GenerateWorker(QThread):
 
         Returns (PngInfo, parameters_string) so callers can use the
         parameters string directly without parsing internal PngInfo chunks.
+
+        Accepts explicit parameter overrides so callers can pass snapshotted
+        values instead of reading from ``self`` (avoids race conditions when
+        the UI modifies attributes mid-batch).
         """
         pnginfo = PngInfo()
 
+        # Use explicit overrides when provided, fall back to self for legacy callers
+        _positive = positive_prompt if positive_prompt is not None else self.positive_prompt
+        _negative = negative_prompt if negative_prompt is not None else self.negative_prompt
+        _steps = steps if steps is not None else self.steps
+        _scheduler = scheduler_name if scheduler_name is not None else self.scheduler_name
+        _cfg = cfg_scale if cfg_scale is not None else self.cfg_scale
+        _width = width if width is not None else self.width
+        _height = height if height is not None else self.height
+        _clip_skip = clip_skip if clip_skip is not None else self.clip_skip
+        _init_image = init_image
+        _strength = strength if strength is not None else self.strength
+
         # Build parameters string (compatible with A1111 / civitai metadata readers)
-        params_parts = [self.positive_prompt]
-        if self.negative_prompt:
-            params_parts.append(f"Negative prompt: {self.negative_prompt}")
+        params_parts = [_positive]
+        if _negative:
+            params_parts.append(f"Negative prompt: {_negative}")
 
         settings = [
-            f"Steps: {self.steps}",
-            f"Sampler: {self.scheduler_name}",
-            f"CFG scale: {self.cfg_scale}",
+            f"Steps: {_steps}",
+            f"Sampler: {_scheduler}",
+            f"CFG scale: {_cfg}",
             f"Seed: {seed}",
-            f"Size: {self.width}x{self.height}",
+            f"Size: {_width}x{_height}",
             f"Model: {Path(self._model_path).stem}",
         ]
-        if self.clip_skip > 0:
-            settings.append(f"Clip skip: {self.clip_skip}")
-        if self.init_image is not None:
-            settings.append(f"Denoising strength: {self.strength}")
+        if _clip_skip > 0:
+            settings.append(f"Clip skip: {_clip_skip}")
+        if _init_image is not None:
+            settings.append(f"Denoising strength: {_strength}")
 
         # LoRA info
         lora_parts = []
@@ -877,12 +907,12 @@ class GenerateWorker(QThread):
 
         # Individual fields for programmatic access
         pnginfo.add_text("seed", str(seed))
-        pnginfo.add_text("steps", str(self.steps))
-        pnginfo.add_text("cfg_scale", str(self.cfg_scale))
-        pnginfo.add_text("sampler", self.scheduler_name)
+        pnginfo.add_text("steps", str(_steps))
+        pnginfo.add_text("cfg_scale", str(_cfg))
+        pnginfo.add_text("sampler", _scheduler)
         pnginfo.add_text("model", self._model_path)
-        pnginfo.add_text("width", str(self.width))
-        pnginfo.add_text("height", str(self.height))
+        pnginfo.add_text("width", str(_width))
+        pnginfo.add_text("height", str(_height))
 
         return pnginfo, parameters_str
 
@@ -959,6 +989,7 @@ class GenerateWorker(QThread):
         with self._lock:
             if self.pipe is None:
                 self.error.emit("No model loaded. Load a model first.")
+                self.finished_generating.emit(False, "No model loaded")
                 return
             # Take a local reference under the lock so a concurrent
             # unload_model() call cannot set self.pipe = None between
@@ -1049,7 +1080,19 @@ class GenerateWorker(QThread):
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
-                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(
+                    current_seed,
+                    positive_prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    steps=steps,
+                    scheduler_name=scheduler_name,
+                    cfg_scale=cfg_scale,
+                    width=width,
+                    height=height,
+                    clip_skip=clip_skip,
+                    init_image=init_image,
+                    strength=strength,
+                )
                 img.info["pnginfo"] = pnginfo
                 img.info["parameters"] = parameters_str
 
@@ -1091,34 +1134,40 @@ class GenerateWorker(QThread):
         else:
             self.finished_generating.emit(True, f"Generated {succeeded}/{total} image(s).")
 
-    def _do_generate_blocking(self) -> list[tuple]:
+    def _do_generate_blocking(self, params: dict | None = None) -> list[tuple]:
         """Synchronous generation — returns list of (PIL.Image, info_str).
 
         Used by batch generation and A/B comparison tabs to generate images
-        without going through the QThread run() machinery. Caller is
-        responsible for setting generation params before calling.
+        without going through the QThread run() machinery.
+
+        Thread safety: accepts an explicit params dict so callers don't need
+        to set attributes on the shared worker. If params is None, reads from
+        self (legacy / single-thread usage).
         """
         import torch
 
         with self._lock:
             if self.pipe is None:
+                log.error("_do_generate_blocking called with no model loaded")
                 return []
             pipe_ref = self.pipe
 
+        # Snapshot params from dict (thread-safe) or self (legacy)
+        p = params or {}
         model_type = self._model_type
-        total = self.num_images
-        positive_prompt = self.positive_prompt
-        negative_prompt = self.negative_prompt
-        scheduler_name = self.scheduler_name
-        steps = self.steps
-        cfg_scale = self.cfg_scale
-        width = self.width
-        height = self.height
-        seed = self.seed
-        clip_skip = self.clip_skip
-        init_image = self.init_image
-        mask_image = self.mask_image
-        strength = self.strength
+        total = p.get("num_images", self.num_images)
+        positive_prompt = p.get("positive_prompt", self.positive_prompt)
+        negative_prompt = p.get("negative_prompt", self.negative_prompt)
+        scheduler_name = p.get("scheduler_name", self.scheduler_name)
+        steps = p.get("steps", self.steps)
+        cfg_scale = p.get("cfg_scale", self.cfg_scale)
+        width = p.get("width", self.width)
+        height = p.get("height", self.height)
+        seed = p.get("seed", self.seed)
+        clip_skip = p.get("clip_skip", self.clip_skip)
+        init_image = p.get("init_image", self.init_image)
+        mask_image = p.get("mask_image", self.mask_image)
+        strength = p.get("strength", self.strength)
 
         _load_scheduler(pipe_ref, scheduler_name, model_type)
         active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
@@ -1170,7 +1219,19 @@ class GenerateWorker(QThread):
                     result = active_pipe(**kwargs)
                     img = result.images[0]
 
-                pnginfo, parameters_str = self._build_png_metadata(current_seed)
+                pnginfo, parameters_str = self._build_png_metadata(
+                    current_seed,
+                    positive_prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    steps=steps,
+                    scheduler_name=scheduler_name,
+                    cfg_scale=cfg_scale,
+                    width=width,
+                    height=height,
+                    clip_skip=clip_skip,
+                    init_image=init_image,
+                    strength=strength,
+                )
                 img.info["pnginfo"] = pnginfo
                 img.info["parameters"] = parameters_str
 
@@ -1192,5 +1253,16 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Blocking generation failed for image {i + 1}: {e}")
+
+        # Free fragmented CUDA memory between calls — critical for long
+        # batch queues on 24GB cards (RTX 4090).
+        gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
 
         return results
