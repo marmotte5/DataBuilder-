@@ -119,6 +119,9 @@ class Flux2Backend(TrainBackendBase):
                         f"Flux 2 encoder has {len(hidden_states)} layers "
                         f"but layer {layer_idx} was requested; skipping"
                     )
+            # Free full LLM outputs — only the selected layers are needed.
+            # Without this, all ~32 hidden state tensors stay on GPU.
+            del out, hidden_states
 
             if selected:
                 # Concatenate along sequence dimension

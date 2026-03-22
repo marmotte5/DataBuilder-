@@ -533,6 +533,9 @@ class CUDAGraphWrapper:
         self._static_output = None
         self._captured = False
         self._step = 0
+        # Free CUDA memory held by the old graph and static tensors.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

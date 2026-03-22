@@ -1742,8 +1742,8 @@ class Trainer:
             # Offload text encoders back to CPU if we moved them
             for te in _te_moved:
                 te.cpu()
-            if _te_moved:
-                empty_cache()
+            # Flush VRAM freed by offloading VAE and/or text encoders.
+            empty_cache()
 
             self.state.phase = "training"
 
