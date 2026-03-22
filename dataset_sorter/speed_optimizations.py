@@ -390,10 +390,13 @@ class AsyncGPUPrefetcher:
                     self.device, dtype=self.dtype if val.is_floating_point() else val.dtype,
                     non_blocking=True,
                 )
-            elif isinstance(val, (list, tuple)) and all(isinstance(v, torch.Tensor) for v in val):
+            elif isinstance(val, (list, tuple)) and any(isinstance(v, torch.Tensor) for v in val):
+                # TE cache tuples may contain None entries (absent pooled output).
+                # Transfer tensors, pass through None.
                 result[key] = type(val)(
                     v.to(self.device, dtype=self.dtype if v.is_floating_point() else v.dtype,
                          non_blocking=True)
+                    if isinstance(v, torch.Tensor) else v
                     for v in val
                 )
             else:
