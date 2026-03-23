@@ -194,6 +194,9 @@ class _ComparisonWorker(QThread):
                     self.image_ready.emit(config["side"], None, "No image generated")
             except Exception as exc:
                 log.warning("Comparison generation failed: %s", exc)
+                from dataset_sorter.ui.debug_console import log_categorized_error
+                import sys
+                log_categorized_error(exc, "comparison generation", sys.exc_info()[2])
                 self.image_ready.emit(config["side"], None, f"Error: {exc}")
 
             self.progress.emit(i + 1, total)

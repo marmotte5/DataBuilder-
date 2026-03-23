@@ -165,6 +165,9 @@ class BatchGenerationWorker(QThread):
                     images = []
             except Exception as exc:
                 log.warning("Batch prompt %d failed: %s", qi, exc)
+                from dataset_sorter.ui.debug_console import log_categorized_error
+                import sys
+                log_categorized_error(exc, f"batch prompt {qi}", sys.exc_info()[2])
                 self.prompt_status.emit(qi, "error")
                 prompt.status = "error"
                 completed += 1

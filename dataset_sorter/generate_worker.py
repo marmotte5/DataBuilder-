@@ -375,6 +375,10 @@ class GenerateWorker(QThread):
             elif self._mode == "generate":
                 self._do_generate()
         except OSError as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            import sys
+            log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
+            log_vram_state(f"generate error ({self._mode})")
             if "c10" in str(e).lower() or "1114" in str(e):
                 self.error.emit(
                     "PyTorch DLL failed to load (c10.dll). "
@@ -391,6 +395,10 @@ class GenerateWorker(QThread):
                 except Exception as ue:
                     log.debug(f"Unload model during OSError cleanup failed: {ue}")
         except Exception as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            import sys
+            log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
+            log_vram_state(f"generate error ({self._mode})")
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
             self.finished_generating.emit(False, str(e))
@@ -535,6 +543,9 @@ class GenerateWorker(QThread):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             raise
+
+        from dataset_sorter.ui.debug_console import log_vram_state
+        log_vram_state(f"model loaded: {model_type}")
 
         self.progress.emit(100, 100, "Model loaded!")
         self.model_loaded.emit(
@@ -1094,6 +1105,9 @@ class GenerateWorker(QThread):
         mask_image = self.mask_image
         strength = self.strength
 
+        from dataset_sorter.ui.debug_console import log_vram_state
+        log_vram_state(f"generation start: {total} image(s), {width}x{height}")
+
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
@@ -1209,6 +1223,8 @@ class GenerateWorker(QThread):
                 torch.mps.empty_cache()
         except Exception:
             pass
+
+        log_vram_state(f"generation complete: {succeeded}/{total}")
 
         self.progress.emit(total, total, "Generation complete!")
         if succeeded == 0 and total > 0:

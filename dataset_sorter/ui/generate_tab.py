@@ -712,6 +712,12 @@ class GenerateTab(QWidget):
             self._worker.error.connect(self._on_error)
             self._worker.finished_generating.connect(self._on_finished)
 
+            # Hook debug console signal tracking
+            main_win = self.window()
+            if hasattr(main_win, '_debug_console'):
+                from dataset_sorter.ui.debug_console import hook_generate_worker
+                hook_generate_worker(self._worker, main_win._debug_console)
+
         model_type = self.model_type_combo.currentData()
         precision = self.precision_combo.currentData()
         lora_adapters = self._get_lora_adapters()

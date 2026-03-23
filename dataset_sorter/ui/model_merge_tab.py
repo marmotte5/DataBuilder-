@@ -188,6 +188,9 @@ class MergeWorker(QThread):
 
         except Exception as exc:
             log.exception("Merge failed")
+            from dataset_sorter.ui.debug_console import log_categorized_error
+            import sys
+            log_categorized_error(exc, "model merge", sys.exc_info()[2])
             self.finished.emit(False, f"Merge failed: {exc}")
         finally:
             # Close safetensors file handles to release OS resources
@@ -529,6 +532,12 @@ class ModelMergeTab(QWidget):
 
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
+
+        # Hook debug console signal tracking
+        main_win = self.window()
+        if hasattr(main_win, '_debug_console'):
+            from dataset_sorter.ui.debug_console import hook_merge_worker
+            hook_merge_worker(self._worker, main_win._debug_console)
 
         self._btn_merge.setEnabled(False)
         self._btn_cancel.setEnabled(True)
