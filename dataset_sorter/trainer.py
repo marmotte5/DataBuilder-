@@ -607,10 +607,23 @@ class Trainer:
 
         # ── 13. Attention map debugger setup ──
         if config.attention_debug_enabled:
-            from dataset_sorter.attention_map_debugger import AttentionMapDebugger
-            self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
-            self._attention_debugger.attach(self.backend.unet)
-            log.info("Attention map debugger enabled")
+            if self.backend.unet is not None:
+                from dataset_sorter.attention_map_debugger import AttentionMapDebugger
+                self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
+                self._attention_debugger.attach(self.backend.unet)
+                if not self._attention_debugger._hooks:
+                    log.warning(
+                        "Attention debugger: no cross-attention modules found to hook — "
+                        "debug reports will be empty"
+                    )
+                else:
+                    log.info("Attention map debugger enabled (%d hooks)",
+                             len(self._attention_debugger._hooks))
+            else:
+                log.warning(
+                    "attention_debug_enabled=True but backend has no model loaded — "
+                    "attention debugger disabled"
+                )
 
         # ── 14. Curriculum learning setup ──
         if config.curriculum_learning:
@@ -689,7 +702,7 @@ class Trainer:
             if not config.attention_debug_enabled:
                 config.attention_debug_enabled = True
                 from dataset_sorter.attention_map_debugger import AttentionMapDebugger
-                if self._attention_debugger is None:
+                if self._attention_debugger is None and self.backend.unet is not None:
                     self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
                     self._attention_debugger.attach(self.backend.unet)
                 log.info("Auto-enabled attention debug for attention-guided rebalancing")
