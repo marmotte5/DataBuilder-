@@ -395,9 +395,12 @@ class ExportWorker(QThread):
         def _export_one(task: tuple) -> tuple[bool, str]:
             """Export a single image+txt pair. Returns (success, error_msg)."""
             image_path, txt_path, tags, folder_path, new_name = task
+            dest_img = None
             try:
                 dest_img = _unique_dest(folder_path, new_name)
                 if not is_path_inside(dest_img, output_dir):
+                    # Clean up the placeholder created by _unique_dest
+                    dest_img.unlink(missing_ok=True)
                     return False, f"{image_path}: dest outside output dir"
                 shutil.copy2(str(image_path), str(dest_img))
                 if txt_path is not None:
@@ -410,6 +413,12 @@ class ExportWorker(QThread):
                         )
                 return True, ""
             except Exception as exc:
+                # Clean up the zero-byte placeholder if copy failed
+                if dest_img is not None and dest_img.exists() and dest_img.stat().st_size == 0:
+                    try:
+                        dest_img.unlink()
+                    except OSError:
+                        pass
                 return False, f"{image_path}: {exc}"
 
         # Parallel export using ThreadPoolExecutor
