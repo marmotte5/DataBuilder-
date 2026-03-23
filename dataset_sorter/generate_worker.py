@@ -799,6 +799,12 @@ class GenerateWorker(QThread):
 
         except Exception as e:
             self.error.emit(f"Failed to load weights from {model_path}: {e}")
+            # Free the base pipeline to avoid leaking VRAM
+            del pipe
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return None
 
         return pipe
@@ -869,6 +875,7 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.warning(f"Failed to load LoRA '{name}': {e}")
+                self.error.emit(f"Failed to load LoRA '{name}': {e}")
 
         # Set adapter weights if multiple
         if len(adapter_names) > 1:
@@ -1088,9 +1095,7 @@ class GenerateWorker(QThread):
             # unload_model() call cannot set self.pipe = None between
             # the check above and the scheduler/pipeline access below.
             pipe_ref = self.pipe
-
-        # Snapshot all generation params so UI changes mid-batch are safe
-        model_type = self._model_type
+            model_type = self._model_type
         total = self.num_images
         positive_prompt = self.positive_prompt
         negative_prompt = self.negative_prompt
@@ -1214,10 +1219,18 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Generation failed for image {i + 1}: {e}")
-                self.error.emit(f"Image {i + 1} failed: {e}")
-
-        # Free intermediate GPU memory so subsequent generations stay fast
-        gc.collect()
+                tb = traceback.format_exc()
+                log.debug("Generation traceback:\n%s", tb)
+                self.error.emit(f"Image {i + 1} failed: {e}\n\n{tb}")
+                # Free any GPU memory leaked by the failed generation
+                gc.collect()
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                except Exception:
+                    pass
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1251,10 +1264,10 @@ class GenerateWorker(QThread):
                 log.error("_do_generate_blocking called with no model loaded")
                 return []
             pipe_ref = self.pipe
+            model_type = self._model_type
 
         # Snapshot params from dict (thread-safe) or self (legacy)
         p = params or {}
-        model_type = self._model_type
         total = p.get("num_images", self.num_images)
         positive_prompt = p.get("positive_prompt", self.positive_prompt)
         negative_prompt = p.get("negative_prompt", self.negative_prompt)
@@ -1355,10 +1368,16 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Blocking generation failed for image {i + 1}: {e}")
-
-        # Free fragmented CUDA memory between calls — critical for long
-        # batch queues on 24GB cards (RTX 4090).
-        gc.collect()
+                log.debug("Blocking generation traceback:\n%s", traceback.format_exc())
+                # Free any GPU memory leaked by the failed generation
+                gc.collect()
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                except Exception:
+                    pass
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

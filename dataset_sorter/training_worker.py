@@ -40,10 +40,13 @@ class VRAMMonitor(QThread):
             # Re-check after the (potentially slow) snapshot call
             # to avoid emitting signals after the parent has been destroyed.
             if snap.total_bytes > 0 and not self._stop_event.is_set():
-                self.vram_update.emit(
-                    snap.allocated_gb, snap.reserved_gb,
-                    snap.total_gb, snap.peak_allocated_gb,
-                )
+                try:
+                    self.vram_update.emit(
+                        snap.allocated_gb, snap.reserved_gb,
+                        snap.total_gb, snap.peak_allocated_gb,
+                    )
+                except RuntimeError:
+                    break  # receiver destroyed, stop monitoring
             self._stop_event.wait(self._interval_ms / 1000.0)
 
     def stop(self):
@@ -166,7 +169,7 @@ class TrainingWorker(QThread):
                 try:
                     self.trainer.cleanup()
                 except Exception as e:
-                    log.warning(f"Trainer cleanup failed: {e}")
+                    log.error(f"Trainer cleanup failed: {e}", exc_info=True)
                 finally:
                     # Clear reference so partially-initialised trainers
                     # don't linger and leak GPU memory.
@@ -225,7 +228,10 @@ class TrainingWorker(QThread):
         from dataset_sorter.dpo_trainer import generate_candidate_pairs
 
         t.pause()
-        self.phase_changed.emit("rlhf_collecting")
+        try:
+            self.phase_changed.emit("rlhf_collecting")
+        except RuntimeError:
+            pass  # receiver destroyed
 
         try:
             # Snapshot config fields under lock to avoid race with main thread
@@ -336,22 +342,41 @@ class TrainingWorker(QThread):
         return False
 
     def _on_progress(self, current, total, message):
-        self.progress.emit(current, total, message)
+        try:
+            self.progress.emit(current, total, message)
+        except RuntimeError:
+            pass  # receiver destroyed
 
     def _on_loss(self, step, loss, lr):
-        self.loss_update.emit(step, loss, lr)
+        try:
+            self.loss_update.emit(step, loss, lr)
+        except RuntimeError:
+            pass  # receiver destroyed
 
         # Check RLHF collection trigger (called from training loop on
         # worker thread — no QTimer/event loop needed).
         with self._config_lock:
             rlhf_on = self.config.rlhf_enabled
         if rlhf_on:
+            # Snapshot trainer ref once and hold it for the entire block
+            # to avoid TOCTOU race where trainer is set to None between
+            # the check and the call.
             t = self.trainer
             if t and t.state.running and t._rlhf_collect.is_set():
                 t._rlhf_collect.clear()
                 with self._config_lock:
                     round_idx = getattr(self.config, 'rlhf_dpo_rounds', 0)
-                self.generate_rlhf_candidates(round_idx)
+                try:
+                    self.generate_rlhf_candidates(round_idx)
+                except Exception as e:
+                    log.error("RLHF candidate generation error: %s", e, exc_info=True)
+                    try:
+                        t.resume()
+                    except Exception:
+                        pass
 
     def _on_sample(self, images, step):
-        self.sample_generated.emit(images, step)
+        try:
+            self.sample_generated.emit(images, step)
+        except RuntimeError:
+            pass  # receiver destroyed
