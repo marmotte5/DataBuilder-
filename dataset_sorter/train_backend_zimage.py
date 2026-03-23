@@ -717,7 +717,10 @@ class ZImageBackend(TrainBackendBase):
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
-                pixel_values.to(memory_format=torch.channels_last)
+                pixel_values.to(
+                    device=self.device, dtype=self.vae_dtype,
+                    memory_format=torch.channels_last,
+                )
             ).latent_dist.sample()
             # Apply Z-Image specific scaling: (latents - shift) * scale
             # This matches the diffusers convention for VAEs with shift_factor.

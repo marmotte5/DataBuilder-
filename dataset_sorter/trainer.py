@@ -1696,12 +1696,19 @@ class Trainer:
 
                 # Ensure VAE is on device (it may have been offloaded after
                 # latent caching). Move it back temporarily for DPO encoding.
+                if self.backend.vae is None:
+                    log.error(
+                        "DPO requires VAE for encoding chosen/rejected images, "
+                        "but %s has no VAE. Skipping DPO step.",
+                        self.backend.model_name,
+                    )
+                    continue
+
                 vae_was_offloaded = False
-                if hasattr(self.backend, 'vae') and self.backend.vae is not None:
-                    vae_device = next(self.backend.vae.parameters()).device
-                    if vae_device != self.device:
-                        self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
-                        vae_was_offloaded = True
+                vae_device = next(self.backend.vae.parameters()).device
+                if vae_device != self.device:
+                    self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
+                    vae_was_offloaded = True
 
                 chosen_latents = self.backend.prepare_latents(chosen_tensor)
                 rejected_latents = self.backend.prepare_latents(rejected_tensor)

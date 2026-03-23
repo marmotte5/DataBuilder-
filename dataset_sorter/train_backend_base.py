@@ -766,10 +766,18 @@ class TrainBackendBase(ABC):
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values to latents (used when latent caching is off)."""
+        if self.vae is None:
+            raise RuntimeError(
+                f"{self.model_name} backend has no VAE — cannot encode latents. "
+                "Enable latent caching or use a model with a VAE."
+            )
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
-                pixel_values.to(device=self.device, memory_format=torch.channels_last)
+                pixel_values.to(
+                    device=self.device, dtype=self.vae_dtype,
+                    memory_format=torch.channels_last,
+                )
             ).latent_dist.sample()
             # Some VAEs (e.g. Z-Image) have a shift_factor that must be
             # subtracted before scaling. Must match train_dataset.py caching.
