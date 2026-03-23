@@ -1032,6 +1032,10 @@ class GenerateWorker(QThread):
         an img2img pipeline (supported for SD1.5-Flux). Both are constructed
         from the loaded pipeline's components. Falls back to the base txt2img
         pipeline if the specialized variant is unavailable or fails to init.
+
+        Returns:
+            tuple: (pipeline, mode) where mode is "inpaint", "img2img", or
+            "txt2img".  Callers use the mode to decide which kwargs to pass.
         """
         import diffusers
 
@@ -1049,10 +1053,10 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**pipe_ref.components)
+                    return cls(**pipe_ref.components), "inpaint"
                 except Exception as e:
                     log.warning(f"Could not create inpaint pipeline: {e}, falling back to txt2img")
-            return pipe_ref
+            return pipe_ref, "txt2img"
 
         if init_img is not None:
             # img2img mode
@@ -1069,12 +1073,12 @@ class GenerateWorker(QThread):
             if cls_name and hasattr(diffusers, cls_name):
                 cls = getattr(diffusers, cls_name)
                 try:
-                    return cls(**pipe_ref.components)
+                    return cls(**pipe_ref.components), "img2img"
                 except Exception as e:
                     log.warning(f"Could not create img2img pipeline: {e}, falling back to txt2img")
-            return pipe_ref
+            return pipe_ref, "txt2img"
 
-        return pipe_ref
+        return pipe_ref, "txt2img"
 
     def _do_generate(self):
         """Run the image generation loop.
@@ -1123,7 +1127,7 @@ class GenerateWorker(QThread):
         _load_scheduler(pipe_ref, scheduler_name, model_type)
 
         # Get appropriate pipeline (txt2img / img2img / inpaint)
-        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+        active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
         succeeded = 0
         for i in range(total):
@@ -1152,15 +1156,17 @@ class GenerateWorker(QThread):
                 "generator": generator,
             }
 
-            # img2img / inpainting inputs
-            if init_image is not None:
+            # img2img / inpainting inputs — only pass when the pipeline
+            # actually supports them (i.e. _get_pipeline_for_mode returned
+            # an img2img or inpaint variant, not a txt2img fallback).
+            if pipe_mode in ("img2img", "inpaint"):
                 init_img = init_image.convert("RGB").resize(
                     (width, height), Image.Resampling.LANCZOS,
                 )
                 kwargs["image"] = init_img
                 kwargs["strength"] = strength
 
-                if mask_image is not None:
+                if pipe_mode == "inpaint" and mask_image is not None:
                     mask = mask_image.convert("L").resize(
                         (width, height), Image.Resampling.LANCZOS,
                     )
@@ -1291,7 +1297,7 @@ class GenerateWorker(QThread):
         # racing on the shared pipeline's scheduler state.
         with self._inference_lock:
             _load_scheduler(pipe_ref, scheduler_name, model_type)
-            active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+            active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
         results = []
         for i in range(total):
@@ -1313,13 +1319,13 @@ class GenerateWorker(QThread):
                 "generator": generator,
             }
 
-            if init_image is not None:
+            if pipe_mode in ("img2img", "inpaint"):
                 init_img = init_image.convert("RGB").resize(
                     (width, height), Image.Resampling.LANCZOS,
                 )
                 kwargs["image"] = init_img
                 kwargs["strength"] = strength
-                if mask_image is not None:
+                if pipe_mode == "inpaint" and mask_image is not None:
                     mask = mask_image.convert("L").resize(
                         (width, height), Image.Resampling.LANCZOS,
                     )

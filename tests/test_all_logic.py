@@ -1708,24 +1708,20 @@ class TestGenerateWorkerNewFeatures:
         from dataset_sorter.generate_worker import GenerateWorker
         w = GenerateWorker()
         w._model_type = "sdxl"
-        w.init_image = None
-        w.mask_image = None
         mock_pipe = MagicMock()
-        w.pipe = mock_pipe
 
         with patch.dict("sys.modules", {"diffusers": MagicMock()}):
-            result = w._get_pipeline_for_mode()
+            result, mode = w._get_pipeline_for_mode(mock_pipe, None, None)
         assert result is mock_pipe
+        assert mode == "txt2img"
 
     def test_get_pipeline_for_mode_img2img(self):
         from PIL import Image as PILImage
         from dataset_sorter.generate_worker import GenerateWorker
         w = GenerateWorker()
         w._model_type = "sdxl"
-        w.init_image = PILImage.new("RGB", (512, 512))
-        w.mask_image = None
+        init_img = PILImage.new("RGB", (512, 512))
         mock_pipe = MagicMock()
-        w.pipe = mock_pipe
 
         mock_diffusers = MagicMock()
         mock_img2img_cls = MagicMock()
@@ -1733,8 +1729,9 @@ class TestGenerateWorkerNewFeatures:
         mock_pipe.components = {"unet": MagicMock()}
 
         with patch.dict("sys.modules", {"diffusers": mock_diffusers}):
-            result = w._get_pipeline_for_mode()
+            result, mode = w._get_pipeline_for_mode(mock_pipe, init_img, None)
             mock_img2img_cls.assert_called_once()
+            assert mode == "img2img"
 
 
 class TestGenerateTabNewFeatures:
