@@ -51,7 +51,11 @@ def enforce_zero_terminal_snr(betas: torch.Tensor) -> torch.Tensor:
     alphas_bar_sqrt -= alphas_bar_sqrt_T
 
     # Scale so first value is restored
-    alphas_bar_sqrt *= alphas_bar_sqrt_0 / (alphas_bar_sqrt_0 - alphas_bar_sqrt_T)
+    denom = alphas_bar_sqrt_0 - alphas_bar_sqrt_T
+    if denom.abs().item() < 1e-10:
+        log.warning("rescale_zero_terminal_snr: degenerate schedule (first ≈ last), returning unchanged betas")
+        return betas
+    alphas_bar_sqrt *= alphas_bar_sqrt_0 / denom
 
     # Convert back to betas
     alphas_bar = alphas_bar_sqrt ** 2

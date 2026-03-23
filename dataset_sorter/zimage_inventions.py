@@ -331,6 +331,9 @@ class SpeculativeGradientPredictor:
 
         Call this BEFORE the forward pass. The prediction is based on
         the EMA of previous gradient directions.
+
+        If an exception occurs before correct() is called, use restore()
+        to undo the speculation and avoid corrupted model parameters.
         """
         self._step_count += 1
 
@@ -346,6 +349,19 @@ class SpeculativeGradientPredictor:
                 # Pre-apply predicted gradient direction
                 predicted_dir = self._grad_ema[pid]
                 p.data.add_(predicted_dir, alpha=-self.lookahead_alpha)
+
+    def restore(self):
+        """Restore pre-speculation parameters without correction.
+
+        Call this if forward/backward fails after speculate() to undo
+        the speculative parameter modifications. Safe to call even if
+        speculate() didn't modify any parameters.
+        """
+        for p in self.params:
+            pid = id(p)
+            if pid in self._saved_params:
+                p.data.copy_(self._saved_params[pid])
+        self._saved_params.clear()
 
     def correct(self, optimizer) -> dict:
         """Correct the speculation after real backward pass.

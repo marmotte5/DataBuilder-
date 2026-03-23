@@ -234,9 +234,17 @@ class AttentionMapDebugger:
         resized = []
         for m in aggregated:
             if m.shape[0] != resolution[0] or m.shape[1] != resolution[1]:
-                img = PILImage.fromarray(m)
+                # Convert to uint8 for PIL resize (float32 mode "F" doesn't
+                # reliably support BILINEAR resampling across PIL versions)
+                m_norm = m - m.min()
+                m_max = m_norm.max()
+                if m_max > 0:
+                    m_norm = (m_norm / m_max * 255).astype(np.uint8)
+                else:
+                    m_norm = np.zeros_like(m, dtype=np.uint8)
+                img = PILImage.fromarray(m_norm)
                 img = img.resize((resolution[1], resolution[0]), PILImage.Resampling.BILINEAR)
-                m = np.array(img)
+                m = np.array(img).astype(np.float32) / 255.0
             resized.append(m)
 
         result = np.mean(resized, axis=0)
