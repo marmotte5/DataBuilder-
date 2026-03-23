@@ -1639,6 +1639,9 @@ class Trainer:
                         masks.append(mask.squeeze(0))  # [1, H, W]
                         has_any = True
                         continue
+                    else:
+                        log.warning("Mask failed to load for sample %d (%s), using all-ones fallback",
+                                    idx, self._mask_map.get(idx, "unknown"))
                 # No mask for this sample — use all-ones (train everywhere)
                 masks.append(torch.ones(1, self.config.resolution, self.config.resolution,
                                         device=self.device, dtype=torch.float32))
