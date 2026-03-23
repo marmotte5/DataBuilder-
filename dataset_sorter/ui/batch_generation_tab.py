@@ -48,10 +48,13 @@ from dataset_sorter.ui.toast import show_toast
 log = logging.getLogger(__name__)
 
 
-def _safe_int(s: str, default: int) -> int:
-    """Parse an integer string, returning *default* on failure."""
+def _safe_int(s, default: int) -> int:
+    """Parse an integer or string, returning *default* on failure."""
     try:
-        return int(s) if s else default
+        # Explicitly check for None/empty — 'if s' would reject 0
+        if s is None or s == "":
+            return default
+        return int(s)
     except (ValueError, TypeError):
         return default
 

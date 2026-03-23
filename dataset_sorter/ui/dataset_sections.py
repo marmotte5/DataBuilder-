@@ -2196,7 +2196,7 @@ class TagImportanceSection(QWidget):
                 item.setForeground(detail_color)
             self.table.setItem(row, 0, item)
 
-            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type))
+            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type.name if hasattr(tag_type, 'name') else str(tag_type)))
             if tag_type == TagType.CONCEPT_CORE:
                 type_item.setForeground(core_color)
             self.table.setItem(row, 1, type_item)
@@ -2349,7 +2349,7 @@ class TagImportanceSection(QWidget):
             tag_item.setForeground(color)
             self.table.setItem(row, 0, tag_item)
 
-            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type))
+            type_item = QTableWidgetItem(type_labels.get(tag_type, tag_type.name if hasattr(tag_type, 'name') else str(tag_type)))
             type_item.setForeground(color)
             self.table.setItem(row, 1, type_item)
 

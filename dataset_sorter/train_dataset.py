@@ -740,8 +740,11 @@ class CachedTrainDataset(Dataset):
                     # Use the same generic encoding path as the main cache loop
                     import torch
                     with torch.no_grad():
+                        # Apply caption preprocessor (e.g., Z-Image chat template)
+                        # to match the conditioning path's encoding
+                        _pp_uncond = caption_preprocessor(uncond_caption) if caption_preprocessor else uncond_caption
                         _uncond_inputs = tokenizer(
-                            [uncond_caption], padding="max_length",
+                            [_pp_uncond], padding="max_length",
                             max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
                             truncation=True, return_tensors="pt",
                         ).input_ids.to(device)

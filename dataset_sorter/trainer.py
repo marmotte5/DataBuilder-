@@ -1143,6 +1143,9 @@ class Trainer:
                 # gradients accumulated from earlier steps in this window.
                 if torch.isnan(loss) or torch.isinf(loss):
                     _epoch_nan_count += 1
+                    # Undo speculative gradient (params were pre-modified)
+                    if _speculative_predictor is not None:
+                        _speculative_predictor.restore()
                     log.warning(
                         f"NaN/Inf loss at step {self.state.global_step + 1} "
                         f"(micro-batch {_accum_count}/{grad_accum_steps}), "

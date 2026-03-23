@@ -112,24 +112,23 @@ class SpeedTimestepSampler:
         """
         self._step += 1
 
-        # Update per-timestep loss EMA (vectorized to avoid .item() CPU-GPU syncs)
+        # Update per-timestep loss EMA.
+        # Process one timestep at a time to correctly handle duplicates within
+        # a batch (fancy indexing with duplicates only keeps the last write,
+        # silently dropping EMA updates for earlier occurrences).
         with torch.no_grad():
             t_idx = timesteps.long()
-            new_mask = ~self._ts_seen[t_idx]
-            seen_mask = self._ts_seen[t_idx]
-
-            # First observation: initialize directly
-            if new_mask.any():
-                self._loss_ema[t_idx[new_mask]] = losses[new_mask].detach()
-                self._ts_seen[t_idx[new_mask]] = True
-
-            # Existing observations: EMA update
-            if seen_mask.any():
-                idx_seen = t_idx[seen_mask]
-                self._loss_ema[idx_seen] = (
-                    self.change_momentum * self._loss_ema[idx_seen]
-                    + (1 - self.change_momentum) * losses[seen_mask].detach()
-                )
+            for i in range(len(t_idx)):
+                ti = t_idx[i].item()
+                li = losses[i].detach()
+                if not self._ts_seen[ti]:
+                    self._loss_ema[ti] = li
+                    self._ts_seen[ti] = True
+                else:
+                    self._loss_ema[ti] = (
+                        self.change_momentum * self._loss_ema[ti]
+                        + (1 - self.change_momentum) * li
+                    )
 
         if self._step < self.warmup_steps:
             return torch.ones(len(timesteps), device=self.device)
@@ -649,8 +648,18 @@ class FusedBackwardPass:
         fused.finish_step()  # finalize scheduler + zero_grad
     """
 
+    # Fused backward reimplements optimizer math inline, so it only supports
+    # these optimizer families. Using it with others silently produces wrong updates.
+    _SUPPORTED_OPTIMIZERS = {"Adam", "AdamW", "SGD", "FusedAdamW"}
+
     def __init__(self, optimizer, scheduler=None, grad_scaler=None,
                  max_grad_norm: float = 0.0):
+        opt_name = type(optimizer).__name__
+        if opt_name not in self._SUPPORTED_OPTIMIZERS:
+            raise ValueError(
+                f"FusedBackwardPass only supports {self._SUPPORTED_OPTIMIZERS} "
+                f"optimizers, got {opt_name}. Disable fused_backward_pass in config."
+            )
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.grad_scaler = grad_scaler

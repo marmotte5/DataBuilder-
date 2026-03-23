@@ -277,10 +277,17 @@ class TagPanel(QWidget):
         # selectionChanged fires during the transition.
         new_sel = self.table.selectionModel()
         if new_sel is not None and new_sel is not sel:
+            # Unblock old model before discarding (prevents permanent block
+            # if anything else still holds a reference to it)
+            if sel is not None:
+                sel.blockSignals(False)
             new_sel.blockSignals(True)
             new_sel.selectionChanged.connect(self._on_selection)
         if new_sel is not None:
             new_sel.blockSignals(False)
+        elif sel is not None:
+            # Model wasn't replaced — unblock the original
+            sel.blockSignals(False)
         self.tag_count_badge.setText(f"{self._model.rowCount()} tags")
 
     def restore_selection(self, tag_names: list[str]):

@@ -239,19 +239,21 @@ def compute_image_log_probs(
 
     # Use whichever model the backend has — UNet for epsilon/v-pred models,
     # transformer for flow-matching models (Flux, SD3, PixArt, etc.).
-    model = backend.unet if backend.unet is not None else backend.transformer
-    if backend.unet is not None:
-        # UNet-based models (SD1.5, SD2, SDXL, Kolors, Cascade): positional args
-        noise_pred = model(
-            noisy_latents, timesteps, encoder_hidden,
-            **fwd_kwargs,
-        ).sample
-    else:
+    # Note: all backends store the trainable model as `backend.unet`, even
+    # for transformer-based architectures, so we dispatch on prediction_type.
+    model = backend.unet
+    if getattr(backend, 'prediction_type', 'epsilon') == 'flow':
         # Transformer-based flow models (Flux, SD3, PixArt, etc.): keyword args
         noise_pred = model(
             hidden_states=noisy_latents,
             timestep=timesteps,
             encoder_hidden_states=encoder_hidden,
+            **fwd_kwargs,
+        ).sample
+    else:
+        # UNet-based models (SD1.5, SD2, SDXL, Kolors, Cascade): positional args
+        noise_pred = model(
+            noisy_latents, timesteps, encoder_hidden,
             **fwd_kwargs,
         ).sample
 

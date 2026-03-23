@@ -341,7 +341,11 @@ class AutoPipeline:
                         entry.tags = [t for t in entry.tags if t != remove]
                     else:
                         entry.tags = [keep if t == remove else t for t in entry.tags]
+                        # Update tag_to_entries: idx now references 'keep'
+                        self.tag_to_entries.setdefault(keep, set()).add(idx)
                     tags_merged += 1
+                # Remove the merged tag from the index
+                self.tag_to_entries.pop(remove, None)
 
         return {
             "tags_removed": len(tags_removed),

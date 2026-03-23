@@ -51,8 +51,8 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
     _check_type(errors, "resolution", config.resolution, int)
 
     # ── Range checks ──
-    _check_range(errors, "learning_rate", config.learning_rate, 0, 100,
-                 "Learning rate must be positive")
+    _check_range(errors, "learning_rate", config.learning_rate, 1e-10, 100,
+                 "Learning rate must be positive (> 0)")
     _check_range(errors, "batch_size", config.batch_size, 1, 256,
                  "Batch size must be between 1 and 256")
     _check_range(errors, "epochs", config.epochs, 1, 10000,

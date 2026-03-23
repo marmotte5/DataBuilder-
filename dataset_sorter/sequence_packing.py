@@ -80,6 +80,12 @@ class SequencePacker:
             shapes.append((c, h, w))
             seq_lens.append(h * w)
 
+        if not sequences:
+            import torch
+            empty = torch.empty(1, 0, 0, device=self.device)
+            cu = torch.zeros(1, dtype=torch.int32, device=self.device)
+            return empty, cu, torch.tensor(0, device=self.device), []
+
         # Concatenate all sequences
         packed = torch.cat(sequences, dim=0).unsqueeze(0)  # (1, total_len, c)
 

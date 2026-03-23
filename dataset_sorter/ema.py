@@ -52,18 +52,25 @@ class EMAModel:
         one_minus_decay = 1.0 - self.decay
         if self.cpu_offload:
             # Batch transfer: gather all param data to CPU in one pass
-            for sp, p in zip(self.shadow_params, _grad_params(parameters)):
+            pairs = list(zip(self.shadow_params, _grad_params(parameters)))
+            # Check all params for NaN first — a partial EMA update creates
+            # an inconsistent mix of different training steps.
+            for sp, p in pairs:
                 p_data = p.data.to(sp.device, non_blocking=True)
                 if torch.isnan(p_data).any():
                     log.warning("EMA update skipped: NaN detected in model parameters")
-                else:
-                    sp.lerp_(p_data, one_minus_decay)
+                    return
+            for sp, p in pairs:
+                p_data = p.data.to(sp.device, non_blocking=True)
+                sp.lerp_(p_data, one_minus_decay)
         else:
-            for sp, p in zip(self.shadow_params, _grad_params(parameters)):
+            params_list = list(zip(self.shadow_params, _grad_params(parameters)))
+            for sp, p in params_list:
                 if torch.isnan(p.data).any():
                     log.warning("EMA update skipped: NaN detected in model parameters")
-                else:
-                    sp.lerp_(p.data, one_minus_decay)
+                    return
+            for sp, p in params_list:
+                sp.lerp_(p.data, one_minus_decay)
 
     def store(self, parameters: Iterable[nn.Parameter]):
         """Save current model params (before replacing with EMA for inference)."""

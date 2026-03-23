@@ -240,8 +240,11 @@ class ConceptProber:
 
             with torch.no_grad():
                 outputs = clip_model(**inputs)
-                # outputs.logits_per_text: (1, num_images)
-                similarities = outputs.logits_per_text.softmax(dim=-1)
+                # outputs.logits_per_text: (1, num_images) — scaled cosine sims
+                # Use sigmoid instead of softmax: softmax forces scores to sum
+                # to 1 across images, making mean() always ≈ 0.5 regardless of
+                # actual similarity. Sigmoid gives independent per-image scores.
+                similarities = outputs.logits_per_text.sigmoid()
                 score = float(similarities.mean())
 
             # Clean up CLIP model to free VRAM

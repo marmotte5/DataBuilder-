@@ -103,6 +103,17 @@ class TensorBoardLogger:
                     arr = arr[:, :, :3].transpose(2, 0, 1)
                 tensors.append(torch.from_numpy(arr).float() / 255.0)
             if tensors:
+                # Resize all tensors to the size of the first image so
+                # make_grid doesn't fail on mixed resolutions
+                target_h, target_w = tensors[0].shape[1], tensors[0].shape[2]
+                for i in range(1, len(tensors)):
+                    if tensors[i].shape[1] != target_h or tensors[i].shape[2] != target_w:
+                        tensors[i] = torch.nn.functional.interpolate(
+                            tensors[i].unsqueeze(0),
+                            size=(target_h, target_w),
+                            mode="bilinear",
+                            align_corners=False,
+                        ).squeeze(0)
                 from torchvision.utils import make_grid
                 grid = make_grid(tensors, nrow=min(len(tensors), 4))
                 self._writer.add_image(tag, grid, step)

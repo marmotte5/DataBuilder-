@@ -264,6 +264,7 @@ class GenerateWorker(QThread):
         """Initialize worker with default generation parameters and no loaded model."""
         super().__init__(parent)
         self._lock = threading.Lock()  # Guards pipe and shared state
+        self._inference_lock = threading.Lock()  # Serializes inference + scheduler mutations
         self.pipe = None
         self._device = None
         self._dtype = None
@@ -1282,8 +1283,12 @@ class GenerateWorker(QThread):
         mask_image = p.get("mask_image", self.mask_image)
         strength = p.get("strength", self.strength)
 
-        _load_scheduler(pipe_ref, scheduler_name, model_type)
-        active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+        # Serialize scheduler mutation + inference to prevent concurrent
+        # threads (batch worker, comparison worker, main generate) from
+        # racing on the shared pipeline's scheduler state.
+        with self._inference_lock:
+            _load_scheduler(pipe_ref, scheduler_name, model_type)
+            active_pipe = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
         results = []
         for i in range(total):
