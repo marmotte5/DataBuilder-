@@ -407,7 +407,7 @@ class DebugConsole(QWidget):
             if torch.cuda.is_available():
                 for i in range(torch.cuda.device_count()):
                     name = torch.cuda.get_device_name(i)
-                    mem = torch.cuda.get_device_properties(i).total_mem / (1024**3)
+                    mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
                     lines.append(f"  GPU {i}      : {name} ({mem:.1f} GB)")
                 lines.append(f"  CUDA       : {torch.version.cuda}")
                 bf16 = torch.cuda.is_bf16_supported()
@@ -871,7 +871,7 @@ def log_vram_state(context: str = ""):
         allocated = torch.cuda.memory_allocated() / (1024**3)
         reserved = torch.cuda.memory_reserved() / (1024**3)
         peak = torch.cuda.max_memory_allocated() / (1024**3)
-        total = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         msg = (
             f"[VRAM] {context}: "
             f"alloc={allocated:.2f}GB, reserved={reserved:.2f}GB, "
