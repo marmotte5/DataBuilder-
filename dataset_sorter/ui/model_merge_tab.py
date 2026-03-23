@@ -260,11 +260,11 @@ class MergeWorker(QThread):
         cos_theta = torch.clamp(torch.dot(a_norm, b_norm), -1.0, 1.0)
         theta = torch.acos(cos_theta)
 
-        # Fall back to lerp for nearly-parallel vectors
-        if theta.abs() < 1e-6:
+        # Fall back to lerp for nearly-parallel or anti-parallel vectors
+        sin_theta = torch.sin(theta)
+        if sin_theta.abs().item() < 1e-6:
             return (1 - t) * a + t * b
 
-        sin_theta = torch.sin(theta)
         weight_a = torch.sin((1 - t) * theta) / sin_theta
         weight_b = torch.sin(t * theta) / sin_theta
 

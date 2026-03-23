@@ -1173,6 +1173,8 @@ class GenerateWorker(QThread):
             try:
                 with torch.inference_mode():
                     result = active_pipe(**kwargs)
+                    if not result.images:
+                        raise ValueError("Pipeline returned no images")
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
@@ -1315,6 +1317,8 @@ class GenerateWorker(QThread):
             try:
                 with torch.inference_mode():
                     result = active_pipe(**kwargs)
+                    if not result.images:
+                        raise ValueError("Pipeline returned no images")
                     img = result.images[0]
 
                 pnginfo, parameters_str = self._build_png_metadata(

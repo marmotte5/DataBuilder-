@@ -26,6 +26,7 @@ import mmap
 import random
 import struct
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -283,7 +284,7 @@ class SafetensorsMMapDataset(Dataset):
         self.tag_shuffle = tag_shuffle
         self.keep_first_n_tags = keep_first_n_tags
         self.caption_dropout_rate = caption_dropout_rate
-        self._handles: dict[str, any] = {}
+        self._handles: dict[str, Any] = {}
         self._captions: list[str] = []
         self._opened = False
 

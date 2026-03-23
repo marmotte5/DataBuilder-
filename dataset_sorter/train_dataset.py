@@ -506,8 +506,12 @@ class CachedTrainDataset(Dataset):
             # Check disk cache (try safetensors first, then .pt).
             # Include encoding params in key so changing clip_skip/max_length
             # invalidates stale cached embeddings from a different config.
+            # Include preprocessed caption in cache key so that changes to
+            # the preprocessor (e.g., chat template version) invalidate stale
+            # cached embeddings rather than silently reusing old ones.
+            _pp_caption = caption_preprocessor(caption) if caption_preprocessor else caption
             _cache_str = (
-                f"{caption}|cs={clip_skip}|ml={max_token_length}"
+                f"{_pp_caption}|cs={clip_skip}|ml={max_token_length}"
                 f"|ml2={max_token_length_2}|pp={caption_preprocessor is not None}"
                 f"|efn={encode_fn is not None}"
             )
