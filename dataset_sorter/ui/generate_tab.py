@@ -1062,6 +1062,8 @@ class GenerateTab(QWidget):
             if part.startswith("Seed:"):
                 try:
                     seed = int(part.split(":")[1].strip())
+                    # QSpinBox is 32-bit signed; mask large seeds to fit
+                    seed = seed & 0x7FFFFFFF
                     self.seed_spin.setValue(seed)
                     return
                 except (ValueError, IndexError):

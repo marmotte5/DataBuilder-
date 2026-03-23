@@ -71,6 +71,9 @@ CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
 # Models that use guidance_scale in a different way (no negative prompt)
 FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
+# Models whose pipelines accept clip_skip (CLIP-based text encoders)
+CLIP_SKIP_MODELS = {"sd15", "sd2", "sdxl", "pony", "cascade", "kolors", "hunyuan"}
+
 # DiT-based models compatible with TaylorSeer inference caching.
 # UNet models (sd15, sd2, sdxl, pony, kolors, cascade) are NOT supported.
 TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
@@ -1173,7 +1176,7 @@ class GenerateWorker(QThread):
                 kwargs["negative_prompt"] = negative_prompt
 
             # Clip skip (for SD 1.5 / SDXL)
-            if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
+            if clip_skip > 0 and model_type in CLIP_SKIP_MODELS:
                 kwargs["clip_skip"] = clip_skip
 
             try:
@@ -1329,7 +1332,7 @@ class GenerateWorker(QThread):
             if model_type in CFG_MODELS and negative_prompt:
                 kwargs["negative_prompt"] = negative_prompt
 
-            if clip_skip > 0 and hasattr(active_pipe, "text_encoder"):
+            if clip_skip > 0 and model_type in CLIP_SKIP_MODELS:
                 kwargs["clip_skip"] = clip_skip
 
             try:
