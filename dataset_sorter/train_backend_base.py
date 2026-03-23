@@ -58,6 +58,13 @@ class TrainBackendBase(ABC):
         self.device = device
         self.dtype = dtype
 
+        # VAE must never use fp16 — it causes NaN outputs and decode artifacts.
+        # Use bf16 when the training dtype is fp16, otherwise match training dtype.
+        if dtype == torch.float16:
+            self.vae_dtype = torch.bfloat16
+        else:
+            self.vae_dtype = dtype
+
         # Components (set by load_model)
         self.pipeline = None
         self.unet = None               # or transformer for Flux/SD3
@@ -123,8 +130,16 @@ class TrainBackendBase(ABC):
         return None
 
     def save_lora(self, save_dir: Path):
-        """Save LoRA adapter weights."""
-        self.unet.save_pretrained(str(save_dir))
+        """Save LoRA adapter weights.
+
+        Handles wrapped models (MeBPWrapper, etc.) by unwrapping to find
+        the underlying PeftModel before calling save_pretrained().
+        """
+        model = self.unet
+        # Unwrap any non-PEFT wrapper (MeBPWrapper stores model in .module)
+        while hasattr(model, "module") and not hasattr(model, "save_pretrained"):
+            model = model.module
+        model.save_pretrained(str(save_dir))
         log.info(f"Saved {self.model_name} LoRA to {save_dir}")
 
     # ── Shared loss functions ──────────────────────────────────────────
@@ -261,7 +276,11 @@ class TrainBackendBase(ABC):
             log.info("Applied channels_last to UNet/transformer")
 
         # 2. torch.compile() — 20-40% speedup (requires PyTorch 2.0+)
-        if config.torch_compile and not self._compiled:
+        # Skip when FP8 training is enabled: FP8LinearWrapper replaces nn.Linear
+        # modules after compile, causing graph breaks on every linear layer which
+        # negates compile's benefit and adds overhead.
+        _skip_compile = getattr(config, "fp8_training", False)
+        if config.torch_compile and not self._compiled and not _skip_compile:
             try:
                 self.unet = torch.compile(
                     self.unet,
@@ -272,6 +291,8 @@ class TrainBackendBase(ABC):
                 log.info("torch.compile() applied to UNet (reduce-overhead)")
             except Exception as e:
                 log.warning(f"torch.compile() failed: {e}")
+        elif config.torch_compile and _skip_compile:
+            log.info("torch.compile() skipped: FP8 training causes graph breaks on every linear")
 
         # 3. SDPA / xFormers / Flash Attention
         if config.sdpa and self.device.type == "cuda":
@@ -753,10 +774,18 @@ class TrainBackendBase(ABC):
 
     def prepare_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Encode pixel values to latents (used when latent caching is off)."""
+        if self.vae is None:
+            raise RuntimeError(
+                f"{self.model_name} backend has no VAE — cannot encode latents. "
+                "Enable latent caching or use a model with a VAE."
+            )
         self.vae.eval()
         with torch.no_grad():
             latents = self.vae.encode(
-                pixel_values.to(device=self.device, memory_format=torch.channels_last)
+                pixel_values.to(
+                    device=self.device, dtype=self.vae_dtype,
+                    memory_format=torch.channels_last,
+                )
             ).latent_dist.sample()
             # Some VAEs (e.g. Z-Image) have a shift_factor that must be
             # subtracted before scaling. Must match train_dataset.py caching.

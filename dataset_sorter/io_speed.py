@@ -629,10 +629,21 @@ def batched_vae_encode(
         )
         with torch.no_grad():
             encoded = vae.encode(batch_tensor).latent_dist.sample()
-            encoded = encoded * vae.config.scaling_factor
+            # Must match train_dataset.py and train_backend_base.prepare_latents():
+            # some VAEs (Z-Image, SD3) have a shift_factor that must be subtracted.
+            shift = getattr(vae.config, 'shift_factor', 0.0)
+            if shift:
+                encoded = (encoded - shift) * vae.config.scaling_factor
+            else:
+                encoded = encoded * vae.config.scaling_factor
+
+        # Free GPU input before extracting — reduces peak VRAM
+        del batch_tensor
 
         for j in range(encoded.shape[0]):
             latents.append(encoded[j:j+1].cpu())
+
+        del encoded
 
     return latents
 

@@ -23,6 +23,7 @@ import json
 import logging
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -383,13 +384,16 @@ class Trainer:
         # ── 6. Create dataset (with optional aspect ratio bucketing) ──
         cache_dir = None
         if config.cache_latents_to_disk:
+            # Include model type in cache path to prevent stale latent collisions
+            # when switching models (different VAEs produce different latent distributions).
+            _model_tag = self.backend.model_name
             if config.cache_to_ram_disk and Path("/dev/shm").is_dir():
                 # Use tmpfs RAM disk for faster cache I/O (Linux only)
-                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}"
+                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}" / _model_tag
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 log.info(f"Using RAM disk for cache: {cache_dir}")
             else:
-                cache_dir = output_dir / ".cache"
+                cache_dir = output_dir / ".cache" / _model_tag
                 if config.cache_to_ram_disk:
                     log.warning("cache_to_ram_disk=True but /dev/shm not available, using disk cache")
 
@@ -441,7 +445,7 @@ class Trainer:
             if progress_fn:
                 progress_fn(2, 8, "Caching VAE latents...")
             self.dataset.cache_latents_from_vae(
-                self.backend.vae, self.device, self.dtype,
+                self.backend.vae, self.device, self.backend.vae_dtype,
                 to_disk=config.cache_latents_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching latents {c}/{t}") if progress_fn else None,
             )
@@ -603,10 +607,23 @@ class Trainer:
 
         # ── 13. Attention map debugger setup ──
         if config.attention_debug_enabled:
-            from dataset_sorter.attention_map_debugger import AttentionMapDebugger
-            self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
-            self._attention_debugger.attach(self.backend.unet)
-            log.info("Attention map debugger enabled")
+            if self.backend.unet is not None:
+                from dataset_sorter.attention_map_debugger import AttentionMapDebugger
+                self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
+                self._attention_debugger.attach(self.backend.unet)
+                if not self._attention_debugger._hooks:
+                    log.warning(
+                        "Attention debugger: no cross-attention modules found to hook — "
+                        "debug reports will be empty"
+                    )
+                else:
+                    log.info("Attention map debugger enabled (%d hooks)",
+                             len(self._attention_debugger._hooks))
+            else:
+                log.warning(
+                    "attention_debug_enabled=True but backend has no model loaded — "
+                    "attention debugger disabled"
+                )
 
         # ── 14. Curriculum learning setup ──
         if config.curriculum_learning:
@@ -685,7 +702,7 @@ class Trainer:
             if not config.attention_debug_enabled:
                 config.attention_debug_enabled = True
                 from dataset_sorter.attention_map_debugger import AttentionMapDebugger
-                if self._attention_debugger is None:
+                if self._attention_debugger is None and self.backend.unet is not None:
                     self._attention_debugger = AttentionMapDebugger(self.backend.tokenizer)
                     self._attention_debugger.attach(self.backend.unet)
                 log.info("Auto-enabled attention debug for attention-guided rebalancing")
@@ -835,12 +852,15 @@ class Trainer:
         self._training_start_time = _time.time()
 
         # ── Zero-Bottleneck DataLoader (replaces standard DataLoader) ──
+        # Stored as instance attr so cleanup() can close it if train() raises.
+        self._zero_loader = None
         _zero_loader = None
         if config.zero_bottleneck_loader and config.cache_latents and config.cache_text_encoder:
             from dataset_sorter.zero_bottleneck_dataloader import create_zero_bottleneck_loader
             _zero_loader = create_zero_bottleneck_loader(
                 self.dataset, config, self.device, self.dtype, self.output_dir,
             )
+            self._zero_loader = _zero_loader
             if _zero_loader is not None:
                 log.info(
                     f"Zero-bottleneck DataLoader active: {len(_zero_loader)} batches/epoch "
@@ -1017,6 +1037,20 @@ class Trainer:
                 break
 
             self.state.epoch = epoch
+            _epoch_t0 = time.perf_counter()
+            _epoch_loss_sum = 0.0
+            _epoch_loss_count = 0
+            _epoch_nan_count = 0
+
+            try:
+                from dataset_sorter.ui.debug_console import log_worker_event
+                log_worker_event(
+                    "Trainer",
+                    f"epoch {epoch + 1}/{config.epochs} started",
+                    f"step={self.state.global_step}",
+                )
+            except Exception:
+                pass
 
             # Flush any leftover gradients from incomplete accumulation at
             # the end of the previous epoch (when num_batches % grad_accum != 0).
@@ -1108,10 +1142,21 @@ class Trainer:
                 # bad gradients were added. Clearing would destroy valid
                 # gradients accumulated from earlier steps in this window.
                 if torch.isnan(loss) or torch.isinf(loss):
+                    _epoch_nan_count += 1
                     log.warning(
-                        f"NaN/Inf loss at step {self.state.global_step}, "
+                        f"NaN/Inf loss at step {self.state.global_step + 1} "
+                        f"(micro-batch {_accum_count}/{grad_accum_steps}), "
                         f"skipping backward pass"
                     )
+                    try:
+                        from dataset_sorter.ui.debug_console import log_worker_event
+                        log_worker_event(
+                            "Trainer", "NaN/Inf loss detected",
+                            f"step={self.state.global_step + 1}, "
+                            f"epoch_nan_count={_epoch_nan_count}",
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 # ── Backward (with GradScaler for fp16) ──
@@ -1208,6 +1253,10 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
                     _valid_microbatches = 0
+
+                    # Track per-epoch loss stats for debug console
+                    _epoch_loss_sum += self.state.loss
+                    _epoch_loss_count += 1
 
                     # ── TensorBoard logging ──
                     if self._tb_logger is not None and self._tb_logger.available:
@@ -1329,6 +1378,24 @@ class Trainer:
                     # Max steps check
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
                         break
+
+            # Log epoch summary to debug console
+            _epoch_elapsed = time.perf_counter() - _epoch_t0
+            _epoch_avg_loss = (_epoch_loss_sum / _epoch_loss_count) if _epoch_loss_count > 0 else 0.0
+            try:
+                from dataset_sorter.ui.debug_console import log_worker_event, log_vram_state
+                log_worker_event(
+                    "Trainer",
+                    f"epoch {epoch + 1}/{config.epochs} finished",
+                    f"{_epoch_elapsed:.1f}s, "
+                    f"steps={_epoch_loss_count}, "
+                    f"avg_loss={_epoch_avg_loss:.4f}, "
+                    f"lr={self.state.lr:.2e}, "
+                    f"nan_count={_epoch_nan_count}",
+                )
+                log_vram_state(f"epoch {epoch + 1} end")
+            except Exception:
+                pass
 
             # Epoch checkpoint
             if config.save_every_n_epochs > 0 and (epoch + 1) % config.save_every_n_epochs == 0:
@@ -1588,6 +1655,9 @@ class Trainer:
                         masks.append(mask.squeeze(0))  # [1, H, W]
                         has_any = True
                         continue
+                    else:
+                        log.warning("Mask failed to load for sample %d (%s), using all-ones fallback",
+                                    idx, self._mask_map.get(idx, "unknown"))
                 # No mask for this sample — use all-ones (train everywhere)
                 masks.append(torch.ones(1, self.config.resolution, self.config.resolution,
                                         device=self.device, dtype=torch.float32))
@@ -1696,12 +1766,19 @@ class Trainer:
 
                 # Ensure VAE is on device (it may have been offloaded after
                 # latent caching). Move it back temporarily for DPO encoding.
+                if self.backend.vae is None:
+                    log.error(
+                        "DPO requires VAE for encoding chosen/rejected images, "
+                        "but %s has no VAE. Skipping DPO step.",
+                        self.backend.model_name,
+                    )
+                    continue
+
                 vae_was_offloaded = False
-                if hasattr(self.backend, 'vae') and self.backend.vae is not None:
-                    vae_device = next(self.backend.vae.parameters()).device
-                    if vae_device != self.device:
-                        self.backend.vae.to(self.device)
-                        vae_was_offloaded = True
+                vae_device = next(self.backend.vae.parameters()).device
+                if vae_device != self.device:
+                    self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
+                    vae_was_offloaded = True
 
                 chosen_latents = self.backend.prepare_latents(chosen_tensor)
                 rejected_latents = self.backend.prepare_latents(rejected_tensor)
@@ -1777,6 +1854,7 @@ class Trainer:
                         )
                     self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
+                self.scheduler.step()
                 log.info(
                     f"DPO step applied: {len(dpo_losses)} pairs, "
                     f"loss={total_dpo_loss.item():.4f}"
@@ -1786,6 +1864,7 @@ class Trainer:
 
     def _save_checkpoint(self, name: str):
         """Save checkpoint to the checkpoints subfolder."""
+        _ckpt_t0 = time.perf_counter()
         self.state.phase = "saving"
         save_dir = self.output_dir / "checkpoints" / name
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -1848,6 +1927,21 @@ class Trainer:
             )
 
         self._cleanup_old_checkpoints()
+
+        # Log checkpoint save to debug console
+        _ckpt_elapsed = time.perf_counter() - _ckpt_t0
+        try:
+            from dataset_sorter.ui.debug_console import log_worker_event
+            _size_mb = sum(
+                f.stat().st_size for f in save_dir.rglob("*") if f.is_file()
+            ) / (1024 * 1024)
+            log_worker_event(
+                "Trainer", f"checkpoint saved: {name}",
+                f"{_ckpt_elapsed:.1f}s, {_size_mb:.0f}MB, step={self.state.global_step}",
+            )
+        except Exception:
+            pass
+
         self.state.phase = "training"
 
     def _cleanup_old_checkpoints(self):
@@ -1885,7 +1979,7 @@ class Trainer:
 
         # Move VAE back to GPU for decoding
         if self.backend.vae is not None:
-            self.backend.vae.to(self.device, dtype=self.dtype)
+            self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
 
         # Move text encoders to GPU for pipeline prompt encoding.
         # They may have been offloaded to CPU after TE output caching.
@@ -2222,7 +2316,7 @@ class Trainer:
         if self.optimizer is not None and "optimizer" in state:
             try:
                 self.optimizer.load_state_dict(state["optimizer"])
-            except (RuntimeError, ValueError) as e:
+            except (RuntimeError, ValueError, TypeError, KeyError) as e:
                 log.warning(f"Could not restore optimizer state (architecture changed?): {e}")
                 log.warning("Continuing with fresh optimizer state")
         if self.scheduler is not None and "scheduler" in state:
@@ -2230,6 +2324,12 @@ class Trainer:
                 self.scheduler.load_state_dict(state["scheduler"])
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore scheduler state: {e}")
+                # Fast-forward the fresh scheduler to match restored global_step
+                # so the LR schedule is approximately correct even without the
+                # exact internal state (e.g. warmup position, cosine phase).
+                for _ in range(self.state.global_step):
+                    self.scheduler.step()
+                log.info(f"Fast-forwarded scheduler to step {self.state.global_step}")
 
         # Restore GradScaler state
         if self.grad_scaler is not None and "grad_scaler" in state:
@@ -2251,17 +2351,27 @@ class Trainer:
             if adapter_config.exists() and self.backend.unet is not None:
                 # Validate adapter compatibility with current model
                 self._check_lora_compatibility(adapter_config)
+                # Unwrap any non-PEFT wrapper (MeBPWrapper, etc.)
+                _unet = self.backend.unet
+                while hasattr(_unet, "module") and not isinstance(_unet, PeftModel):
+                    _unet = _unet.module
                 try:
-                    if isinstance(self.backend.unet, PeftModel):
-                        self.backend.unet.load_adapter(str(checkpoint_dir), "default")
+                    if isinstance(_unet, PeftModel):
+                        _unet.load_adapter(str(checkpoint_dir), "default")
+                        log.info("Restored LoRA weights from checkpoint")
                     else:
                         from peft import set_peft_model_state_dict
                         from safetensors.torch import load_file
                         lora_path = checkpoint_dir / "adapter_model.safetensors"
                         if lora_path.exists():
                             lora_state = load_file(str(lora_path))
-                            set_peft_model_state_dict(self.backend.unet, lora_state)
-                    log.info("Restored LoRA weights from checkpoint")
+                            set_peft_model_state_dict(_unet, lora_state)
+                            log.info("Restored LoRA weights from checkpoint")
+                        else:
+                            log.warning(
+                                f"adapter_config.json found but adapter_model.safetensors "
+                                f"missing in {checkpoint_dir} — LoRA weights NOT restored"
+                            )
                 except Exception as e:
                     log.warning(f"Could not restore LoRA weights: {e}")
 
@@ -2396,6 +2506,15 @@ class Trainer:
         if self._attention_debugger is not None:
             self._attention_debugger.detach()
             self._attention_debugger = None
+
+        # Close zero-bottleneck DataLoader if train() didn't finish normally
+        zl = getattr(self, "_zero_loader", None)
+        if zl is not None:
+            try:
+                zl.close()
+            except Exception:
+                pass
+            self._zero_loader = None
 
         dataset = getattr(self, "dataset", None)
         if dataset is not None:

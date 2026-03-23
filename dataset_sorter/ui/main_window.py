@@ -1809,9 +1809,23 @@ class MainWindow(QMainWindow):
 
 def run():
     """Launch the DataBuilder application."""
-    app = QApplication(sys.argv)
+    from dataset_sorter.ui.debug_console import CrashResilientApp
+
+    app = CrashResilientApp(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(get_stylesheet())
     window = MainWindow()
     window.show()
+
+    # Set up the debug console (external log window, exception hooks, UI instrumentation)
+    from dataset_sorter.ui.debug_console import setup_debug_console
+    window._debug_console = setup_debug_console(window)
+
+    # Reset the crash counter periodically so isolated errors don't
+    # accumulate toward the safety kill-switch threshold.
+    from PyQt6.QtCore import QTimer
+    _crash_reset = QTimer()
+    _crash_reset.timeout.connect(app.reset_crash_count)
+    _crash_reset.start(10_000)  # every 10 seconds
+
     sys.exit(app.exec())

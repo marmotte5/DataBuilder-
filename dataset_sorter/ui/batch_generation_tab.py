@@ -165,6 +165,9 @@ class BatchGenerationWorker(QThread):
                     images = []
             except Exception as exc:
                 log.warning("Batch prompt %d failed: %s", qi, exc)
+                from dataset_sorter.ui.debug_console import log_categorized_error
+                import sys
+                log_categorized_error(exc, f"batch prompt {qi}", sys.exc_info()[2])
                 self.prompt_status.emit(qi, "error")
                 prompt.status = "error"
                 completed += 1
@@ -562,12 +565,12 @@ class BatchGenerationTab(QWidget):
                 prompt = BatchPrompt(
                     positive=item.get("positive", item.get("prompt", "")),
                     negative=item.get("negative", ""),
-                    seed=int(item.get("seed", -1)),
-                    steps=int(item.get("steps", 0)),
-                    cfg_scale=float(item.get("cfg_scale", item.get("cfg", 0))),
-                    width=int(item.get("width", 0)),
-                    height=int(item.get("height", 0)),
-                    count=int(item.get("count", 1)),
+                    seed=_safe_int(item.get("seed", -1), -1),
+                    steps=_safe_int(item.get("steps", 0), 0),
+                    cfg_scale=_safe_float(item.get("cfg_scale", item.get("cfg", 0)), 0.0),
+                    width=_safe_int(item.get("width", 0), 0),
+                    height=_safe_int(item.get("height", 0), 0),
+                    count=_safe_int(item.get("count", 1), 1),
                 )
                 self._add_row(prompt)
                 count += 1

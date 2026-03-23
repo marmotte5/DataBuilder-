@@ -57,7 +57,7 @@ class SanaBackend(TrainBackendBase):
         self.vae_scale_factor = 32
 
         if self.vae is not None:
-            self.vae.to(self.device, dtype=self.dtype)
+            self.vae.to(self.device, dtype=self.vae_dtype)
             self.vae.requires_grad_(False)
 
         log.info(f"Loaded Sana model from {model_path}")

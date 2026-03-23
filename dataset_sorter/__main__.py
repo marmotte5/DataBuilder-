@@ -45,6 +45,9 @@ from dataset_sorter.ui.main_window import run
 def main():
     """Console script entry point."""
     print_startup_log()
+    # Lower root logger to DEBUG so the debug console captures everything.
+    # The console's level filter lets the user pick what to see in the UI.
+    logging.getLogger().setLevel(logging.DEBUG)
     run()
 
 

@@ -699,6 +699,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._training_worker.pipeline_report.connect(self._on_pipeline_report)
         self._training_worker.rlhf_candidates_ready.connect(self._on_rlhf_candidates)
 
+        # Hook debug console signal tracking (if debug console is available)
+        main_win = self.window()
+        if hasattr(main_win, '_debug_console'):
+            from dataset_sorter.ui.debug_console import hook_training_worker
+            hook_training_worker(self._training_worker, main_win._debug_console)
+
         # Start VRAM monitor
         self._vram_monitor = VRAMMonitor(interval_ms=2000)
         self._vram_monitor.vram_update.connect(self._on_vram_update)
@@ -931,7 +937,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _collect_rlhf_now(self):
         """Manually trigger RLHF preference collection."""
         if self._training_worker:
-            round_idx = self._training_worker.config.rlhf_dpo_rounds
+            # Read rlhf_dpo_rounds under the config lock to avoid a data
+            # race with the training worker thread which increments it.
+            with self._training_worker._config_lock:
+                round_idx = self._training_worker.config.rlhf_dpo_rounds
             self._training_worker.generate_rlhf_candidates(round_idx)
 
     def _on_rlhf_candidates(self, candidates: list, round_idx: int):

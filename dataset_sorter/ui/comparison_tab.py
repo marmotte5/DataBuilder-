@@ -185,6 +185,14 @@ class _ComparisonWorker(QThread):
                 "num_images": 1,
             }
 
+            # Apply per-side LoRA override if specified
+            lora_path = config.get("lora_path", "")
+            lora_weight = config.get("lora_weight", 1.0)
+            _prev_lora = None
+            if lora_path:
+                params["lora_path"] = lora_path
+                params["lora_weight"] = lora_weight
+
             try:
                 images = gw._do_generate_blocking(params)
                 if images and len(images) > 0:
@@ -194,6 +202,9 @@ class _ComparisonWorker(QThread):
                     self.image_ready.emit(config["side"], None, "No image generated")
             except Exception as exc:
                 log.warning("Comparison generation failed: %s", exc)
+                from dataset_sorter.ui.debug_console import log_categorized_error
+                import sys
+                log_categorized_error(exc, "comparison generation", sys.exc_info()[2])
                 self.image_ready.emit(config["side"], None, f"Error: {exc}")
 
             self.progress.emit(i + 1, total)
@@ -474,6 +485,8 @@ class ComparisonTab(QWidget):
                 "cfg": overrides_a.get("cfg_scale", cfg),
                 "seed": overrides_a.get("seed", pair_seed) if overrides_a.get("seed", -2) > -2 else pair_seed,
                 "width": res[0], "height": res[1],
+                "lora_path": overrides_a.get("lora_path", ""),
+                "lora_weight": overrides_a.get("lora_weight", 1.0),
             })
             # Side B config
             gen_queue.append({
@@ -484,6 +497,8 @@ class ComparisonTab(QWidget):
                 "cfg": overrides_b.get("cfg_scale", cfg),
                 "seed": overrides_b.get("seed", pair_seed) if overrides_b.get("seed", -2) > -2 else pair_seed,
                 "width": res[0], "height": res[1],
+                "lora_path": overrides_b.get("lora_path", ""),
+                "lora_weight": overrides_b.get("lora_weight", 1.0),
             })
 
         self._status.setText(f"Generating {count} A/B pairs...")

@@ -205,7 +205,7 @@ class FP8LinearWrapper(nn.Module):
                 out = out.reshape(*orig_shape[:-1], out.shape[-1])
 
             if self.linear.bias is not None:
-                out = out + self.linear.bias
+                out = out + self.linear.bias.to(out.dtype)
 
             return out
 

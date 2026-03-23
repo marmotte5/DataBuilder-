@@ -375,6 +375,10 @@ class GenerateWorker(QThread):
             elif self._mode == "generate":
                 self._do_generate()
         except OSError as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            import sys
+            log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
+            log_vram_state(f"generate error ({self._mode})")
             if "c10" in str(e).lower() or "1114" in str(e):
                 self.error.emit(
                     "PyTorch DLL failed to load (c10.dll). "
@@ -391,6 +395,10 @@ class GenerateWorker(QThread):
                 except Exception as ue:
                     log.debug(f"Unload model during OSError cleanup failed: {ue}")
         except Exception as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            import sys
+            log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
+            log_vram_state(f"generate error ({self._mode})")
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
             self.finished_generating.emit(False, str(e))
@@ -497,6 +505,16 @@ class GenerateWorker(QThread):
                     log.debug("Pipeline .to(device, dtype) failed, retrying without dtype: %s", e)
                     pipe = pipe.to(self._device)
 
+            # VAE must not stay in fp16 — it produces NaN/artifacts during decode.
+            # Upcast to bf16 (preferred) or fp32 when pipeline is fp16.
+            if dtype == torch.float16 and hasattr(pipe, "vae") and pipe.vae is not None:
+                try:
+                    pipe.vae.to(dtype=torch.bfloat16)
+                    log.info("Upcast VAE from fp16 → bf16 for decode stability")
+                except Exception:
+                    pipe.vae.to(dtype=torch.float32)
+                    log.info("Upcast VAE from fp16 → fp32 for decode stability")
+
             if hasattr(pipe, "enable_vae_slicing"):
                 pipe.enable_vae_slicing()
             if hasattr(pipe, "enable_vae_tiling"):
@@ -525,6 +543,9 @@ class GenerateWorker(QThread):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             raise
+
+        from dataset_sorter.ui.debug_console import log_vram_state
+        log_vram_state(f"model loaded: {model_type}")
 
         self.progress.emit(100, 100, "Model loaded!")
         self.model_loaded.emit(
@@ -778,6 +799,12 @@ class GenerateWorker(QThread):
 
         except Exception as e:
             self.error.emit(f"Failed to load weights from {model_path}: {e}")
+            # Free the base pipeline to avoid leaking VRAM
+            del pipe
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return None
 
         return pipe
@@ -848,6 +875,7 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.warning(f"Failed to load LoRA '{name}': {e}")
+                self.error.emit(f"Failed to load LoRA '{name}': {e}")
 
         # Set adapter weights if multiple
         if len(adapter_names) > 1:
@@ -1067,9 +1095,7 @@ class GenerateWorker(QThread):
             # unload_model() call cannot set self.pipe = None between
             # the check above and the scheduler/pipeline access below.
             pipe_ref = self.pipe
-
-        # Snapshot all generation params so UI changes mid-batch are safe
-        model_type = self._model_type
+            model_type = self._model_type
         total = self.num_images
         positive_prompt = self.positive_prompt
         negative_prompt = self.negative_prompt
@@ -1083,6 +1109,9 @@ class GenerateWorker(QThread):
         init_image = self.init_image
         mask_image = self.mask_image
         strength = self.strength
+
+        from dataset_sorter.ui.debug_console import log_vram_state
+        log_vram_state(f"generation start: {total} image(s), {width}x{height}")
 
         self.progress.emit(0, total, f"Generating {total} image(s)...")
 
@@ -1149,6 +1178,8 @@ class GenerateWorker(QThread):
             try:
                 with torch.inference_mode():
                     result = active_pipe(**kwargs)
+                    if not result.images:
+                        raise ValueError("Pipeline returned no images")
                     img = result.images[0]
 
                 # Embed generation parameters as PNG metadata
@@ -1188,10 +1219,18 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Generation failed for image {i + 1}: {e}")
-                self.error.emit(f"Image {i + 1} failed: {e}")
-
-        # Free intermediate GPU memory so subsequent generations stay fast
-        gc.collect()
+                tb = traceback.format_exc()
+                log.debug("Generation traceback:\n%s", tb)
+                self.error.emit(f"Image {i + 1} failed: {e}\n\n{tb}")
+                # Free any GPU memory leaked by the failed generation
+                gc.collect()
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                except Exception:
+                    pass
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1199,6 +1238,8 @@ class GenerateWorker(QThread):
                 torch.mps.empty_cache()
         except Exception:
             pass
+
+        log_vram_state(f"generation complete: {succeeded}/{total}")
 
         self.progress.emit(total, total, "Generation complete!")
         if succeeded == 0 and total > 0:
@@ -1223,10 +1264,10 @@ class GenerateWorker(QThread):
                 log.error("_do_generate_blocking called with no model loaded")
                 return []
             pipe_ref = self.pipe
+            model_type = self._model_type
 
         # Snapshot params from dict (thread-safe) or self (legacy)
         p = params or {}
-        model_type = self._model_type
         total = p.get("num_images", self.num_images)
         positive_prompt = p.get("positive_prompt", self.positive_prompt)
         negative_prompt = p.get("negative_prompt", self.negative_prompt)
@@ -1289,6 +1330,8 @@ class GenerateWorker(QThread):
             try:
                 with torch.inference_mode():
                     result = active_pipe(**kwargs)
+                    if not result.images:
+                        raise ValueError("Pipeline returned no images")
                     img = result.images[0]
 
                 pnginfo, parameters_str = self._build_png_metadata(
@@ -1325,10 +1368,16 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.error(f"Blocking generation failed for image {i + 1}: {e}")
-
-        # Free fragmented CUDA memory between calls — critical for long
-        # batch queues on 24GB cards (RTX 4090).
-        gc.collect()
+                log.debug("Blocking generation traceback:\n%s", traceback.format_exc())
+                # Free any GPU memory leaked by the failed generation
+                gc.collect()
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                except Exception:
+                    pass
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

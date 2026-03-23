@@ -188,13 +188,17 @@ class MergeWorker(QThread):
 
         except Exception as exc:
             log.exception("Merge failed")
+            from dataset_sorter.ui.debug_console import log_categorized_error
+            import sys
+            log_categorized_error(exc, "model merge", sys.exc_info()[2])
             self.finished.emit(False, f"Merge failed: {exc}")
         finally:
-            # Close safetensors file handles to release OS resources
+            # Close safetensors file handles to release OS resources.
+            # safe_open supports the context manager protocol (__exit__).
             for _h in (handle_a, handle_b, handle_c):
-                if _h is not None and hasattr(_h, '__del__'):
+                if _h is not None:
                     try:
-                        del _h
+                        _h.__exit__(None, None, None)
                     except Exception:
                         pass
 
@@ -251,23 +255,28 @@ class MergeWorker(QThread):
         a_flat = a.flatten().float()
         b_flat = b.flatten().float()
 
+        # Guard against zero-magnitude tensors (empty or all-zero weights)
+        a_mag = a_flat.norm()
+        b_mag = b_flat.norm()
+        if a_mag.item() < 1e-8 or b_mag.item() < 1e-8:
+            return (1 - t) * a + t * b
+
         a_norm = torch.nn.functional.normalize(a_flat, dim=0)
         b_norm = torch.nn.functional.normalize(b_flat, dim=0)
 
         cos_theta = torch.clamp(torch.dot(a_norm, b_norm), -1.0, 1.0)
         theta = torch.acos(cos_theta)
+        sin_theta = torch.sin(theta)
 
-        # Fall back to lerp for nearly-parallel vectors
-        if theta.abs() < 1e-6:
+        # Fall back to lerp for nearly-parallel or anti-parallel vectors
+        # (sin_theta ≈ 0 means the division below would produce inf/NaN)
+        if sin_theta.abs().item() < 1e-6:
             return (1 - t) * a + t * b
 
-        sin_theta = torch.sin(theta)
         weight_a = torch.sin((1 - t) * theta) / sin_theta
         weight_b = torch.sin(t * theta) / sin_theta
 
         # Apply weights to original (non-normalized) tensors, preserving magnitude
-        a_mag = a_flat.norm()
-        b_mag = b_flat.norm()
         interp_mag = (1 - t) * a_mag + t * b_mag
 
         result_flat = weight_a * a_norm + weight_b * b_norm
@@ -529,6 +538,12 @@ class ModelMergeTab(QWidget):
 
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
+
+        # Hook debug console signal tracking
+        main_win = self.window()
+        if hasattr(main_win, '_debug_console'):
+            from dataset_sorter.ui.debug_console import hook_merge_worker
+            hook_merge_worker(self._worker, main_win._debug_console)
 
         self._btn_merge.setEnabled(False)
         self._btn_cancel.setEnabled(True)
