@@ -53,7 +53,7 @@ class KolorsBackend(TrainBackendBase):
         from diffusers import DDPMScheduler
         self.noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
-        self.vae.to(self.device, dtype=self.dtype)
+        self.vae.to(self.device, dtype=self.vae_dtype)
         self.vae.requires_grad_(False)
 
         # Default time_ids; overridden per-batch when bucketing produces non-square.

@@ -60,7 +60,7 @@ class Flux2Backend(TrainBackendBase):
         self.noise_scheduler = pipe.scheduler
 
         if self.vae is not None:
-            self.vae.to(self.device, dtype=self.dtype)
+            self.vae.to(self.device, dtype=self.vae_dtype)
             self.vae.requires_grad_(False)
 
         log.info(f"Loaded Flux 2 model from {model_path}")

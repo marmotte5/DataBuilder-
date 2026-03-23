@@ -310,7 +310,7 @@ class ZImageBackend(TrainBackendBase):
                 vae_config = self._infer_vae_config(component_sds["vae"])
                 self.vae = AutoencoderKL(**vae_config)
                 self.vae.load_state_dict(component_sds["vae"], strict=False)
-                self.vae = self.vae.to(dtype=self.dtype)
+                self.vae = self.vae.to(dtype=self.vae_dtype)
             except Exception as e:
                 log.warning("Could not load VAE from checkpoint: %s", e)
                 self.vae = None
@@ -629,7 +629,7 @@ class ZImageBackend(TrainBackendBase):
                     log.info("Z-Image loaded in manual mode (sample generation unavailable)")
 
         if self.vae is not None:
-            self.vae.to(self.device, dtype=self.dtype)
+            self.vae.to(self.device, dtype=self.vae_dtype)
             self.vae.requires_grad_(False)
 
         # Store VAE scaling info

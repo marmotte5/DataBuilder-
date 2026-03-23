@@ -497,6 +497,16 @@ class GenerateWorker(QThread):
                     log.debug("Pipeline .to(device, dtype) failed, retrying without dtype: %s", e)
                     pipe = pipe.to(self._device)
 
+            # VAE must not stay in fp16 — it produces NaN/artifacts during decode.
+            # Upcast to bf16 (preferred) or fp32 when pipeline is fp16.
+            if dtype == torch.float16 and hasattr(pipe, "vae") and pipe.vae is not None:
+                try:
+                    pipe.vae.to(dtype=torch.bfloat16)
+                    log.info("Upcast VAE from fp16 → bf16 for decode stability")
+                except Exception:
+                    pipe.vae.to(dtype=torch.float32)
+                    log.info("Upcast VAE from fp16 → fp32 for decode stability")
+
             if hasattr(pipe, "enable_vae_slicing"):
                 pipe.enable_vae_slicing()
             if hasattr(pipe, "enable_vae_tiling"):

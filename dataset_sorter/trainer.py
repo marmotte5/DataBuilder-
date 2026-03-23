@@ -441,7 +441,7 @@ class Trainer:
             if progress_fn:
                 progress_fn(2, 8, "Caching VAE latents...")
             self.dataset.cache_latents_from_vae(
-                self.backend.vae, self.device, self.dtype,
+                self.backend.vae, self.device, self.backend.vae_dtype,
                 to_disk=config.cache_latents_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching latents {c}/{t}") if progress_fn else None,
             )
@@ -1700,7 +1700,7 @@ class Trainer:
                 if hasattr(self.backend, 'vae') and self.backend.vae is not None:
                     vae_device = next(self.backend.vae.parameters()).device
                     if vae_device != self.device:
-                        self.backend.vae.to(self.device)
+                        self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
                         vae_was_offloaded = True
 
                 chosen_latents = self.backend.prepare_latents(chosen_tensor)
@@ -1885,7 +1885,7 @@ class Trainer:
 
         # Move VAE back to GPU for decoding
         if self.backend.vae is not None:
-            self.backend.vae.to(self.device, dtype=self.dtype)
+            self.backend.vae.to(self.device, dtype=self.backend.vae_dtype)
 
         # Move text encoders to GPU for pipeline prompt encoding.
         # They may have been offloaded to CPU after TE output caching.

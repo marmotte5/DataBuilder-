@@ -47,7 +47,7 @@ class SD2Backend(TrainBackendBase):
         # Use DDPMScheduler explicitly to ensure alphas_cumprod is available
         self.noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
-        self.vae.to(self.device, dtype=self.dtype)
+        self.vae.to(self.device, dtype=self.vae_dtype)
         self.vae.requires_grad_(False)
 
         log.info(f"Loaded SD 2.x model from {model_path}")

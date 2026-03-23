@@ -58,6 +58,13 @@ class TrainBackendBase(ABC):
         self.device = device
         self.dtype = dtype
 
+        # VAE must never use fp16 — it causes NaN outputs and decode artifacts.
+        # Use bf16 when the training dtype is fp16, otherwise match training dtype.
+        if dtype == torch.float16:
+            self.vae_dtype = torch.bfloat16
+        else:
+            self.vae_dtype = dtype
+
         # Components (set by load_model)
         self.pipeline = None
         self.unet = None               # or transformer for Flux/SD3
@@ -261,7 +268,11 @@ class TrainBackendBase(ABC):
             log.info("Applied channels_last to UNet/transformer")
 
         # 2. torch.compile() — 20-40% speedup (requires PyTorch 2.0+)
-        if config.torch_compile and not self._compiled:
+        # Skip when FP8 training is enabled: FP8LinearWrapper replaces nn.Linear
+        # modules after compile, causing graph breaks on every linear layer which
+        # negates compile's benefit and adds overhead.
+        _skip_compile = getattr(config, "fp8_training", False)
+        if config.torch_compile and not self._compiled and not _skip_compile:
             try:
                 self.unet = torch.compile(
                     self.unet,
@@ -272,6 +283,8 @@ class TrainBackendBase(ABC):
                 log.info("torch.compile() applied to UNet (reduce-overhead)")
             except Exception as e:
                 log.warning(f"torch.compile() failed: {e}")
+        elif config.torch_compile and _skip_compile:
+            log.info("torch.compile() skipped: FP8 training causes graph breaks on every linear")
 
         # 3. SDPA / xFormers / Flash Attention
         if config.sdpa and self.device.type == "cuda":
