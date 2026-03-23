@@ -265,7 +265,12 @@ class ZImageBackend(TrainBackendBase):
             for repo, subfolder in te_candidates:
                 try:
                     sf_kwargs = {"subfolder": subfolder} if subfolder else {}
-                    self.text_encoder = AutoModelForCausalLM.from_pretrained(
+                    # Use AutoModel (not AutoModelForCausalLM) for consistency
+                    # with the Qwen3Model path above — we only need hidden
+                    # states, not the LM head, and this avoids loading extra
+                    # weights and potential hidden_states index mismatches.
+                    from transformers import AutoModel
+                    self.text_encoder = AutoModel.from_pretrained(
                         repo, torch_dtype=self.dtype,
                         trust_remote_code=True, **te_kwargs, **sf_kwargs,
                     )
