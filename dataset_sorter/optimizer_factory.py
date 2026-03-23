@@ -309,7 +309,9 @@ class _RexScheduler:
         return [pg["lr"] for pg in self.optimizer.param_groups]
 
     def state_dict(self):
-        return {"step_count": self._step_count}
+        return {"step_count": self._step_count, "base_lrs": self.base_lrs}
 
     def load_state_dict(self, state_dict):
         self._step_count = state_dict["step_count"]
+        if "base_lrs" in state_dict:
+            self.base_lrs = state_dict["base_lrs"]

@@ -127,8 +127,11 @@ class ChunkPacker:
                     f"{len(tensors)} tensors, "
                     f"{chunk_path.stat().st_size / 1e6:.1f} MB"
                 )
-
-            chunk_idx += 1
+                chunk_idx += 1
+            else:
+                log.warning(
+                    f"Chunk range [{start}:{end}] has no cached data, skipping"
+                )
             if progress_fn:
                 progress_fn(end, num_samples)
 

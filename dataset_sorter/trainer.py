@@ -2234,7 +2234,7 @@ class Trainer:
         if self.optimizer is not None and "optimizer" in state:
             try:
                 self.optimizer.load_state_dict(state["optimizer"])
-            except (RuntimeError, ValueError) as e:
+            except (RuntimeError, ValueError, TypeError, KeyError) as e:
                 log.warning(f"Could not restore optimizer state (architecture changed?): {e}")
                 log.warning("Continuing with fresh optimizer state")
         if self.scheduler is not None and "scheduler" in state:
@@ -2242,6 +2242,12 @@ class Trainer:
                 self.scheduler.load_state_dict(state["scheduler"])
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore scheduler state: {e}")
+                # Fast-forward the fresh scheduler to match restored global_step
+                # so the LR schedule is approximately correct even without the
+                # exact internal state (e.g. warmup position, cosine phase).
+                for _ in range(self.state.global_step):
+                    self.scheduler.step()
+                log.info(f"Fast-forwarded scheduler to step {self.state.global_step}")
 
         # Restore GradScaler state
         if self.grad_scaler is not None and "grad_scaler" in state:
