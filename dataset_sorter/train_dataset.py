@@ -657,9 +657,14 @@ class CachedTrainDataset(Dataset):
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
                     _skip2 = min(max(clip_skip, 1), len(encoder_output_2.hidden_states) - 2)
                     hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].squeeze(0).cpu()
+                    # SDXL/OpenCLIP uses text_embeds; other TEs use pooler_output
+                    _raw_pooled_2 = getattr(
+                        encoder_output_2, "text_embeds",
+                        getattr(encoder_output_2, "pooler_output", None),
+                    )
                     pooled_2 = (
-                        encoder_output_2.pooler_output.squeeze(0).cpu()
-                        if hasattr(encoder_output_2, "pooler_output") and encoder_output_2.pooler_output is not None
+                        _raw_pooled_2.squeeze(0).cpu()
+                        if _raw_pooled_2 is not None
                         else None
                     )
 
