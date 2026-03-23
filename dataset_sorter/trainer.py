@@ -839,12 +839,15 @@ class Trainer:
         self._training_start_time = _time.time()
 
         # ── Zero-Bottleneck DataLoader (replaces standard DataLoader) ──
+        # Stored as instance attr so cleanup() can close it if train() raises.
+        self._zero_loader = None
         _zero_loader = None
         if config.zero_bottleneck_loader and config.cache_latents and config.cache_text_encoder:
             from dataset_sorter.zero_bottleneck_dataloader import create_zero_bottleneck_loader
             _zero_loader = create_zero_bottleneck_loader(
                 self.dataset, config, self.device, self.dtype, self.output_dir,
             )
+            self._zero_loader = _zero_loader
             if _zero_loader is not None:
                 log.info(
                     f"Zero-bottleneck DataLoader active: {len(_zero_loader)} batches/epoch "
@@ -2490,6 +2493,15 @@ class Trainer:
         if self._attention_debugger is not None:
             self._attention_debugger.detach()
             self._attention_debugger = None
+
+        # Close zero-bottleneck DataLoader if train() didn't finish normally
+        zl = getattr(self, "_zero_loader", None)
+        if zl is not None:
+            try:
+                zl.close()
+            except Exception:
+                pass
+            self._zero_loader = None
 
         dataset = getattr(self, "dataset", None)
         if dataset is not None:
