@@ -587,7 +587,10 @@ class LiveTrainingMonitor:
 
         self._adjustments_made += 1
         self._report.lr_adjustments.append(msg)
-        self.config.learning_rate = new_lr
+        # Scale the config LR proportionally (not to an absolute value) so
+        # multi-group optimizers with different per-group LRs (e.g.,
+        # text_encoder_lr != learning_rate) resume correctly after save.
+        self.config.learning_rate *= factor
 
         log.info(msg)
         return msg
