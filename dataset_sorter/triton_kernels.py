@@ -244,11 +244,14 @@ class FusedAdamW:
         eps: float = 1e-8,
         weight_decay: float = 0.01,
     ):
-        # Accept either a list of param groups (dicts) or a flat iterable of params
+        # Accept either a list of param groups (dicts) or a flat iterable of params.
+        # Materialize generators first — indexing params[0] would consume/crash.
+        if not isinstance(params, list):
+            params = list(params)
         if params and isinstance(params[0], dict):
             self.param_groups = params
         else:
-            self.param_groups = [{"params": list(params), "lr": lr}]
+            self.param_groups = [{"params": params, "lr": lr}]
         self.lr = lr
         self.beta1, self.beta2 = betas
         self.eps = eps
