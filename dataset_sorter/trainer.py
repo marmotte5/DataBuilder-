@@ -1112,7 +1112,8 @@ class Trainer:
                 # gradients accumulated from earlier steps in this window.
                 if torch.isnan(loss) or torch.isinf(loss):
                     log.warning(
-                        f"NaN/Inf loss at step {self.state.global_step}, "
+                        f"NaN/Inf loss at step {self.state.global_step + 1} "
+                        f"(micro-batch {_accum_count}/{grad_accum_steps}), "
                         f"skipping backward pass"
                     )
                     continue
@@ -1787,6 +1788,7 @@ class Trainer:
                         )
                     self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
+                self.scheduler.step()
                 log.info(
                     f"DPO step applied: {len(dpo_losses)} pairs, "
                     f"loss={total_dpo_loss.item():.4f}"
@@ -2264,6 +2266,7 @@ class Trainer:
                 try:
                     if isinstance(self.backend.unet, PeftModel):
                         self.backend.unet.load_adapter(str(checkpoint_dir), "default")
+                        log.info("Restored LoRA weights from checkpoint")
                     else:
                         from peft import set_peft_model_state_dict
                         from safetensors.torch import load_file
@@ -2271,7 +2274,12 @@ class Trainer:
                         if lora_path.exists():
                             lora_state = load_file(str(lora_path))
                             set_peft_model_state_dict(self.backend.unet, lora_state)
-                    log.info("Restored LoRA weights from checkpoint")
+                            log.info("Restored LoRA weights from checkpoint")
+                        else:
+                            log.warning(
+                                f"adapter_config.json found but adapter_model.safetensors "
+                                f"missing in {checkpoint_dir} — LoRA weights NOT restored"
+                            )
                 except Exception as e:
                     log.warning(f"Could not restore LoRA weights: {e}")
 
