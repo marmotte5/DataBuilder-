@@ -699,6 +699,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._training_worker.pipeline_report.connect(self._on_pipeline_report)
         self._training_worker.rlhf_candidates_ready.connect(self._on_rlhf_candidates)
 
+        # Hook debug console signal tracking (if debug console is available)
+        main_win = self.window()
+        if hasattr(main_win, '_debug_console'):
+            from dataset_sorter.ui.debug_console import hook_training_worker
+            hook_training_worker(self._training_worker, main_win._debug_console)
+
         # Start VRAM monitor
         self._vram_monitor = VRAMMonitor(interval_ms=2000)
         self._vram_monitor.vram_update.connect(self._on_vram_update)

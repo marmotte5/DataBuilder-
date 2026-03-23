@@ -24,16 +24,20 @@ import os
 import platform
 import sys
 import threading
+import time
 import traceback
 from functools import wraps
 from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QMetaMethod
-from PyQt6.QtGui import QFont, QTextCharFormat, QColor, QKeySequence, QShortcut, QAction
+from PyQt6.QtGui import (
+    QFont, QTextCharFormat, QColor, QKeySequence, QShortcut, QAction,
+    QTextDocument,
+)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit, QPushButton,
-    QLabel, QComboBox, QCheckBox, QApplication, QFileDialog,
+    QLabel, QComboBox, QCheckBox, QApplication, QFileDialog, QLineEdit,
 )
 
 log = logging.getLogger(__name__)
@@ -87,7 +91,44 @@ _LEVEL_COLORS = {
     "UI":       "#818cf8",  # indigo (UI actions)
     "SIGNAL":   "#34d399",  # green (signals)
     "EXCEPTION": "#ff4444", # bright red
+    "PERF":     "#60a5fa",  # blue (performance timing)
+    "WORKER":   "#c084fc",  # purple (worker lifecycle)
+    "VRAM":     "#2dd4bf",  # teal (VRAM snapshots)
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PERFORMANCE TIMER — measures wall-clock time for operations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PerfTimer:
+    """Context manager that logs elapsed time for an operation.
+
+    Usage:
+        with PerfTimer("Model loading"):
+            load_model()
+        # Logs: [PERF] Model loading: 12.34s
+    """
+
+    def __init__(self, label: str, log_fn: Optional[callable] = None):
+        self.label = label
+        self._log_fn = log_fn
+        self._start: float = 0.0
+        self.elapsed: float = 0.0
+
+    def __enter__(self):
+        self._start = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        self.elapsed = time.perf_counter() - self._start
+        msg = f"[PERF] {self.label}: {self.elapsed:.2f}s"
+        if self._log_fn:
+            self._log_fn(msg)
+        elif _console_instance is not None:
+            _console_instance._log_signal.emit(msg, "PERF")
+        logging.getLogger("perf").info(msg)
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -157,6 +198,10 @@ class DebugConsole(QWidget):
         self._log_file_path: Optional[Path] = None
         self._file_handler: Optional[logging.FileHandler] = None
 
+        # Error/warning counters for the status bar
+        self._error_count = 0
+        self._warning_count = 0
+
         self._build_ui()
         self._connect_signals()
 
@@ -192,6 +237,19 @@ class DebugConsole(QWidget):
 
         toolbar.addStretch()
 
+        # Error / warning counters
+        self._error_counter_label = QLabel("0 errors")
+        self._error_counter_label.setStyleSheet(
+            "color: #6b7280; font-size: 11px; padding: 0 4px;"
+        )
+        toolbar.addWidget(self._error_counter_label)
+
+        self._warning_counter_label = QLabel("0 warnings")
+        self._warning_counter_label.setStyleSheet(
+            "color: #6b7280; font-size: 11px; padding: 0 4px;"
+        )
+        toolbar.addWidget(self._warning_counter_label)
+
         # Line count
         self._line_count_label = QLabel("0 lines")
         self._line_count_label.setStyleSheet("color: #8b8fa3;")
@@ -211,6 +269,38 @@ class DebugConsole(QWidget):
         toolbar.addWidget(self._btn_clear)
 
         layout.addLayout(toolbar)
+
+        # ── Search bar ──
+        search_row = QHBoxLayout()
+        search_row.setSpacing(6)
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("Search logs (Ctrl+F)...")
+        self._search_input.setStyleSheet(
+            "QLineEdit {"
+            "  background-color: #131520;"
+            "  color: #e0e2f0;"
+            "  border: 1px solid #262938;"
+            "  border-radius: 4px;"
+            "  padding: 4px 8px;"
+            "}"
+        )
+        search_row.addWidget(self._search_input, 1)
+
+        self._btn_search_prev = QPushButton("Prev")
+        self._btn_search_prev.setFixedWidth(50)
+        search_row.addWidget(self._btn_search_prev)
+
+        self._btn_search_next = QPushButton("Next")
+        self._btn_search_next.setFixedWidth(50)
+        search_row.addWidget(self._btn_search_next)
+
+        self._search_status = QLabel("")
+        self._search_status.setStyleSheet("color: #8b8fa3; font-size: 11px;")
+        self._search_status.setFixedWidth(100)
+        search_row.addWidget(self._search_status)
+
+        layout.addLayout(search_row)
 
         # ── Log display ──
         self._text = QPlainTextEdit()
@@ -244,6 +334,9 @@ class DebugConsole(QWidget):
         self._level_combo.currentTextChanged.connect(self._on_level_changed)
         self._auto_scroll_cb.toggled.connect(self._on_auto_scroll_changed)
         self._on_top_cb.toggled.connect(self._on_stay_on_top_changed)
+        self._search_input.returnPressed.connect(self._search_next)
+        self._btn_search_next.clicked.connect(self._search_next)
+        self._btn_search_prev.clicked.connect(self._search_prev)
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -328,6 +421,20 @@ class DebugConsole(QWidget):
 
     def _append_log(self, message: str, level: str):
         """Append a log message to the display (runs on Qt main thread)."""
+        # Track error/warning counts (always, regardless of filter)
+        if level in ("ERROR", "CRITICAL", "EXCEPTION"):
+            self._error_count += 1
+            self._error_counter_label.setText(f"{self._error_count} error{'s' if self._error_count != 1 else ''}")
+            self._error_counter_label.setStyleSheet(
+                "color: #f87171; font-size: 11px; font-weight: bold; padding: 0 4px;"
+            )
+        elif level == "WARNING":
+            self._warning_count += 1
+            self._warning_counter_label.setText(f"{self._warning_count} warning{'s' if self._warning_count != 1 else ''}")
+            self._warning_counter_label.setStyleSheet(
+                "color: #fbbf24; font-size: 11px; padding: 0 4px;"
+            )
+
         # Filter by level
         level_num = getattr(logging, level, 0) if level in (
             "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
@@ -390,6 +497,42 @@ class DebugConsole(QWidget):
     def _clear(self):
         self._text.clear()
         self._line_count_label.setText("0 lines")
+        self._error_count = 0
+        self._warning_count = 0
+        self._error_counter_label.setText("0 errors")
+        self._error_counter_label.setStyleSheet("color: #6b7280; font-size: 11px; padding: 0 4px;")
+        self._warning_counter_label.setText("0 warnings")
+        self._warning_counter_label.setStyleSheet("color: #6b7280; font-size: 11px; padding: 0 4px;")
+
+    def _search_next(self):
+        """Find next occurrence of search text."""
+        term = self._search_input.text()
+        if not term:
+            self._search_status.setText("")
+            return
+        found = self._text.find(term)
+        if not found:
+            # Wrap around to beginning
+            cursor = self._text.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            self._text.setTextCursor(cursor)
+            found = self._text.find(term)
+        self._search_status.setText("Found" if found else "Not found")
+
+    def _search_prev(self):
+        """Find previous occurrence of search text."""
+        term = self._search_input.text()
+        if not term:
+            self._search_status.setText("")
+            return
+        found = self._text.find(term, QTextDocument.FindFlag.FindBackward)
+        if not found:
+            # Wrap around to end
+            cursor = self._text.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self._text.setTextCursor(cursor)
+            found = self._text.find(term, QTextDocument.FindFlag.FindBackward)
+        self._search_status.setText("Found" if found else "Not found")
 
     def closeEvent(self, event):
         """Hide instead of close so the console persists."""
@@ -562,10 +705,189 @@ def log_vram_state(context: str = ""):
             f"peak={peak:.2f}GB, total={total:.1f}GB, "
             f"free≈{total - reserved:.2f}GB"
         )
-        _console_instance._log_signal.emit(msg, "INFO")
+        _console_instance._log_signal.emit(msg, "VRAM")
         logging.getLogger("vram").debug(msg)
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKER LIFECYCLE HOOKS — track QThread workers from creation to cleanup
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def log_worker_event(worker_name: str, event: str, detail: str = ""):
+    """Log a worker lifecycle event (created, started, finished, error, cleanup)."""
+    msg = f"[WORKER] {worker_name}: {event}"
+    if detail:
+        msg += f" — {detail}"
+    if _console_instance is not None:
+        _console_instance._log_signal.emit(msg, "WORKER")
+    logging.getLogger("worker").info(msg)
+
+
+def hook_training_worker(worker, console: "DebugConsole"):
+    """Connect debug logging hooks to a TrainingWorker's signals.
+
+    Logs every signal emission with context so the full training lifecycle
+    is visible in the debug console.
+    """
+    name = "TrainingWorker"
+    log_worker_event(name, "created")
+
+    worker.phase_changed.connect(
+        lambda phase: (
+            log_worker_event(name, f"phase → {phase}"),
+            log_vram_state(f"training phase: {phase}"),
+        )
+    )
+    worker.error.connect(
+        lambda msg: log_worker_event(name, "ERROR", msg[:200])
+    )
+    worker.finished_training.connect(
+        lambda ok, msg: (
+            log_worker_event(name, "finished", f"success={ok}, {msg}"),
+            log_vram_state("training finished"),
+        )
+    )
+    worker.paused_changed.connect(
+        lambda paused: log_worker_event(
+            name, "paused" if paused else "resumed"
+        )
+    )
+    worker.sample_generated.connect(
+        lambda imgs, step: log_worker_event(
+            name, f"sample generated at step {step}", f"{len(imgs)} image(s)"
+        )
+    )
+    worker.smart_resume_report.connect(
+        lambda _: log_worker_event(name, "smart resume analysis emitted")
+    )
+    worker.pipeline_report.connect(
+        lambda _: log_worker_event(name, "pipeline integration report emitted")
+    )
+    worker.rlhf_candidates_ready.connect(
+        lambda cands, idx: log_worker_event(
+            name, f"RLHF candidates ready",
+            f"round={idx}, pairs={len(cands)}",
+        )
+    )
+
+    # Log worker thread start/finish via QThread base signals
+    worker.started.connect(
+        lambda: log_worker_event(name, "thread started")
+    )
+    worker.finished.connect(
+        lambda: log_worker_event(name, "thread finished")
+    )
+
+
+def hook_generate_worker(worker, console: "DebugConsole"):
+    """Connect debug logging hooks to a GenerateWorker's signals."""
+    name = "GenerateWorker"
+
+    worker.model_loaded.connect(
+        lambda model_name, is_xl: (
+            log_worker_event(
+                name, f"model loaded: {model_name}",
+                f"is_sdxl_or_flux={is_xl}",
+            ),
+            log_vram_state(f"model loaded: {model_name}"),
+        )
+    )
+    worker.error.connect(
+        lambda msg: log_worker_event(name, "ERROR", msg[:200])
+    )
+    worker.finished_generating.connect(
+        lambda ok, msg: (
+            log_worker_event(name, "finished", f"success={ok}, {msg}"),
+            log_vram_state("generation finished"),
+        )
+    )
+
+
+def hook_merge_worker(worker, console: "DebugConsole"):
+    """Connect debug logging hooks to a MergeWorker's signals."""
+    name = "MergeWorker"
+    log_worker_event(name, "created")
+
+    worker.progress.connect(
+        lambda cur, total, msg: (
+            log_worker_event(name, f"progress {cur}/{total}", msg)
+            if cur == 0 or cur == total
+            else None
+        )
+    )
+    worker.finished.connect(
+        lambda ok, msg: log_worker_event(name, "finished", f"success={ok}, {msg}")
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ERROR CATEGORIZATION — structured error IDs for common failure modes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ERROR_CATEGORIES = {
+    "ERR_MODEL_LOAD":    "Model loading failed",
+    "ERR_VRAM_OOM":      "Out of VRAM (GPU memory)",
+    "ERR_CUDA_DLL":      "PyTorch DLL / CUDA driver issue",
+    "ERR_LORA_LOAD":     "LoRA adapter loading failed",
+    "ERR_SHAPE_MISMATCH":"Tensor shape mismatch",
+    "ERR_FILE_IO":       "File I/O error (read/write/permission)",
+    "ERR_NETWORK":       "Network error (HuggingFace download)",
+    "ERR_IMPORT":        "Missing dependency (ImportError)",
+    "ERR_GENERATION":    "Image generation failed",
+    "ERR_TRAINING":      "Training step failed",
+    "ERR_CHECKPOINT":    "Checkpoint save/load failed",
+    "ERR_MERGE":         "Model merge failed",
+    "ERR_RLHF":          "RLHF/DPO operation failed",
+    "ERR_UNKNOWN":       "Unexpected error",
+}
+
+
+def categorize_error(exc: BaseException) -> str:
+    """Return a structured error ID based on exception type and message."""
+    msg = str(exc).lower()
+    exc_type = type(exc).__name__
+
+    if "out of memory" in msg or "oom" in msg or "cuda out of memory" in msg:
+        return "ERR_VRAM_OOM"
+    if "c10" in msg or "1114" in msg or "dll" in msg:
+        return "ERR_CUDA_DLL"
+    if "lora" in msg and ("load" in msg or "adapter" in msg):
+        return "ERR_LORA_LOAD"
+    if "shape" in msg and "mismatch" in msg:
+        return "ERR_SHAPE_MISMATCH"
+    if exc_type == "ImportError" or exc_type == "ModuleNotFoundError":
+        return "ERR_IMPORT"
+    if isinstance(exc, (PermissionError, FileNotFoundError)):
+        return "ERR_FILE_IO"
+    if isinstance(exc, OSError) and ("errno" in msg or "permission" in msg):
+        return "ERR_FILE_IO"
+    if "connection" in msg or "timeout" in msg or "urlopen" in msg:
+        return "ERR_NETWORK"
+    return "ERR_UNKNOWN"
+
+
+def log_categorized_error(
+    exc: BaseException,
+    context: str = "",
+    exc_tb=None,
+):
+    """Log an exception with its error category ID and optional traceback."""
+    cat = categorize_error(exc)
+    cat_label = _ERROR_CATEGORIES.get(cat, cat)
+    header = f"[{cat}] {cat_label}"
+    if context:
+        header += f" — {context}"
+    header += f": {type(exc).__name__}: {exc}"
+
+    if exc_tb is not None:
+        tb_text = "".join(traceback.format_tb(exc_tb))
+        header += f"\n{tb_text}"
+
+    if _console_instance is not None:
+        _console_instance._log_signal.emit(header, "ERROR")
+    logging.getLogger("error.categorized").error(header)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -626,4 +948,10 @@ def _add_toggle_shortcut(main_window: QWidget, console: DebugConsole):
     shortcut = QShortcut(QKeySequence(Qt.Key.Key_F12), main_window)
     shortcut.activated.connect(
         lambda: console.show() if console.isHidden() else console.hide()
+    )
+
+    # Ctrl+F inside the console focuses the search bar
+    search_shortcut = QShortcut(QKeySequence("Ctrl+F"), console)
+    search_shortcut.activated.connect(
+        lambda: (console._search_input.setFocus(), console._search_input.selectAll())
     )

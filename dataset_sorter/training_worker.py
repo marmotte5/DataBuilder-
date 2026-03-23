@@ -91,17 +91,22 @@ class TrainingWorker(QThread):
 
     def run(self):
         try:
+            from dataset_sorter.ui.debug_console import log_vram_state, PerfTimer
+
             self.trainer = Trainer(self.config)
 
             # Setup (model loading, caching, pipeline integration)
             self.phase_changed.emit("setup")
-            self.trainer.setup(
-                model_path=self.model_path,
-                image_paths=self.image_paths,
-                captions=self.captions,
-                output_dir=self.output_dir,
-                progress_fn=self._on_progress,
-            )
+            log_vram_state("before model setup")
+            with PerfTimer("Model setup (load + cache)"):
+                self.trainer.setup(
+                    model_path=self.model_path,
+                    image_paths=self.image_paths,
+                    captions=self.captions,
+                    output_dir=self.output_dir,
+                    progress_fn=self._on_progress,
+                )
+            log_vram_state("after model setup")
 
             # Emit pipeline integration report if available
             report = getattr(self.trainer, '_integration_report', None)
@@ -111,7 +116,9 @@ class TrainingWorker(QThread):
             # Resume from checkpoint if requested
             if self.resume_from is not None:
                 self.phase_changed.emit("resuming")
-                self.trainer.resume_from_checkpoint(self.resume_from)
+                with PerfTimer("Checkpoint resume"):
+                    self.trainer.resume_from_checkpoint(self.resume_from)
+                log_vram_state("after checkpoint resume")
 
                 # Emit Smart Resume report if analysis was performed
                 analysis = getattr(self.trainer, '_smart_resume_analysis', None)
@@ -121,6 +128,7 @@ class TrainingWorker(QThread):
 
             # Train (with RLHF collection monitoring)
             self.phase_changed.emit("training")
+            log_vram_state("training start")
 
             self.trainer.train(
                 progress_fn=self._on_progress,
@@ -128,9 +136,13 @@ class TrainingWorker(QThread):
                 sample_fn=self._on_sample,
             )
 
+            log_vram_state("training complete")
             self.finished_training.emit(True, "Training completed successfully!")
 
         except OSError as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error
+            import sys
+            log_categorized_error(e, "training", sys.exc_info()[2])
             if "c10" in str(e).lower() or "1114" in str(e):
                 self.error.emit(
                     "PyTorch DLL failed to load (c10.dll). "
@@ -141,6 +153,9 @@ class TrainingWorker(QThread):
                 self.error.emit(f"{e}\n\n{traceback.format_exc()}")
             self.finished_training.emit(False, str(e))
         except Exception as e:
+            from dataset_sorter.ui.debug_console import log_categorized_error
+            import sys
+            log_categorized_error(e, "training", sys.exc_info()[2])
             log.error("Training failed: %s", e, exc_info=True)
             tb = traceback.format_exc()
             self.error.emit(f"{e}\n\n{tb}")
