@@ -151,8 +151,11 @@ def memory_usage_report() -> str:
     # CPU RAM
     try:
         import resource
+        import sys as _sys
         usage = resource.getrusage(resource.RUSAGE_SELF)
-        ram_mb = usage.ru_maxrss / 1024  # Linux returns KB
+        # Linux ru_maxrss is in KB, macOS (Darwin) is in bytes
+        divisor = 1024 * 1024 if _sys.platform == "darwin" else 1024
+        ram_mb = usage.ru_maxrss / divisor
         lines.append(f"CPU RAM (peak): {ram_mb:.1f} MB")
     except (ImportError, AttributeError):
         pass

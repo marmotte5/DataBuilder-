@@ -41,7 +41,7 @@ def _torch_info() -> list[str]:
             lines.append(f"  GPU count         : {n_gpu}")
             for i in range(n_gpu):
                 name = torch.cuda.get_device_name(i)
-                mem = torch.cuda.get_device_properties(i).total_mem
+                mem = torch.cuda.get_device_properties(i).total_memory
                 mem_gb = mem / (1024 ** 3)
                 lines.append(f"  GPU {i}             : {name}  ({mem_gb:.1f} GB)")
                 if mem_gb < 12:

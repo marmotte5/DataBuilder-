@@ -321,18 +321,21 @@ def fused_rope_3d(
     half_dim = hd // 2
 
     if (_TRITON_AVAILABLE and qk.is_cuda and hd >= 16):
-        output = torch.empty_like(qk)
+        # Ensure contiguous layout so kernel strides match memory layout
+        qk_contig = qk.contiguous()
+        freqs_contig = freqs.contiguous()
+        output = torch.empty_like(qk_contig)
         grid = (s * nh,)
 
         _fused_rope_3d_kernel[grid](
-            qk.contiguous(),
-            freqs.contiguous(),
+            qk_contig,
+            freqs_contig,
             output,
             s, nh, hd, half_dim,
-            # strides for qk
-            qk.stride(0), qk.stride(1), qk.stride(2),
-            # strides for freqs
-            freqs.stride(0), freqs.stride(1) if freqs.dim() > 1 else 1,
+            # strides for qk (from contiguous tensor)
+            qk_contig.stride(0), qk_contig.stride(1), qk_contig.stride(2),
+            # strides for freqs (from contiguous tensor)
+            freqs_contig.stride(0), freqs_contig.stride(1) if freqs_contig.dim() > 1 else 1,
             s * nh * hd,
             BLOCK_SIZE=256,
         )

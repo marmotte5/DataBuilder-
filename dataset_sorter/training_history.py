@@ -217,12 +217,15 @@ class TrainingHistory:
         avg_loss = row['avg_loss']
         best_loss = row['best_loss']
         avg_time = row['avg_time']
+        avg_loss_s = f"{avg_loss:.4f}" if avg_loss is not None else "N/A"
+        best_loss_s = f"{best_loss:.4f}" if best_loss is not None else "N/A"
+        avg_time_s = f"{avg_time:.0f}s" if avg_time is not None else "N/A"
         return (
             f"Training History: {row['total']} runs, "
             f"{diverged} diverged, {ooms} OOMs, "
-            f"avg loss={avg_loss:.4f if avg_loss is not None else 'N/A'}, "
-            f"best={best_loss:.4f if best_loss is not None else 'N/A'}, "
-            f"avg time={avg_time:.0f if avg_time is not None else 'N/A'}s"
+            f"avg loss={avg_loss_s}, "
+            f"best={best_loss_s}, "
+            f"avg time={avg_time_s}"
         )
 
     def close(self):
