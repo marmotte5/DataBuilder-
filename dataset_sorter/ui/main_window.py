@@ -1814,4 +1814,9 @@ def run():
     app.setStyleSheet(get_stylesheet())
     window = MainWindow()
     window.show()
+
+    # Set up the debug console (external log window, exception hooks, UI instrumentation)
+    from dataset_sorter.ui.debug_console import setup_debug_console
+    window._debug_console = setup_debug_console(window)
+
     sys.exit(app.exec())
