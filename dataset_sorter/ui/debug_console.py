@@ -38,6 +38,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit, QPushButton,
     QLabel, QComboBox, QCheckBox, QApplication, QFileDialog, QLineEdit,
+    QMessageBox,
 )
 
 log = logging.getLogger(__name__)
@@ -608,6 +609,104 @@ class DebugConsole(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CRASH-RESILIENT APPLICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class CrashResilientApp(QApplication):
+    """QApplication subclass that catches exceptions during event dispatch.
+
+    In standard PyQt6, an unhandled exception in a slot or event handler
+    kills the entire application — all windows close instantly.  This
+    subclass overrides notify() to catch those exceptions, log them to
+    the debug console, and show a non-fatal error dialog so the user
+    can continue working (or at least save their progress).
+
+    Segfaults and C++ crashes still kill the process — this only handles
+    Python-level exceptions.
+    """
+
+    _crash_count = 0
+    _MAX_CONSECUTIVE_CRASHES = 50  # kill-switch to prevent infinite loops
+
+    def notify(self, receiver, event):
+        """Wrap Qt event dispatch to catch Python exceptions."""
+        try:
+            return super().notify(receiver, event)
+        except Exception:
+            self._crash_count += 1
+            exc_type, exc_value, exc_tb = sys.exc_info()
+
+            # Log to debug console
+            if _console_instance is not None:
+                _console_instance.log_exception(
+                    exc_type, exc_value, exc_tb,
+                    f"Crash caught in event dispatch (#{self._crash_count})",
+                )
+                # Auto-show debug console so user sees what happened
+                if _console_instance.isHidden():
+                    _console_instance.show()
+                    _console_instance.raise_()
+
+            # Log to stderr as fallback
+            traceback.print_exception(exc_type, exc_value, exc_tb)
+
+            # Safety valve: if we're stuck in a crash loop, bail out
+            if self._crash_count >= self._MAX_CONSECUTIVE_CRASHES:
+                log.critical(
+                    "Too many consecutive crashes (%d), exiting",
+                    self._crash_count,
+                )
+                super().quit()
+                return False
+
+            # Show a non-fatal dialog so the user knows something went wrong
+            _show_crash_dialog(exc_type, exc_value, exc_tb)
+
+            return False
+
+    def reset_crash_count(self):
+        """Reset after successful event processing (called periodically)."""
+        self._crash_count = 0
+
+
+def _show_crash_dialog(exc_type, exc_value, exc_tb):
+    """Show a non-blocking error dialog after a caught crash.
+
+    The dialog informs the user that an error occurred but the
+    application is still running.  They can open the debug console
+    (F12) for the full traceback.
+    """
+    try:
+        tb_lines = traceback.format_exception(exc_type, exc_value, exc_tb)
+        # Show only the last few lines to keep the dialog readable
+        short_tb = "".join(tb_lines[-4:]) if len(tb_lines) > 4 else "".join(tb_lines)
+
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("DataBuilder — Error Caught")
+        msg.setText(
+            "An error occurred but the application is still running.\n"
+            "You can continue working or save your progress."
+        )
+        msg.setDetailedText(short_tb)
+        msg.setInformativeText("Press F12 to open the Debug Console for the full traceback.")
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Close
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+        msg.button(QMessageBox.StandardButton.Ok).setText("Continue")
+        msg.button(QMessageBox.StandardButton.Close).setText("Quit")
+
+        result = msg.exec()
+        if result == QMessageBox.StandardButton.Close:
+            QApplication.quit()
+    except Exception:
+        # If even the dialog crashes, just continue silently
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # GLOBAL EXCEPTION HOOKS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -620,18 +719,25 @@ def install_exception_hooks(console: DebugConsole):
     Catches:
     1. Uncaught exceptions in the main thread (sys.excepthook)
     2. Uncaught exceptions in background threads (threading.excepthook)
-    3. Unhandled exceptions in Qt slots (QApplication message handler)
+
+    The main-thread hook swallows exceptions to prevent the application
+    from terminating — the error is logged and the debug console is
+    shown automatically.  Background thread exceptions are logged but
+    allowed to terminate their thread normally.
     """
     global _console_instance
     _console_instance = console
 
-    _original_excepthook = sys.excepthook
-
     def _main_thread_hook(exc_type, exc_value, exc_tb):
-        """Catch uncaught exceptions in the main thread."""
+        """Catch uncaught exceptions in the main thread without crashing."""
         console.log_exception(exc_type, exc_value, exc_tb, "Uncaught (main thread)")
-        # Still call the original hook so it prints to stderr
-        _original_excepthook(exc_type, exc_value, exc_tb)
+        # Print to stderr as fallback
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+        # Show console so user sees what happened
+        if console.isHidden():
+            console.show()
+            console.raise_()
+        # Do NOT re-raise — swallow the exception to keep the app alive
 
     sys.excepthook = _main_thread_hook
 
