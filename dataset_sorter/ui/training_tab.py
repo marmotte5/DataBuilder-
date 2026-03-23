@@ -937,7 +937,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _collect_rlhf_now(self):
         """Manually trigger RLHF preference collection."""
         if self._training_worker:
-            round_idx = self._training_worker.config.rlhf_dpo_rounds
+            # Read rlhf_dpo_rounds under the config lock to avoid a data
+            # race with the training worker thread which increments it.
+            with self._training_worker._config_lock:
+                round_idx = self._training_worker.config.rlhf_dpo_rounds
             self._training_worker.generate_rlhf_candidates(round_idx)
 
     def _on_rlhf_candidates(self, candidates: list, round_idx: int):
