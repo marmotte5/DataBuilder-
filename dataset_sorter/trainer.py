@@ -2269,9 +2269,13 @@ class Trainer:
             if adapter_config.exists() and self.backend.unet is not None:
                 # Validate adapter compatibility with current model
                 self._check_lora_compatibility(adapter_config)
+                # Unwrap any non-PEFT wrapper (MeBPWrapper, etc.)
+                _unet = self.backend.unet
+                while hasattr(_unet, "module") and not isinstance(_unet, PeftModel):
+                    _unet = _unet.module
                 try:
-                    if isinstance(self.backend.unet, PeftModel):
-                        self.backend.unet.load_adapter(str(checkpoint_dir), "default")
+                    if isinstance(_unet, PeftModel):
+                        _unet.load_adapter(str(checkpoint_dir), "default")
                         log.info("Restored LoRA weights from checkpoint")
                     else:
                         from peft import set_peft_model_state_dict
@@ -2279,7 +2283,7 @@ class Trainer:
                         lora_path = checkpoint_dir / "adapter_model.safetensors"
                         if lora_path.exists():
                             lora_state = load_file(str(lora_path))
-                            set_peft_model_state_dict(self.backend.unet, lora_state)
+                            set_peft_model_state_dict(_unet, lora_state)
                             log.info("Restored LoRA weights from checkpoint")
                         else:
                             log.warning(

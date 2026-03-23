@@ -130,8 +130,16 @@ class TrainBackendBase(ABC):
         return None
 
     def save_lora(self, save_dir: Path):
-        """Save LoRA adapter weights."""
-        self.unet.save_pretrained(str(save_dir))
+        """Save LoRA adapter weights.
+
+        Handles wrapped models (MeBPWrapper, etc.) by unwrapping to find
+        the underlying PeftModel before calling save_pretrained().
+        """
+        model = self.unet
+        # Unwrap any non-PEFT wrapper (MeBPWrapper stores model in .module)
+        while hasattr(model, "module") and not hasattr(model, "save_pretrained"):
+            model = model.module
+        model.save_pretrained(str(save_dir))
         log.info(f"Saved {self.model_name} LoRA to {save_dir}")
 
     # ── Shared loss functions ──────────────────────────────────────────
