@@ -408,6 +408,10 @@ class CachedTrainDataset(Dataset):
                     else:
                         raise
 
+                # Free GPU input before extracting results — reduces peak VRAM
+                # by ensuring the batch tensor is freed before the next allocation.
+                del batch_tensor
+
                 for bi, (idx, _) in enumerate(batch_items):
                     latent = encoded[bi].cpu()
                     # Pin memory for faster async CPU→GPU transfers (15-25% speedup)
@@ -432,6 +436,9 @@ class CachedTrainDataset(Dataset):
                     encoded_count += 1
                     if progress_fn:
                         progress_fn(encoded_count, len(self))
+
+                # Free GPU-side encoded latents after all items extracted to CPU
+                del encoded
 
         # Flush pending disk saves in parallel
         if pending_saves:

@@ -637,8 +637,13 @@ def batched_vae_encode(
             else:
                 encoded = encoded * vae.config.scaling_factor
 
+        # Free GPU input before extracting — reduces peak VRAM
+        del batch_tensor
+
         for j in range(encoded.shape[0]):
             latents.append(encoded[j:j+1].cpu())
+
+        del encoded
 
     return latents
 
