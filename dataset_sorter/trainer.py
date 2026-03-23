@@ -23,6 +23,7 @@ import json
 import logging
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1020,6 +1021,20 @@ class Trainer:
                 break
 
             self.state.epoch = epoch
+            _epoch_t0 = time.perf_counter()
+            _epoch_loss_sum = 0.0
+            _epoch_loss_count = 0
+            _epoch_nan_count = 0
+
+            try:
+                from dataset_sorter.ui.debug_console import log_worker_event
+                log_worker_event(
+                    "Trainer",
+                    f"epoch {epoch + 1}/{config.epochs} started",
+                    f"step={self.state.global_step}",
+                )
+            except Exception:
+                pass
 
             # Flush any leftover gradients from incomplete accumulation at
             # the end of the previous epoch (when num_batches % grad_accum != 0).
@@ -1111,11 +1126,21 @@ class Trainer:
                 # bad gradients were added. Clearing would destroy valid
                 # gradients accumulated from earlier steps in this window.
                 if torch.isnan(loss) or torch.isinf(loss):
+                    _epoch_nan_count += 1
                     log.warning(
                         f"NaN/Inf loss at step {self.state.global_step + 1} "
                         f"(micro-batch {_accum_count}/{grad_accum_steps}), "
                         f"skipping backward pass"
                     )
+                    try:
+                        from dataset_sorter.ui.debug_console import log_worker_event
+                        log_worker_event(
+                            "Trainer", "NaN/Inf loss detected",
+                            f"step={self.state.global_step + 1}, "
+                            f"epoch_nan_count={_epoch_nan_count}",
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 # ── Backward (with GradScaler for fp16) ──
@@ -1212,6 +1237,10 @@ class Trainer:
                     self.state.lr = self.scheduler.get_last_lr()[0]
                     running_loss = 0.0
                     _valid_microbatches = 0
+
+                    # Track per-epoch loss stats for debug console
+                    _epoch_loss_sum += self.state.loss
+                    _epoch_loss_count += 1
 
                     # ── TensorBoard logging ──
                     if self._tb_logger is not None and self._tb_logger.available:
@@ -1333,6 +1362,24 @@ class Trainer:
                     # Max steps check
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
                         break
+
+            # Log epoch summary to debug console
+            _epoch_elapsed = time.perf_counter() - _epoch_t0
+            _epoch_avg_loss = (_epoch_loss_sum / _epoch_loss_count) if _epoch_loss_count > 0 else 0.0
+            try:
+                from dataset_sorter.ui.debug_console import log_worker_event, log_vram_state
+                log_worker_event(
+                    "Trainer",
+                    f"epoch {epoch + 1}/{config.epochs} finished",
+                    f"{_epoch_elapsed:.1f}s, "
+                    f"steps={_epoch_loss_count}, "
+                    f"avg_loss={_epoch_avg_loss:.4f}, "
+                    f"lr={self.state.lr:.2e}, "
+                    f"nan_count={_epoch_nan_count}",
+                )
+                log_vram_state(f"epoch {epoch + 1} end")
+            except Exception:
+                pass
 
             # Epoch checkpoint
             if config.save_every_n_epochs > 0 and (epoch + 1) % config.save_every_n_epochs == 0:
@@ -1798,6 +1845,7 @@ class Trainer:
 
     def _save_checkpoint(self, name: str):
         """Save checkpoint to the checkpoints subfolder."""
+        _ckpt_t0 = time.perf_counter()
         self.state.phase = "saving"
         save_dir = self.output_dir / "checkpoints" / name
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -1860,6 +1908,21 @@ class Trainer:
             )
 
         self._cleanup_old_checkpoints()
+
+        # Log checkpoint save to debug console
+        _ckpt_elapsed = time.perf_counter() - _ckpt_t0
+        try:
+            from dataset_sorter.ui.debug_console import log_worker_event
+            _size_mb = sum(
+                f.stat().st_size for f in save_dir.rglob("*") if f.is_file()
+            ) / (1024 * 1024)
+            log_worker_event(
+                "Trainer", f"checkpoint saved: {name}",
+                f"{_ckpt_elapsed:.1f}s, {_size_mb:.0f}MB, step={self.state.global_step}",
+            )
+        except Exception:
+            pass
+
         self.state.phase = "training"
 
     def _cleanup_old_checkpoints(self):

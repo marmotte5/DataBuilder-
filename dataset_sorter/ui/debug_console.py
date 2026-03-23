@@ -195,6 +195,7 @@ class DebugConsole(QWidget):
 
         self._min_level = logging.DEBUG
         self._auto_scroll = True
+        self._category_filter = "ALL"  # Filter by tag category
         self._log_file_path: Optional[Path] = None
         self._file_handler: Optional[logging.FileHandler] = None
 
@@ -224,6 +225,17 @@ class DebugConsole(QWidget):
         self._level_combo.setCurrentText("DEBUG")
         self._level_combo.setFixedWidth(100)
         toolbar.addWidget(self._level_combo)
+
+        # Category filter
+        toolbar.addWidget(QLabel("Show:"))
+        self._category_combo = QComboBox()
+        self._category_combo.addItems([
+            "ALL", "VRAM", "WORKER", "PERF", "TRAINING",
+            "UI", "SIGNAL", "ERROR",
+        ])
+        self._category_combo.setCurrentText("ALL")
+        self._category_combo.setFixedWidth(100)
+        toolbar.addWidget(self._category_combo)
 
         # Auto-scroll
         self._auto_scroll_cb = QCheckBox("Auto-scroll")
@@ -334,6 +346,7 @@ class DebugConsole(QWidget):
         self._level_combo.currentTextChanged.connect(self._on_level_changed)
         self._auto_scroll_cb.toggled.connect(self._on_auto_scroll_changed)
         self._on_top_cb.toggled.connect(self._on_stay_on_top_changed)
+        self._category_combo.currentTextChanged.connect(self._on_category_changed)
         self._search_input.returnPressed.connect(self._search_next)
         self._btn_search_next.clicked.connect(self._search_next)
         self._btn_search_prev.clicked.connect(self._search_prev)
@@ -442,6 +455,22 @@ class DebugConsole(QWidget):
         if level_num < self._min_level:
             return
 
+        # Filter by category tag
+        if self._category_filter != "ALL":
+            # Map category filter to the tags that should pass
+            _CATEGORY_MAP = {
+                "VRAM": ("VRAM",),
+                "WORKER": ("WORKER",),
+                "PERF": ("PERF",),
+                "TRAINING": ("WORKER", "PERF", "VRAM"),  # Training-related
+                "UI": ("UI",),
+                "SIGNAL": ("SIGNAL",),
+                "ERROR": ("ERROR", "CRITICAL", "EXCEPTION"),
+            }
+            allowed = _CATEGORY_MAP.get(self._category_filter, ())
+            if level not in allowed:
+                return
+
         color = _LEVEL_COLORS.get(level, _LEVEL_COLORS["INFO"])
 
         # For multi-line messages (tracebacks), color the whole block
@@ -462,6 +491,9 @@ class DebugConsole(QWidget):
     def _on_level_changed(self, level_text: str):
         self._min_level = getattr(logging, level_text, logging.DEBUG)
 
+    def _on_category_changed(self, category: str):
+        self._category_filter = category
+
     def _on_auto_scroll_changed(self, checked: bool):
         self._auto_scroll = checked
 
@@ -481,18 +513,53 @@ class DebugConsole(QWidget):
             clipboard.setText(self._text.toPlainText())
 
     def _save_as(self):
-        """Save log to a user-chosen file."""
-        path, _ = QFileDialog.getSaveFileName(
+        """Save log to a user-chosen file (plaintext or JSON)."""
+        path, chosen_filter = QFileDialog.getSaveFileName(
             self, "Save Debug Log", "databuilder_debug.log",
-            "Log files (*.log *.txt);;All files (*)",
+            "Log files (*.log *.txt);;JSON (*.json);;All files (*)",
         )
-        if path:
-            try:
+        if not path:
+            return
+        try:
+            if path.endswith(".json") or "JSON" in chosen_filter:
+                self._save_as_json(path)
+            else:
                 Path(path).write_text(
                     self._text.toPlainText(), encoding="utf-8"
                 )
-            except OSError as e:
-                log.warning("Failed to save log: %s", e)
+        except OSError as e:
+            log.warning("Failed to save log: %s", e)
+
+    def _save_as_json(self, path: str):
+        """Export log as structured JSON for machine parsing."""
+        import json
+        lines = self._text.toPlainText().splitlines()
+        entries = []
+        for line in lines:
+            if not line.strip():
+                continue
+            # Parse tag from [TAG] prefix if present
+            tag = "INFO"
+            message = line
+            if line.startswith("[") and "]" in line:
+                bracket_end = line.index("]")
+                tag = line[1:bracket_end]
+                message = line[bracket_end + 1:].strip()
+            entries.append({
+                "tag": tag,
+                "message": message,
+                "raw": line,
+            })
+        report = {
+            "session_time": datetime.datetime.now().isoformat(),
+            "total_lines": len(entries),
+            "error_count": self._error_count,
+            "warning_count": self._warning_count,
+            "entries": entries,
+        }
+        Path(path).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def _clear(self):
         self._text.clear()
@@ -734,75 +801,58 @@ def hook_training_worker(worker, console: "DebugConsole"):
     name = "TrainingWorker"
     log_worker_event(name, "created")
 
-    worker.phase_changed.connect(
-        lambda phase: (
-            log_worker_event(name, f"phase → {phase}"),
-            log_vram_state(f"training phase: {phase}"),
-        )
-    )
-    worker.error.connect(
-        lambda msg: log_worker_event(name, "ERROR", msg[:200])
-    )
-    worker.finished_training.connect(
-        lambda ok, msg: (
-            log_worker_event(name, "finished", f"success={ok}, {msg}"),
-            log_vram_state("training finished"),
-        )
-    )
-    worker.paused_changed.connect(
-        lambda paused: log_worker_event(
-            name, "paused" if paused else "resumed"
-        )
-    )
-    worker.sample_generated.connect(
-        lambda imgs, step: log_worker_event(
+    def _on_phase(phase):
+        log_worker_event(name, f"phase → {phase}")
+        log_vram_state(f"training phase: {phase}")
+
+    def _on_finished(ok, msg):
+        log_worker_event(name, "finished", f"success={ok}, {msg}")
+        log_vram_state("training finished")
+
+    def _on_sample(imgs, step):
+        log_worker_event(
             name, f"sample generated at step {step}", f"{len(imgs)} image(s)"
         )
+
+    def _on_rlhf(cands, idx):
+        log_worker_event(name, "RLHF candidates ready", f"round={idx}, pairs={len(cands)}")
+
+    worker.phase_changed.connect(_on_phase)
+    worker.error.connect(lambda msg: log_worker_event(name, "ERROR", msg[:200]))
+    worker.finished_training.connect(_on_finished)
+    worker.paused_changed.connect(
+        lambda paused: log_worker_event(name, "paused" if paused else "resumed")
     )
+    worker.sample_generated.connect(_on_sample)
     worker.smart_resume_report.connect(
         lambda _: log_worker_event(name, "smart resume analysis emitted")
     )
     worker.pipeline_report.connect(
         lambda _: log_worker_event(name, "pipeline integration report emitted")
     )
-    worker.rlhf_candidates_ready.connect(
-        lambda cands, idx: log_worker_event(
-            name, f"RLHF candidates ready",
-            f"round={idx}, pairs={len(cands)}",
-        )
-    )
+    worker.rlhf_candidates_ready.connect(_on_rlhf)
 
     # Log worker thread start/finish via QThread base signals
-    worker.started.connect(
-        lambda: log_worker_event(name, "thread started")
-    )
-    worker.finished.connect(
-        lambda: log_worker_event(name, "thread finished")
-    )
+    worker.started.connect(lambda: log_worker_event(name, "thread started"))
+    worker.finished.connect(lambda: log_worker_event(name, "thread finished"))
 
 
 def hook_generate_worker(worker, console: "DebugConsole"):
     """Connect debug logging hooks to a GenerateWorker's signals."""
     name = "GenerateWorker"
+    log_worker_event(name, "created")
 
-    worker.model_loaded.connect(
-        lambda model_name, is_xl: (
-            log_worker_event(
-                name, f"model loaded: {model_name}",
-                f"is_sdxl_or_flux={is_xl}",
-            ),
-            log_vram_state(f"model loaded: {model_name}"),
-        )
-    )
-    worker.error.connect(
-        lambda msg: log_worker_event(name, "ERROR", msg[:200])
-    )
-    worker.finished_generating.connect(
-        lambda ok, msg: (
-            log_worker_event(name, "finished", f"success={ok}, {msg}"),
-            log_vram_state("generation finished"),
-        )
-    )
+    def _on_model_loaded(msg):
+        log_worker_event(name, f"model loaded: {msg}")
+        log_vram_state(f"model loaded")
+
+    def _on_finished(ok, msg):
+        log_worker_event(name, "finished", f"success={ok}, {msg}")
+        log_vram_state("generation finished")
+
+    worker.model_loaded.connect(_on_model_loaded)
+    worker.error.connect(lambda msg: log_worker_event(name, "ERROR", msg[:200]))
+    worker.finished_generating.connect(_on_finished)
 
 
 def hook_merge_worker(worker, console: "DebugConsole"):
@@ -810,13 +860,11 @@ def hook_merge_worker(worker, console: "DebugConsole"):
     name = "MergeWorker"
     log_worker_event(name, "created")
 
-    worker.progress.connect(
-        lambda cur, total, msg: (
+    def _on_progress(cur, total, msg):
+        if cur == 0 or cur == total:
             log_worker_event(name, f"progress {cur}/{total}", msg)
-            if cur == 0 or cur == total
-            else None
-        )
-    )
+
+    worker.progress.connect(_on_progress)
     worker.finished.connect(
         lambda ok, msg: log_worker_event(name, "finished", f"success={ok}, {msg}")
     )
