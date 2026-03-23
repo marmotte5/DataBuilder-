@@ -31,23 +31,23 @@ class VRAMMonitor(QThread):
 
     def __init__(self, interval_ms: int = 2000, parent=None):
         super().__init__(parent)
-        self._running = True
+        self._stop_event = threading.Event()
         self._interval_ms = interval_ms
 
     def run(self):
-        while self._running:
+        while not self._stop_event.is_set():
             snap = get_vram_snapshot()
-            # Double-check _running after the (potentially slow) snapshot call
+            # Re-check after the (potentially slow) snapshot call
             # to avoid emitting signals after the parent has been destroyed.
-            if snap.total_bytes > 0 and self._running:
+            if snap.total_bytes > 0 and not self._stop_event.is_set():
                 self.vram_update.emit(
                     snap.allocated_gb, snap.reserved_gb,
                     snap.total_gb, snap.peak_allocated_gb,
                 )
-            time.sleep(self._interval_ms / 1000.0)
+            self._stop_event.wait(self._interval_ms / 1000.0)
 
     def stop(self):
-        self._running = False
+        self._stop_event.set()
 
 
 class TrainingWorker(QThread):

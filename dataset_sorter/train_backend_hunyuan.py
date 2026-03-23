@@ -84,7 +84,7 @@ class HunyuanDiTBackend(TrainBackendBase):
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             clip_hidden = out_1.hidden_states[-2]
-            pooled = out_1.pooler_output
+            pooled = out_1.text_embeds
 
         # mT5
         tok_out_2 = self.tokenizer_2(
@@ -267,6 +267,9 @@ class HunyuanDiTBackend(TrainBackendBase):
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
+
+        # Store per-sample loss for adaptive tag weighting (before .mean())
+        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 

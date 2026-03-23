@@ -746,26 +746,31 @@ class LibraryTab(QWidget):
         self._btn_copy_path = QPushButton("Copy Path")
         self._btn_copy_path.setFixedHeight(30)
         self._btn_copy_path.setStyleSheet(nav_button_style())
+        self._btn_copy_path.setToolTip("Copy full file path to clipboard")
         self._btn_copy_path.clicked.connect(self._copy_path)
 
         self._btn_open_folder = QPushButton("Open Folder")
         self._btn_open_folder.setFixedHeight(30)
         self._btn_open_folder.setStyleSheet(nav_button_style())
+        self._btn_open_folder.setToolTip("Open containing folder in file manager")
         self._btn_open_folder.clicked.connect(self._open_folder)
 
         self._btn_use_generate = QPushButton("Use in Generate")
         self._btn_use_generate.setFixedHeight(30)
         self._btn_use_generate.setStyleSheet(accent_button_style())
+        self._btn_use_generate.setToolTip("Send this model/LoRA to the Generate tab")
         self._btn_use_generate.clicked.connect(self._emit_use_generate)
 
         self._btn_use_train = QPushButton("Use in Train")
         self._btn_use_train.setFixedHeight(30)
         self._btn_use_train.setStyleSheet(accent_button_style())
+        self._btn_use_train.setToolTip("Send this model to the Training tab as base model")
         self._btn_use_train.clicked.connect(self._emit_use_train)
 
         self._btn_delete = QPushButton("Delete")
         self._btn_delete.setFixedHeight(30)
         self._btn_delete.setStyleSheet(danger_button_style())
+        self._btn_delete.setToolTip("Permanently delete this file from disk")
         self._btn_delete.clicked.connect(self._delete_selected)
 
         for btn in (self._btn_copy_path, self._btn_open_folder,

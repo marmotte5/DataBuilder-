@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from dataset_sorter.constants import (
-    MODEL_TYPE_LABELS, VRAM_TIERS,
+    MODEL_TYPE_LABELS, MODEL_TYPE_KEYS, VRAM_TIERS,
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
     ATTENTION_MODES, SAMPLE_SAMPLERS, SAVE_PRECISIONS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES,
@@ -122,17 +122,41 @@ class TrainingTabBuildersMixin:
         g2.setLayout(g2l)
         layout.addWidget(g2)
 
+        # Dynamic network advice
+        self.network_advice_label = QLabel("")
+        self.network_advice_label.setWordWrap(True)
+        self.network_advice_label.setStyleSheet(
+            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
+            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+        )
+        layout.addWidget(self.network_advice_label)
+
+        # Wire signals for dynamic network advice
+        self.train_network_combo.currentIndexChanged.connect(self._update_network_advice)
+        self.train_model_combo.currentIndexChanged.connect(self._update_network_advice)
+        self.rank_spin.valueChanged.connect(self._update_network_advice)
+        self.dora_check.stateChanged.connect(self._update_network_advice)
+
         # EMA
         g3 = self._group("EMA")
         g3l = QGridLayout()
         self.ema_check = QCheckBox("Enable EMA")
         self.ema_check.setChecked(True)
-        self.ema_check.setToolTip("Exponential Moving Average of weights. Smooths training, often better final quality.")
+        self.ema_check.setToolTip(
+            "Exponential Moving Average: keeps a smoothed copy of model weights\n"
+            "updated each step. Reduces noise from mini-batch variance and\n"
+            "typically produces better generalization than raw trained weights.\n"
+            "Most beneficial for full finetune and large LoRA datasets (50+ images)."
+        )
         g3l.addWidget(self.ema_check, 0, 0)
 
         self.ema_cpu_check = QCheckBox("CPU Offload (saves ~2-4 GB VRAM)")
         self.ema_cpu_check.setChecked(True)
-        self.ema_cpu_check.setToolTip("Store EMA weights in system RAM instead of GPU VRAM. Recommended for <24 GB GPUs.")
+        self.ema_cpu_check.setToolTip(
+            "Store EMA shadow weights in system RAM instead of GPU VRAM.\n"
+            "Essential for 24 GB GPUs, recommended for 48 GB with large models.\n"
+            "Requires 16+ GB system RAM. Speed impact is minimal (<5%)."
+        )
         g3l.addWidget(self.ema_cpu_check, 0, 1)
 
         g3l.addWidget(QLabel("Decay"), 1, 0)
@@ -141,8 +165,29 @@ class TrainingTabBuildersMixin:
         self.ema_decay_spin.setDecimals(5)
         self.ema_decay_spin.setValue(0.9999)
         self.ema_decay_spin.setSingleStep(0.0001)
-        self.ema_decay_spin.setToolTip("EMA decay rate. Higher = smoother but slower to adapt. 0.9999 is standard.")
+        self.ema_decay_spin.setToolTip(
+            "EMA decay rate — controls how fast the average adapts.\n"
+            "0.9999: standard, good for most runs (1000+ steps)\n"
+            "0.999: faster adaptation, better for small datasets (<50 images)\n"
+            "0.99999: very smooth, only for long runs (5000+ steps)\n"
+            "Higher = more smoothing but slower to reflect recent changes."
+        )
         g3l.addWidget(self.ema_decay_spin, 1, 1)
+
+        self.ema_advice_label = QLabel("")
+        self.ema_advice_label.setWordWrap(True)
+        self.ema_advice_label.setStyleSheet(
+            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
+            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+        )
+        g3l.addWidget(self.ema_advice_label, 2, 0, 1, 2)
+
+        # Wire signals for dynamic advice updates
+        self.ema_check.stateChanged.connect(self._update_ema_advice)
+        self.ema_cpu_check.stateChanged.connect(self._update_ema_advice)
+        self.ema_decay_spin.valueChanged.connect(self._update_ema_advice)
+        self.train_model_combo.currentIndexChanged.connect(self._update_ema_advice)
+        self.train_vram_combo.currentIndexChanged.connect(self._update_ema_advice)
 
         g3.setLayout(g3l)
         layout.addWidget(g3)
@@ -179,7 +224,425 @@ class TrainingTabBuildersMixin:
 
         layout.addStretch()
         scroll.setWidget(w)
+        self._update_ema_advice()
+        self._update_network_advice()
         return scroll
+
+    def _update_ema_advice(self):
+        """Update the EMA advice label based on current model type, VRAM, and settings."""
+        idx = self.train_model_combo.currentIndex()
+        model_key = MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
+        is_lora = model_key.endswith("_lora")
+        base_model = model_key.rsplit("_", 1)[0]
+
+        vidx = self.train_vram_combo.currentIndex()
+        vram_gb = VRAM_TIERS[vidx] if 0 <= vidx < len(VRAM_TIERS) else 24
+
+        ema_on = self.ema_check.isChecked()
+        cpu_offload = self.ema_cpu_check.isChecked()
+        decay = self.ema_decay_spin.value()
+
+        large_models = {"flux", "flux2", "zimage", "hidream", "chroma"}
+        medium_models = {"sdxl", "pony", "sd3", "sd35", "hunyuan"}
+
+        if not ema_on:
+            # Give context-specific recommendation on whether to enable
+            if is_lora:
+                if vram_gb <= 12:
+                    advice = (
+                        "EMA is off. At this VRAM level, keeping EMA off saves ~2-3 GB. "
+                        "Enable only with CPU offload if you have 16+ GB system RAM."
+                    )
+                else:
+                    advice = (
+                        "EMA is off. For LoRA, EMA is most beneficial with 50+ images "
+                        "and 2000+ training steps. For short runs (<1000 steps), the "
+                        "smoothing effect has little time to accumulate — skip it."
+                    )
+            elif base_model in large_models:
+                if vram_gb < 48:
+                    advice = (
+                        f"EMA is off. For {base_model.upper()} full finetune at {vram_gb} GB, "
+                        "enabling EMA with CPU offload is strongly recommended. "
+                        "Large transformers benefit significantly from weight averaging."
+                    )
+                else:
+                    advice = (
+                        f"EMA is off. For {base_model.upper()} full finetune, EMA significantly "
+                        "improves generalization — almost always recommended. "
+                        "Use decay 0.9999 for standard runs, 0.99999 for very long runs (5k+ steps)."
+                    )
+            elif base_model in medium_models:
+                advice = (
+                    "EMA is off. For full finetune, EMA helps prevent overfitting "
+                    "and produces smoother final weights. Recommended with 200+ images "
+                    "and 2000+ total steps."
+                )
+            else:
+                advice = (
+                    "EMA is off. For training runs over 2000 steps, EMA typically "
+                    "produces better generalization. For short runs (<1000 steps), "
+                    "the benefit is minimal and you can skip it."
+                )
+        else:
+            # EMA is enabled — give relevant advice based on context
+            parts = []
+
+            # VRAM / CPU offload advice
+            if base_model in large_models and not cpu_offload:
+                if vram_gb <= 24:
+                    parts.append(
+                        f"WARNING: {base_model.upper()} + EMA on GPU needs ~4 GB extra VRAM. "
+                        "Enable CPU offload to avoid OOM."
+                    )
+                elif vram_gb <= 48:
+                    parts.append(
+                        "Consider CPU offload — EMA adds ~2-4 GB VRAM overhead."
+                    )
+            elif base_model in medium_models and not cpu_offload and vram_gb <= 16:
+                parts.append(
+                    "Enable CPU offload at this VRAM level to keep EMA without OOM risk."
+                )
+
+            if cpu_offload:
+                parts.append(
+                    "CPU offload active — EMA weights stored in system RAM (needs 16+ GB RAM, <5% speed impact)."
+                )
+
+            # Decay rate advice
+            if is_lora:
+                if decay >= 0.9999:
+                    parts.append(
+                        f"Decay {decay:.5f} is standard. For small datasets (<50 images), "
+                        "try 0.999 for faster adaptation."
+                    )
+                elif decay <= 0.99:
+                    parts.append(
+                        f"Decay {decay:.5f} is aggressive — EMA will track training closely. "
+                        "Increase to 0.9999 for more smoothing."
+                    )
+            else:
+                if decay >= 0.99999:
+                    parts.append(
+                        f"Decay {decay:.5f} is very high — EMA will update slowly. "
+                        "Standard is 0.9999; use higher only for very long runs (5000+ steps)."
+                    )
+                elif decay <= 0.999:
+                    parts.append(
+                        f"Decay {decay:.5f} is low for full finetune — EMA may not smooth enough. "
+                        "Try 0.9999 for better generalization."
+                    )
+                else:
+                    parts.append(f"Decay {decay:.5f} — good for most training scenarios.")
+
+            # Model-specific guidance
+            if base_model in ("flux", "flux2") and is_lora:
+                parts.append(
+                    "Flux LoRA converges fast — compare EMA vs non-EMA outputs at inference."
+                )
+            elif base_model == "zimage" and not is_lora:
+                parts.append(
+                    "Z-Image full finetune: EMA is strongly recommended to prevent "
+                    "quality degradation over long training."
+                )
+
+            advice = " ".join(parts) if parts else (
+                "EMA enabled — maintains a smoothed copy of weights for better generalization."
+            )
+
+        self.ema_advice_label.setText(advice)
+
+    def _update_network_advice(self):
+        """Update network/LoRA advice based on model type, rank, and network variant."""
+        idx = self.train_model_combo.currentIndex()
+        model_key = MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
+        is_lora = model_key.endswith("_lora")
+        base_model = model_key.rsplit("_", 1)[0]
+
+        network_type = self.train_network_combo.currentData() or "lora"
+        rank = self.rank_spin.value()
+        use_dora = self.dora_check.isChecked()
+
+        if not is_lora:
+            self.network_advice_label.setText(
+                "Full finetune mode — network settings above are ignored."
+            )
+            return
+
+        parts = []
+
+        # Rank guidance per model (SOTA values from community research)
+        flux_models = {"flux", "flux2"}
+        if base_model in flux_models:
+            if rank > 64:
+                parts.append(
+                    f"Rank {rank} is high for Flux LoRA. Community sweet spot: "
+                    "32 for characters, 64 for complex photorealistic subjects. "
+                    "Higher ranks rarely improve quality."
+                )
+            elif rank < 16:
+                parts.append(
+                    f"Rank {rank} is low for Flux. Recommended: 16 for simple "
+                    "concepts, 32 for characters, 64 for photorealistic."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for Flux LoRA.")
+        elif base_model in ("sdxl", "pony"):
+            if rank < 32:
+                parts.append(
+                    f"Rank {rank} may be low for SDXL/Pony. Recommended: "
+                    "64 for characters, 128 for styles/complex subjects."
+                )
+            elif rank > 128:
+                parts.append(
+                    f"Rank {rank} is very high. Enable rsLoRA for stability. "
+                    "Lower LR proportionally. Alpha should be rank/2."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for SDXL/Pony.")
+        elif base_model == "sd15":
+            if rank > 64:
+                parts.append(
+                    f"Rank {rank} is high for SD 1.5. Recommended: "
+                    "32 for characters, 64 for complex styles."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for SD 1.5.")
+        elif base_model == "zimage":
+            if rank > 64:
+                parts.append(
+                    f"Rank {rank} is high for Z-Image. Start at 8-16 for "
+                    "characters, 64 only for photorealistic skin texture."
+                )
+            elif rank < 8:
+                parts.append(f"Rank {rank} is very low for Z-Image. Minimum 8 recommended.")
+            else:
+                parts.append(f"Rank {rank} — suitable for Z-Image.")
+        elif base_model in ("sd3", "sd35"):
+            if rank < 64:
+                parts.append(
+                    f"Rank {rank} may be low for SD3. Recommended: 64-128, "
+                    "up to 768 if VRAM allows."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for SD3/3.5.")
+        elif base_model == "chroma":
+            if rank > 32:
+                parts.append(
+                    f"Rank {rank} may be higher than needed for Chroma. "
+                    "Start at 16, increase to 32 for large-capacity styles."
+                )
+            else:
+                parts.append(f"Rank {rank} — good for Chroma.")
+
+        # DoRA advice (research: strongest at low ranks, narrows at high)
+        if use_dora:
+            if rank <= 8:
+                parts.append(
+                    "DoRA at low rank: strongest advantage over LoRA here. "
+                    "DoRA at rank 8 often matches LoRA at rank 16."
+                )
+            elif rank >= 64:
+                parts.append(
+                    "DoRA at high ranks: ~30% slower, ~15% more VRAM. "
+                    "Quality gap vs LoRA narrows at rank 64+. "
+                    "Consider standard LoRA for faster iteration."
+                )
+            else:
+                parts.append(
+                    "DoRA: better generalization than LoRA for complex subjects. "
+                    "~30% slower but often needs fewer epochs to converge."
+                )
+        elif network_type == "loha":
+            parts.append(
+                f"LoHa: effective rank = dim^2 = {rank**2}. "
+                "Good quality/size tradeoff for style LoRAs."
+            )
+        elif network_type == "lokr":
+            parts.append(
+                "LoKr: very compact adapter. Best for simple styles, "
+                "less effective for complex characters."
+            )
+
+        # rsLoRA and LoRA+ tips
+        if rank >= 64 and not self.rslora_check.isChecked():
+            parts.append(
+                f"Tip: enable rsLoRA for rank {rank} — stabilizes training "
+                "at high ranks."
+            )
+        if not use_dora and network_type == "lora":
+            parts.append(
+                "Tip: LoRA+ (16x LR ratio for lora_B) converges ~30% faster. "
+                "Set in optimizer extra args if supported."
+            )
+
+        self.network_advice_label.setText(" ".join(parts))
+
+    def _update_optimizer_advice(self):
+        """Update optimizer advice based on current optimizer, model type, scheduler, and LR."""
+        idx = self.train_model_combo.currentIndex()
+        model_key = MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
+        is_lora = model_key.endswith("_lora")
+        base_model = model_key.rsplit("_", 1)[0]
+
+        optimizer = self.train_optimizer_combo.currentData() or "AdamW"
+        scheduler = self.scheduler_combo.currentData() or "cosine"
+        lr = self.lr_spin.value()
+
+        vidx = self.train_vram_combo.currentIndex()
+        vram_gb = VRAM_TIERS[vidx] if 0 <= vidx < len(VRAM_TIERS) else 24
+
+        parts = []
+
+        if optimizer == "Prodigy":
+            if abs(lr - 1.0) > 0.01:
+                parts.append(
+                    f"WARNING: Prodigy requires LR=1.0 (currently {lr:.6g}). "
+                    "It auto-adjusts the learning rate — other values interfere."
+                )
+            else:
+                parts.append("Prodigy: LR=1.0 is correct (auto-adjusting).")
+            if scheduler not in ("cosine", "constant"):
+                parts.append(
+                    f"Prodigy works best with cosine or constant scheduler "
+                    f"(current: {scheduler}). Avoid restarts with Prodigy."
+                )
+            elif scheduler == "cosine":
+                parts.append("Cosine scheduler — good pairing with Prodigy.")
+            parts.append(
+                "Prodigy needs ~20-30% more steps than AdamW. "
+                "d_coef stabilizes in ~200-300 steps."
+            )
+            if not is_lora:
+                parts.append(
+                    "Note: Prodigy is less proven for full finetune — "
+                    "AdamW or Adafactor are more reliable choices."
+                )
+        elif optimizer == "DAdaptAdam":
+            if abs(lr - 1.0) > 0.01:
+                parts.append(
+                    f"WARNING: D-Adapt Adam requires LR=1.0 (currently {lr:.6g})."
+                )
+            parts.append("D-Adapt Adam: self-adjusting LR. Use constant scheduler.")
+        elif optimizer == "AdamWScheduleFree":
+            if abs(lr - 1.0) > 0.01:
+                parts.append(
+                    f"WARNING: Schedule-Free AdamW requires LR=1.0 (currently {lr:.6g})."
+                )
+            parts.append(
+                "Schedule-Free: no external scheduler needed. Set scheduler to constant."
+            )
+        elif optimizer in ("AdamW", "AdamW8bit"):
+            if optimizer == "AdamW8bit":
+                parts.append(
+                    "AdamW8bit: 25-30% VRAM savings vs AdamW with identical quality."
+                )
+            # LR validation per model
+            if is_lora:
+                if base_model in ("flux", "flux2"):
+                    if lr < 1e-5:
+                        parts.append(
+                            f"LR {lr:.1e} may be too low for Flux LoRA. "
+                            "Community sweet spot: 1e-4 to 2e-3."
+                        )
+                    elif lr > 5e-3:
+                        parts.append(
+                            f"LR {lr:.1e} is high for Flux LoRA — risk of "
+                            "instability. Try 1e-4 to 2e-3."
+                        )
+                elif base_model in ("sdxl", "pony"):
+                    if lr < 5e-6:
+                        parts.append(
+                            f"LR {lr:.1e} may be low for SDXL/Pony LoRA. "
+                            "Typical range: 5e-5 to 2e-4."
+                        )
+                    elif lr > 5e-4:
+                        parts.append(
+                            f"LR {lr:.1e} is high for SDXL LoRA. "
+                            "Try 1e-4 as a starting point."
+                        )
+                elif base_model == "sd15":
+                    if lr > 5e-4:
+                        parts.append(
+                            f"LR {lr:.1e} is high for SD 1.5 LoRA. Try 1e-4 to 2e-4."
+                        )
+            else:
+                if lr > 5e-6:
+                    parts.append(
+                        f"LR {lr:.1e} may be high for full finetune. "
+                        "Typical range: 1e-7 to 5e-6."
+                    )
+            # Scheduler guidance
+            if base_model in ("sdxl", "pony") and is_lora:
+                if scheduler == "cosine_with_restarts":
+                    parts.append(
+                        "Cosine with restarts: proven for SDXL/Pony LoRA. "
+                        "Use 3-4 restarts for best convergence."
+                    )
+                elif scheduler == "cosine":
+                    parts.append(
+                        "Cosine scheduler works well. Consider cosine_with_restarts "
+                        "for SDXL/Pony — it speeds up convergence."
+                    )
+        elif optimizer == "Adafactor":
+            parts.append(
+                "Adafactor: very memory-efficient (~50% less than AdamW). "
+                "Use stochastic rounding with bf16 LoRA weights."
+            )
+            if base_model in ("sdxl", "pony", "zimage") and is_lora:
+                parts.append(
+                    "Adafactor + fused_backward_pass is the VRAM-optimal "
+                    "combo for SDXL/Pony/Z-Image LoRA on limited VRAM."
+                )
+            if lr < 1e-5 and is_lora:
+                parts.append(
+                    f"LR {lr:.1e} may be low for Adafactor LoRA. "
+                    "Adafactor typically uses 5x higher LR than AdamW."
+                )
+        elif optimizer == "CAME":
+            parts.append(
+                "CAME: Adafactor-like memory usage with AdamW-like quality. "
+                "Good middle ground for VRAM-constrained full finetune."
+            )
+        elif optimizer == "Lion":
+            parts.append(
+                "Lion: uses ~50% less memory than AdamW. LR should be "
+                "~3x lower than AdamW (auto-adjusted by recommender)."
+            )
+            if is_lora and lr > 1e-4:
+                parts.append(
+                    f"LR {lr:.1e} may be high for Lion LoRA — try 3e-5."
+                )
+        elif optimizer == "Marmotte":
+            parts.append(
+                "Marmotte: 10-20x less memory than AdamW via per-channel "
+                "adaptive rates. Our custom optimizer — ideal for VRAM-constrained training."
+            )
+        elif optimizer == "SOAP":
+            parts.append(
+                "SOAP: strong convergence on DiT models. "
+                "Use cosine scheduler, weight_decay=0.01."
+            )
+        elif optimizer == "Muon":
+            parts.append(
+                "Muon: experimental optimizer with high LR (0.02). "
+                "Use cosine scheduler. Best suited for DiT-based models."
+            )
+        elif optimizer == "SGD":
+            parts.append(
+                "WARNING: SGD is not recommended for diffusion model training. "
+                "Adaptive optimizers (AdamW, Prodigy, Adafactor) converge "
+                "significantly faster with much less tuning."
+            )
+
+        # VRAM-specific optimizer advice
+        if vram_gb <= 12 and optimizer in ("AdamW", "CAME"):
+            parts.append(
+                f"At {vram_gb} GB VRAM, consider AdamW8bit or Adafactor "
+                "for lower memory usage."
+            )
+
+        self.optimizer_advice_label.setText(" ".join(parts) if parts else "")
 
     def _build_optimizer_tab(self):
         """Build the Optimizer tab with optimizer selection, learning rate,
@@ -316,8 +779,25 @@ class TrainingTabBuildersMixin:
         g4.setLayout(g4l)
         layout.addWidget(g4)
 
+        # Dynamic optimizer advice
+        self.optimizer_advice_label = QLabel("")
+        self.optimizer_advice_label.setWordWrap(True)
+        self.optimizer_advice_label.setStyleSheet(
+            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
+            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+        )
+        layout.addWidget(self.optimizer_advice_label)
+
+        # Wire signals for dynamic optimizer advice
+        self.train_optimizer_combo.currentIndexChanged.connect(self._update_optimizer_advice)
+        self.train_model_combo.currentIndexChanged.connect(self._update_optimizer_advice)
+        self.train_vram_combo.currentIndexChanged.connect(self._update_optimizer_advice)
+        self.scheduler_combo.currentIndexChanged.connect(self._update_optimizer_advice)
+        self.lr_spin.valueChanged.connect(self._update_optimizer_advice)
+
         layout.addStretch()
         scroll.setWidget(w)
+        self._update_optimizer_advice()
         return scroll
 
     def _build_dataset_tab(self):

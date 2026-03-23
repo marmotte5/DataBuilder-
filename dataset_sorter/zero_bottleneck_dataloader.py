@@ -373,6 +373,29 @@ class PinnedRingBuffer:
                     # uninitialized values from leaking across batches.
                     buf[i].zero_()
 
+    def _reconstruct_te_tuple(self, buffer_idx: int, actual_batch_size: int) -> tuple:
+        """Reconstruct the TE output tuple preserving None gaps.
+
+        The _te_component_map maps original component indices to buffer
+        indices, skipping None components.  This method rebuilds the
+        full-length tuple with None in the correct positions so that
+        downstream code can index by original component number.
+        """
+        if not self._te_component_map:
+            # No gaps — buffers map 1:1 to components
+            return tuple(
+                buf[buffer_idx][:actual_batch_size].to(self.device, non_blocking=True)
+                for buf in self._te_buffers
+            )
+        # Determine full tuple length from the max component index
+        total = max(self._te_component_map.keys()) + 1
+        parts: list = [None] * total
+        for comp_idx, buf_idx in self._te_component_map.items():
+            parts[comp_idx] = self._te_buffers[buf_idx][buffer_idx][:actual_batch_size].to(
+                self.device, non_blocking=True,
+            )
+        return tuple(parts)
+
     def transfer_to_gpu(self, actual_batch_size: int, buffer_idx: int = -1) -> dict:
         """Async DMA transfer from pinned buffer to GPU.
 
@@ -392,28 +415,18 @@ class PinnedRingBuffer:
                     self.device, non_blocking=True,
                 )
                 if self._te_buffers:
-                    te_parts = []
-                    for te_bufs in self._te_buffers:
-                        te_parts.append(
-                            te_bufs[buffer_idx][:actual_batch_size].to(
-                                self.device, non_blocking=True,
-                            )
-                        )
-                    result["te_out"] = tuple(te_parts)
+                    result["te_out"] = self._reconstruct_te_tuple(
+                        buffer_idx, actual_batch_size,
+                    )
         else:
             # CPU fallback (no async)
             result["latents"] = self._lat_buffers[buffer_idx][:actual_batch_size].to(
                 self.device, non_blocking=True,
             )
             if self._te_buffers:
-                te_parts = []
-                for te_bufs in self._te_buffers:
-                    te_parts.append(
-                        te_bufs[buffer_idx][:actual_batch_size].to(
-                            self.device, non_blocking=True,
-                        )
-                    )
-                result["te_out"] = tuple(te_parts)
+                result["te_out"] = self._reconstruct_te_tuple(
+                    buffer_idx, actual_batch_size,
+                )
 
         return result
 

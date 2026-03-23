@@ -565,11 +565,8 @@ class Trainer:
         # ── 9. Build parameter groups (separate LR for text encoders) ──
         if config.triton_fused_adamw:
             from dataset_sorter.triton_kernels import FusedAdamW
-            all_params = []
-            for group in self._build_param_groups():
-                all_params.extend(group["params"])
             self.optimizer = FusedAdamW(
-                all_params, lr=config.learning_rate,
+                self._build_param_groups(), lr=config.learning_rate,
                 weight_decay=config.weight_decay,
             )
             log.info("Using Triton FusedAdamW (8 ops → 1 kernel)")
@@ -769,12 +766,50 @@ class Trainer:
         self.state.phase = "ready"
 
     def _build_param_groups(self) -> list[dict]:
-        """Build optimizer parameter groups with separate LR for text encoders."""
-        config = self.config
-        groups = [{"params": [p for p in self.backend.unet.parameters() if p.requires_grad],
-                   "lr": config.learning_rate}]
+        """Build optimizer parameter groups with separate LR for text encoders.
 
-        te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else config.learning_rate
+        When LoRA+ is enabled (lora_plus_ratio > 0), lora_B weights get a
+        higher learning rate (base_lr * ratio) while lora_A weights keep the
+        base LR.  This asymmetric scaling converges ~30% faster per the
+        LoRA+ paper (2024).
+        """
+        config = self.config
+        base_lr = config.learning_rate
+        plus_ratio = getattr(config, "lora_plus_ratio", 0.0)
+
+        if plus_ratio > 0 and config.is_lora:
+            # Split UNet LoRA params into A (low LR) and B (high LR) groups
+            lora_a_params = []
+            lora_b_params = []
+            other_params = []
+            for name, param in self.backend.unet.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "lora_B" in name or "lora_up" in name:
+                    lora_b_params.append(param)
+                elif "lora_A" in name or "lora_down" in name:
+                    lora_a_params.append(param)
+                else:
+                    other_params.append(param)
+
+            groups = []
+            if lora_a_params:
+                groups.append({"params": lora_a_params, "lr": base_lr})
+            if lora_b_params:
+                groups.append({"params": lora_b_params, "lr": base_lr * plus_ratio})
+            if other_params:
+                groups.append({"params": other_params, "lr": base_lr})
+
+            if groups:
+                log.info(
+                    "LoRA+ enabled: lora_A LR=%.2e, lora_B LR=%.2e (ratio=%.0f)",
+                    base_lr, base_lr * plus_ratio, plus_ratio,
+                )
+        else:
+            groups = [{"params": [p for p in self.backend.unet.parameters() if p.requires_grad],
+                       "lr": base_lr}]
+
+        te_lr = config.text_encoder_lr if config.text_encoder_lr > 0 else base_lr
         for flag, encoder in [
             (config.train_text_encoder, self.backend.text_encoder),
             (config.train_text_encoder_2, self.backend.text_encoder_2),
@@ -851,6 +886,17 @@ class Trainer:
                     _shuffle = False  # mutually exclusive with sampler
                     log.info("DataLoader using WeightedRandomSampler for curriculum learning")
 
+                # Use a seeded generator for reproducible shuffling so that
+                # the batch-skip logic on resume sees the same batch ordering.
+                # The DataLoader internally advances this generator each epoch,
+                # so the same seed produces consistent per-epoch orderings.
+                self._dl_generator = None
+                _dl_generator = None
+                if _shuffle:
+                    _dl_generator = torch.Generator()
+                    _dl_generator.manual_seed(config.sample_seed if config.sample_seed >= 0 else 42)
+                    self._dl_generator = _dl_generator
+
                 dataloader = DataLoader(
                     self.dataset,
                     batch_size=config.batch_size,
@@ -862,7 +908,13 @@ class Trainer:
                     persistent_workers=use_workers > 0,
                     prefetch_factor=config.prefetch_factor if use_workers > 0 else None,
                     collate_fn=training_collate_fn,
+                    generator=_dl_generator,
                 )
+
+                # Restore generator state from checkpoint for reproducible resume
+                if _dl_generator is not None and hasattr(self, '_resume_dl_generator_state'):
+                    _dl_generator.set_state(self._resume_dl_generator_state)
+                    del self._resume_dl_generator_state
 
             # ── Async GPU Prefetcher (overlaps CPU→GPU transfer with compute) ──
             if config.async_dataload and self.device.type == "cuda":
@@ -1008,8 +1060,11 @@ class Trainer:
                     continue
                 _skip_batches = 0  # Only skip once
 
-                # Track position within epoch for checkpoint resume
-                self.state.epoch_step = step
+                # Track position within epoch for checkpoint resume.
+                # Store step + 1 so the saved value is the NEXT batch to
+                # process, not the one already completed. Without this,
+                # the last-trained batch gets trained again after resume.
+                self.state.epoch_step = step + 1
 
                 # ── Pause gate ──
                 self._handle_pause(progress_fn)
@@ -1111,6 +1166,11 @@ class Trainer:
                                 self.optimizer.zero_grad(set_to_none=True)
                         else:
                             # No grad clipping
+                            # Unscale before VJP so it operates on real gradient
+                            # magnitudes (not scaled by 2^16). GradScaler.step()
+                            # skips re-unscaling if already done.
+                            if vjp_scaler is not None and self.grad_scaler is not None:
+                                self.grad_scaler.unscale_(self.optimizer)
                             # VJP approximation: reduce gradient compute (Feb 2026)
                             if vjp_scaler is not None:
                                 vjp_scaler.approximate_gradients(trainable_params)
@@ -1561,10 +1621,14 @@ class Trainer:
                 indices = indices.tolist()
             elif isinstance(indices, (list, tuple)):
                 indices = [int(i) for i in indices]
-            # Use the scalar loss for all images in this batch
-            loss_val = loss.detach().item()
+            # Use per-sample losses when available, fall back to batch mean
+            _per_sample = getattr(self.backend, '_per_sample_loss', None)
+            if _per_sample is not None and _per_sample.numel() == len(indices):
+                sample_losses = _per_sample.tolist()
+            else:
+                sample_losses = [loss.detach().item()] * len(indices)
             self._curriculum_sampler.update_loss(
-                indices, [loss_val] * len(indices),
+                indices, sample_losses,
             )
 
         # ── Adaptive tag weighting: decompose and update per-tag losses ──
@@ -1573,9 +1637,18 @@ class Trainer:
             if isinstance(captions_for_decomp, str):
                 captions_for_decomp = [captions_for_decomp]
             from dataset_sorter.concept_probing import decompose_loss_by_tag
+            # Use per-sample losses from the backend (stored before .mean())
+            # so each caption gets its own loss value. Using the batch-mean
+            # scalar would assign identical loss to every tag in the batch,
+            # making adaptive weighting completely non-functional.
+            _per_sample = getattr(self.backend, '_per_sample_loss', None)
+            if _per_sample is not None and _per_sample.numel() == len(captions_for_decomp):
+                sample_losses = _per_sample.tolist()
+            else:
+                sample_losses = [loss.detach().item()] * len(captions_for_decomp)
             per_tag = decompose_loss_by_tag(
                 captions_for_decomp,
-                [loss.detach().item()] * len(captions_for_decomp),
+                sample_losses,
             )
             self._adaptive_tag_weighter.update(per_tag)
 
@@ -1752,6 +1825,9 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
+        # Save DataLoader generator state for reproducible shuffle on resume
+        if getattr(self, '_dl_generator', None) is not None:
+            state_dict["dl_generator"] = self._dl_generator.get_state()
         state_path = save_dir / "training_state.pt"
         tmp_path = save_dir / "training_state.pt.tmp"
         torch.save(state_dict, str(tmp_path))
@@ -2162,6 +2238,10 @@ class Trainer:
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore GradScaler state: {e}")
 
+        # Restore DataLoader generator state for reproducible shuffle on resume
+        if "dl_generator" in state:
+            self._resume_dl_generator_state = state["dl_generator"]
+
         # Restore model weights (LoRA or full)
         is_lora = self.config.model_type.endswith("_lora")
         if is_lora:
@@ -2201,11 +2281,11 @@ class Trainer:
                     from safetensors.torch import load_file
                     weight_files = list(model_dir.glob("*.safetensors"))
                     if weight_files:
-                        state = {}
+                        weight_state = {}
                         for wf in weight_files:
-                            state.update(load_file(str(wf)))
+                            weight_state.update(load_file(str(wf)))
                         missing, unexpected = self.backend.unet.load_state_dict(
-                            state, strict=False,
+                            weight_state, strict=False,
                         )
                         if missing:
                             log.warning(f"Full finetune resume: {len(missing)} missing keys")
@@ -2286,11 +2366,24 @@ class Trainer:
         if config.smart_resume_auto_apply and analysis.adjustments:
             apply_adjustments_to_config(config, analysis.adjustments)
 
-            # Rebuild scheduler with new LR if it changed
+            # Update scheduler + optimizer base LRs if changed
             if "learning_rate" in analysis.adjustments:
                 new_lr = analysis.adjustments["learning_rate"]
-                for pg in self.optimizer.param_groups:
-                    pg["lr"] = new_lr
+                # Scale each param group proportionally (preserves TE LR ratio)
+                if self.scheduler is not None and hasattr(self.scheduler, "base_lrs"):
+                    for i, (pg, base_lr) in enumerate(
+                        zip(self.optimizer.param_groups, self.scheduler.base_lrs)
+                    ):
+                        if base_lr > 0:
+                            ratio = new_lr / config.learning_rate
+                            pg["lr"] = base_lr * ratio
+                            self.scheduler.base_lrs[i] = base_lr * ratio
+                        else:
+                            pg["lr"] = new_lr
+                            self.scheduler.base_lrs[i] = new_lr
+                else:
+                    for pg in self.optimizer.param_groups:
+                        pg["lr"] = new_lr
                 log.info(f"Smart Resume: Updated optimizer LR to {new_lr:.2e}")
 
             log.info("Smart Resume: Adjustments applied automatically.")

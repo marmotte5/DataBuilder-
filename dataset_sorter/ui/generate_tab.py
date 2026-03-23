@@ -446,6 +446,20 @@ class GenerateTab(QWidget):
         gen_row.addWidget(self.btn_stop)
         left.addLayout(gen_row)
 
+        # -- Speed optimizations --
+        speed_row = QHBoxLayout()
+        self.taylorseer_check = QCheckBox("TaylorSeer (3-5x faster)")
+        self.taylorseer_check.setToolTip(
+            "Enable TaylorSeer inference cache for DiT models (Flux, SD3, PixArt, etc.).\n"
+            "Predicts intermediate features via Taylor series — up to 5x speedup\n"
+            "with negligible quality loss. No effect on UNet models (SD 1.5, SDXL).\n"
+            "Requires diffusers >= 0.36.0."
+        )
+        self.taylorseer_check.stateChanged.connect(self._on_taylorseer_toggled)
+        speed_row.addWidget(self.taylorseer_check)
+        speed_row.addStretch()
+        left.addLayout(speed_row)
+
         # -- Auto-save output folder --
         save_grp = QGroupBox("Auto-Save")
         save_layout = QGridLayout(save_grp)
@@ -821,6 +835,11 @@ class GenerateTab(QWidget):
         if self._worker:
             self._worker.stop()
         self.btn_stop.setEnabled(False)
+
+    def _on_taylorseer_toggled(self, state):
+        """Toggle TaylorSeer cache on the loaded pipeline."""
+        if self._worker:
+            self._worker.set_taylorseer(bool(state))
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         """Add a newly generated image to the gallery, evicting old ones if over capacity."""

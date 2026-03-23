@@ -595,6 +595,10 @@ class TrainBackendBase(ABC):
                 loss = loss * weights
             self._adaptive_sample_weights = None
 
+        # Store per-sample losses before reduction for adaptive tag weighting
+        # and curriculum learning (they need per-sample signals, not batch mean).
+        self._per_sample_loss = loss.detach()
+
         return loss.mean()
 
     def _compute_snr_weights(self, timesteps: torch.Tensor, gamma: int) -> torch.Tensor:
@@ -720,8 +724,12 @@ class TrainBackendBase(ABC):
                 mask = mask.to(loss.device)
             # For flow models, apply token weighting as per-sample weight
             if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
-                # Average token weights per sample as a loss weight
-                sample_weight = mask.mean(dim=-1)
+                # Average token weights per sample, excluding padding zeros
+                # so that padding positions don't drag the mean down.
+                # Without this, a caption with 10/77 real tokens would get
+                # a mean weight of ~0.13 instead of ~1.0.
+                non_zero = mask > 0
+                sample_weight = mask.sum(dim=-1) / non_zero.sum(dim=-1).clamp(min=1)
                 while sample_weight.dim() < loss.dim():
                     sample_weight = sample_weight.unsqueeze(-1)
                 loss = loss * sample_weight
@@ -736,6 +744,10 @@ class TrainBackendBase(ABC):
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
+
+        # Store per-sample losses before reduction for adaptive tag weighting
+        # and curriculum learning (they need per-sample signals, not batch mean).
+        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 

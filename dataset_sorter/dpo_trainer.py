@@ -240,14 +240,30 @@ def compute_image_log_probs(
     # Use whichever model the backend has — UNet for epsilon/v-pred models,
     # transformer for flow-matching models (Flux, SD3, PixArt, etc.).
     model = backend.unet if backend.unet is not None else backend.transformer
-    noise_pred = model(
-        noisy_latents, timesteps, encoder_hidden,
-        **fwd_kwargs,
-    ).sample
+    if backend.unet is not None:
+        # UNet-based models (SD1.5, SD2, SDXL, Kolors, Cascade): positional args
+        noise_pred = model(
+            noisy_latents, timesteps, encoder_hidden,
+            **fwd_kwargs,
+        ).sample
+    else:
+        # Transformer-based flow models (Flux, SD3, PixArt, etc.): keyword args
+        noise_pred = model(
+            hidden_states=noisy_latents,
+            timestep=timesteps,
+            encoder_hidden_states=encoder_hidden,
+            **fwd_kwargs,
+        ).sample
 
-    # Per-sample MSE
+    # Per-sample MSE: target depends on prediction type
+    # - Epsilon models predict the added noise
+    # - Flow-matching models predict the velocity (noise - latents)
+    if getattr(backend, 'prediction_type', 'epsilon') == 'flow':
+        target = noise.float() - latents.float()
+    else:
+        target = noise.float()
     per_sample_mse = F.mse_loss(
-        noise_pred.float(), noise.float(), reduction="none"
+        noise_pred.float(), target, reduction="none"
     ).mean(dim=list(range(1, len(noise_pred.shape))))
 
     # Weight by SNR to get a proper variational bound estimate.

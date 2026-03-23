@@ -5,6 +5,7 @@ training loop.
 """
 
 import logging
+from collections import ChainMap
 
 import torch
 
@@ -27,24 +28,25 @@ class _CombinedOptimizer:
             self.param_groups.extend(opt.param_groups)
 
     @property
-    def state(self) -> dict:
-        """Merged state dict from all sub-optimizers.
+    def state(self):
+        """Merged view of all sub-optimizer states.
 
-        Required by GradScaler.unscale_() and GradScaler.step() which
-        access optimizer.state to track scaling metadata per-parameter.
+        Returns a ChainMap so that writes from GradScaler.unscale_()
+        (which stores found_inf_per_device in optimizer.state) persist
+        in the first sub-optimizer's state dict rather than being lost
+        in an ephemeral dict.
         """
-        merged = {}
-        for opt in self.optimizers:
-            merged.update(opt.state)
-        return merged
+        return ChainMap(*(opt.state for opt in self.optimizers))
 
     def zero_grad(self, set_to_none: bool = True):
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=set_to_none)
 
     def step(self, closure=None):
-        for opt in self.optimizers:
-            opt.step(closure)
+        # Only pass the closure to the first optimizer to avoid calling it
+        # multiple times (each call runs forward+backward again).
+        for i, opt in enumerate(self.optimizers):
+            opt.step(closure if i == 0 else None)
 
     def state_dict(self):
         return [opt.state_dict() for opt in self.optimizers]
@@ -148,38 +150,48 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # Use create_muon_param_groups to split correctly.
         from dataset_sorter.optimizers import Muon, create_muon_param_groups
         log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
-        # Extract all trainable params from the provided param_groups
-        all_params = []
+        # Split each param group into 2D+ (Muon) and 1D (AdamW) while
+        # preserving per-group learning rates (e.g., text encoder LR).
+        muon_groups = []
+        adamw_groups = []
         for pg in param_groups:
-            all_params.extend(pg["params"])
-        # Build a temporary module wrapper to use create_muon_param_groups
-        # (it needs named_parameters, so we filter manually instead)
-        muon_params = [p for p in all_params if p.requires_grad and p.dim() >= 2]
-        adamw_params = [p for p in all_params if p.requires_grad and p.dim() < 2]
+            group_lr = pg.get("lr", lr)
+            muon_p = [p for p in pg["params"] if p.requires_grad and p.dim() >= 2]
+            adamw_p = [p for p in pg["params"] if p.requires_grad and p.dim() < 2]
+            muon_group_lr = group_lr if group_lr > 0.001 else 0.02
+            if muon_p:
+                muon_groups.append({"params": muon_p, "lr": muon_group_lr})
+            if adamw_p:
+                adamw_groups.append({"params": adamw_p, "lr": group_lr})
         muon_lr = lr if lr > 0.001 else 0.02
-        if muon_params:
+        if muon_groups:
             # Create Muon for 2D+ params only
             muon_opt = Muon(
-                [{"params": muon_params, "lr": muon_lr}],
+                muon_groups,
                 lr=muon_lr,
                 weight_decay=config.weight_decay,
                 momentum=0.95,
             )
-            if adamw_params:
+            if adamw_groups:
                 # 1D params (biases, norms, embeddings) need a separate AdamW
                 adamw_opt = torch.optim.AdamW(
-                    [{"params": adamw_params, "lr": lr}],
+                    adamw_groups,
                     lr=lr,
                     weight_decay=config.weight_decay,
                 )
+                _n_muon = sum(len(g["params"]) for g in muon_groups)
+                _n_adamw = sum(len(g["params"]) for g in adamw_groups)
                 log.info(
-                    f"Muon: {len(muon_params)} 2D+ params with Muon, "
-                    f"{len(adamw_params)} 1D params with AdamW"
+                    f"Muon: {_n_muon} 2D+ params with Muon, "
+                    f"{_n_adamw} 1D params with AdamW"
                 )
                 return _CombinedOptimizer([muon_opt, adamw_opt])
             return muon_opt
+        elif adamw_groups:
+            log.warning("Muon: no 2D+ params found, using AdamW for all 1D params")
+            return torch.optim.AdamW(adamw_groups, lr=lr, weight_decay=config.weight_decay)
         else:
-            log.warning("Muon: no 2D+ params found, falling back to AdamW")
+            log.warning("Muon: no trainable params found, falling back to AdamW")
             return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "GaLoreAdamW":
         try:

@@ -195,7 +195,7 @@ _FALLBACK_PROFILE = (1, 4, True, True, True)
 _BASE_LR_LORA: dict[str, float] = {
     "sd15_lora":     2e-4,
     "sdxl_lora":     1e-4,
-    "flux_lora":     2e-3,
+    "flux_lora":     1e-4,
     "sd3_lora":      1e-4,
     "pony_lora":     1e-4,
     "zimage_lora":   1e-4,
@@ -209,7 +209,7 @@ _BASE_LR_LORA: dict[str, float] = {
     "sana_lora":     1e-4,
     "hidream_lora":  5e-5,
     "chroma_lora":   1e-4,
-    "flux2_lora":    2e-3,
+    "flux2_lora":    1e-4,
 }
 
 _BASE_LR_FULL: dict[str, float] = {

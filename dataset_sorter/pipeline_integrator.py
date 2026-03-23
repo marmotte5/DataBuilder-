@@ -568,13 +568,22 @@ class LiveTrainingMonitor:
         factor: float,
         reason: str,
     ) -> str:
-        """Reduce learning rate by factor."""
+        """Reduce learning rate by factor.
+
+        Also scales the scheduler's base_lrs so that subsequent
+        scheduler.step() calls compute from the reduced base instead of
+        immediately overwriting the adjustment.
+        """
         new_lr = current_lr * factor
         msg = f"{reason} → LR reduced {current_lr:.6f} → {new_lr:.6f}"
 
         if optimizer is not None:
             for group in optimizer.param_groups:
                 group["lr"] = group["lr"] * factor
+
+        # Scale scheduler base LRs so scheduler.step() doesn't overwrite
+        if scheduler is not None and hasattr(scheduler, "base_lrs"):
+            scheduler.base_lrs = [lr * factor for lr in scheduler.base_lrs]
 
         self._adjustments_made += 1
         self._report.lr_adjustments.append(msg)

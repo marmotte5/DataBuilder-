@@ -71,6 +71,11 @@ CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
 # Models that use guidance_scale in a different way (no negative prompt)
 FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
 
+# DiT-based models compatible with TaylorSeer inference caching.
+# UNet models (sd15, sd2, sdxl, pony, kolors, cascade) are NOT supported.
+TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
+                     "hunyuan", "auraflow", "zimage", "chroma", "hidream"}
+
 # Maximum safetensors header size (bytes) for sanity checks during inspection.
 _MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
 
@@ -283,6 +288,9 @@ class GenerateWorker(QThread):
         self.mask_image: Optional[Image.Image] = None    # inpainting mask
         self.strength = 0.75  # img2img denoising strength (0-1)
 
+        # Speed optimizations
+        self.taylorseer_enabled = False  # TaylorSeer inference cache
+
         # Modes
         self._mode = "generate"  # "load" or "generate"
         self._stop_requested = False
@@ -343,7 +351,15 @@ class GenerateWorker(QThread):
     @property
     def is_loaded(self) -> bool:
         """Return True if a pipeline is currently loaded and ready for generation."""
-        return self.pipe is not None
+        with self._lock:
+            return self.pipe is not None
+
+    def set_taylorseer(self, enabled: bool):
+        """Toggle TaylorSeer cache on the currently loaded pipeline."""
+        self.taylorseer_enabled = enabled
+        with self._lock:
+            if self.pipe is not None:
+                self._apply_taylorseer(self.pipe)
 
     # ── Thread entry point ──────────────────────────────────────────────
 
@@ -385,6 +401,16 @@ class GenerateWorker(QThread):
                     self.unload_model()
                 except Exception as ue:
                     log.debug(f"Unload model during error cleanup failed: {ue}")
+            else:
+                # Free intermediate tensors (noisy latents, activations) that
+                # may linger after a failed generation (e.g. OOM mid-diffusion).
+                try:
+                    gc.collect()
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
     # ── Model loading ───────────────────────────────────────────────────
 
@@ -481,6 +507,9 @@ class GenerateWorker(QThread):
             # Load LoRA adapters
             if self._lora_adapters:
                 self._load_loras(pipe, self._lora_adapters)
+
+            # Apply TaylorSeer cache for DiT models (3-5x inference speedup)
+            self._apply_taylorseer(pipe)
 
             self.progress.emit(90, 100, "Finalizing...")
 
@@ -734,7 +763,7 @@ class GenerateWorker(QThread):
         self.progress.emit(30, 100, "Loading fine-tuned weights...")
 
         try:
-            state_dict = load_file(model_path)
+            state_dict = load_file(model_path, device="cpu")
 
             # Strip known component prefixes (transformer., unet., model.diffusion_model., etc.)
             # Reuse the shared utility from TrainBackendBase to avoid duplication.
@@ -830,7 +859,50 @@ class GenerateWorker(QThread):
             try:
                 pipe.set_adapters(adapter_names, adapter_weights)
             except Exception as e:
-                log.debug(f"Could not set adapter weights: {e}")
+                log.warning(f"Could not set adapter weight to {adapter_weights[0]}: {e}")
+
+    # ── TaylorSeer inference cache ─────────────────────────────────────
+
+    def _apply_taylorseer(self, pipe):
+        """Apply or remove TaylorSeer cache on DiT-based pipelines.
+
+        TaylorSeer predicts intermediate transformer features via Taylor series
+        expansion, achieving 3-5x inference speedup with negligible quality loss.
+        Only works on transformer-based (DiT) models, not UNet models.
+        """
+        transformer = getattr(pipe, "transformer", None)
+        if transformer is None:
+            return
+
+        if not self.taylorseer_enabled or self._model_type not in TAYLORSEER_MODELS:
+            # Disable if previously enabled
+            if hasattr(transformer, "disable_cache"):
+                try:
+                    transformer.disable_cache()
+                    log.info("TaylorSeer cache disabled")
+                except Exception as e:
+                    log.debug("Could not disable TaylorSeer cache: %s", e)
+            return
+
+        try:
+            from diffusers.hooks import TaylorSeerCacheConfig
+        except ImportError:
+            log.warning(
+                "TaylorSeer requires diffusers >= 0.36.0. "
+                "Upgrade with: pip install -U diffusers"
+            )
+            return
+
+        try:
+            config = TaylorSeerCacheConfig(
+                cache_interval=5,
+                disable_cache_before_step=3,
+                max_order=1,
+            )
+            transformer.enable_cache(config)
+            log.info("TaylorSeer cache enabled for %s", self._model_type)
+        except Exception as e:
+            log.warning("Failed to enable TaylorSeer cache: %s", e)
 
     # ── Image generation ────────────────────────────────────────────────
 

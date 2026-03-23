@@ -15,6 +15,7 @@ FP8 training. Falls back to manual FP8 casting when TE is unavailable.
 """
 
 import logging
+import math
 from typing import Optional
 from contextlib import contextmanager
 
@@ -67,6 +68,14 @@ class FP8ScalingTracker:
 
         amax = tensor.abs().max().item()
 
+        # Guard against NaN/Inf from diverged training — don't poison the
+        # scale history, just skip this observation and use existing history.
+        if not math.isfinite(amax):
+            if name in history and history[name]:
+                amax = max(history[name])  # Reuse last valid amax
+            else:
+                return 1.0  # No valid history, use identity scale
+
         if name not in history:
             history[name] = []
         history[name].append(amax)
@@ -111,8 +120,16 @@ def quantize_to_fp8(
     if fp8_dtype is None:
         fp8_dtype = _fp8_e4m3
 
-    # Scale → quantize → store
+    # Scale → clamp → quantize → store
+    # Clamp to the representable range of the target FP8 dtype to prevent
+    # overflow to inf/NaN from outlier values (especially on early steps
+    # when the amax history has few entries).
+    # Guard against zero or non-finite scale (e.g. from all-zeros tensor)
+    if scale == 0.0 or not math.isfinite(scale):
+        scale = 1.0
     scaled = tensor.float() * scale
+    _fp8_max = 448.0 if fp8_dtype == _fp8_e4m3 else 57344.0
+    scaled = scaled.clamp(-_fp8_max, _fp8_max)
     fp8_tensor = scaled.to(fp8_dtype)
     inv_scale = 1.0 / scale
 
@@ -160,14 +177,14 @@ class FP8LinearWrapper(nn.Module):
             if x.dim() > 2:
                 x = x.reshape(-1, x.shape[-1])
 
-            # Quantize input to FP8 E4M3
+            # Quantize input to FP8 E4M3 (clamp to prevent overflow on early steps)
             x_scale = self.tracker.get_scale(f"{self.name}_input", x, is_forward=True)
-            x_fp8 = (x.float() * x_scale).to(_fp8_e4m3)
+            x_fp8 = (x.float() * x_scale).clamp(-448.0, 448.0).to(_fp8_e4m3)
 
             # Quantize weight to FP8 E4M3
             w = self.linear.weight
             w_scale = self.tracker.get_scale(f"{self.name}_weight", w, is_forward=True)
-            w_fp8 = (w.float() * w_scale).to(_fp8_e4m3)
+            w_fp8 = (w.float() * w_scale).clamp(-448.0, 448.0).to(_fp8_e4m3)
 
             # Scale tensors for _scaled_mm
             x_inv = torch.tensor(1.0 / x_scale, device=x.device, dtype=torch.float32)

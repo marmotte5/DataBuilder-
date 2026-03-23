@@ -657,6 +657,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+2"), self, lambda: self._switch_nav("train"))
         QShortcut(QKeySequence("Ctrl+3"), self, lambda: self._switch_nav("generate"))
         QShortcut(QKeySequence("Ctrl+4"), self, lambda: self._switch_nav("library"))
+        QShortcut(QKeySequence("Ctrl+5"), self, lambda: self._switch_nav("batch"))
+        QShortcut(QKeySequence("Ctrl+6"), self, lambda: self._switch_nav("compare"))
+        QShortcut(QKeySequence("Ctrl+7"), self, lambda: self._switch_nav("merge"))
 
     def _toggle_theme(self):
         """Switch between dark and light themes."""
@@ -737,8 +740,41 @@ class MainWindow(QMainWindow):
 
         log.info("Restored session state from previous run.")
 
+    def _is_busy(self) -> str | None:
+        """Return a description of the active background task, or None."""
+        if hasattr(self, "training_tab"):
+            tt = self.training_tab
+            if hasattr(tt, "_training_worker") and tt._training_worker is not None:
+                if tt._training_worker.isRunning():
+                    return "Training is still running"
+        if hasattr(self, "batch_tab"):
+            bt = self.batch_tab
+            if hasattr(bt, "_worker") and bt._worker is not None:
+                if bt._worker.isRunning():
+                    return "Batch generation is still running"
+        if hasattr(self, "merge_tab"):
+            mt = self.merge_tab
+            if hasattr(mt, "_worker") and mt._worker is not None:
+                if mt._worker.isRunning():
+                    return "Model merge is still running"
+        return None
+
     def closeEvent(self, event):
         """Save progress state and stop all background threads on close."""
+        busy = self._is_busy()
+        if busy:
+            reply = QMessageBox.question(
+                self,
+                "Quit while busy?",
+                f"{busy}. Are you sure you want to quit?\n\n"
+                "Unsaved progress will be lost.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
         self._save_progress_state()
 
         # Stop training worker + VRAM monitor

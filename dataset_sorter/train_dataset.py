@@ -129,6 +129,7 @@ class CachedTrainDataset(Dataset):
         self._latent_cache: dict[int, torch.Tensor] = {}
         self._te_cache: dict[int, tuple] = {}
         self._token_id_cache: dict[int, tuple] = {}  # Pre-tokenized caption IDs
+        self._te_uncond_cache: tuple | None = None  # Cached empty-string TE output for caption dropout
         self._latents_cached = False
         self._te_cached = False
         self._tokens_cached = False
@@ -207,10 +208,15 @@ class CachedTrainDataset(Dataset):
         # is a valid approximation. This prevents a critical failure where the
         # shuffled caption doesn't match the cache key, causing a fallback to
         # live encoding on an already-offloaded text encoder.
-        # Caption dropout (empty string) also uses the cached embedding — the
-        # dropout effect is achieved by the training loop, not the TE output.
         if self._te_cached and idx in self._te_cache:
-            result["te_cache"] = self._te_cache[idx]
+            # Caption dropout: substitute the cached unconditional (empty-string)
+            # embedding so the model learns to generate without text guidance.
+            # Without this, dropout has no effect when TE caching is enabled,
+            # silently degrading classifier-free guidance quality at inference.
+            if caption == "" and self._te_uncond_cache is not None:
+                result["te_cache"] = self._te_uncond_cache
+            else:
+                result["te_cache"] = self._te_cache[idx]
 
         # --- Pre-tokenized caption IDs (skip tokenizer calls during training) ---
         if self._tokens_cached and idx in self._token_id_cache:
@@ -493,6 +499,7 @@ class CachedTrainDataset(Dataset):
             _cache_str = (
                 f"{caption}|cs={clip_skip}|ml={max_token_length}"
                 f"|ml2={max_token_length_2}|pp={caption_preprocessor is not None}"
+                f"|efn={encode_fn is not None}"
             )
             cache_key = hashlib.md5(_cache_str.encode()).hexdigest()
             if to_disk and self.cache_dir:
@@ -638,7 +645,7 @@ class CachedTrainDataset(Dataset):
                     ).input_ids.to(device)
 
                     encoder_output_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-                    _skip2 = min(_skip, len(encoder_output_2.hidden_states) - 2)
+                    _skip2 = min(max(clip_skip, 1), len(encoder_output_2.hidden_states) - 2)
                     hidden_states_2 = encoder_output_2.hidden_states[-(_skip2 + 1)].squeeze(0).cpu()
                     pooled_2 = (
                         encoder_output_2.pooler_output.squeeze(0).cpu()
@@ -698,6 +705,71 @@ class CachedTrainDataset(Dataset):
         self._tokens_cached = True
         log.info(f"Cached tokenized IDs for {len(unique_captions)} unique captions")
 
+        # Cache unconditional (empty-string) TE output for caption dropout.
+        # Without this, caption dropout has no effect when TE caching is enabled
+        # because __getitem__ always returns the cached (non-empty) embedding.
+        if self.caption_dropout_rate > 0:
+            try:
+                uncond_caption = ""
+                if encode_fn is not None:
+                    uncond_te = encode_fn([uncond_caption])
+                    self._te_uncond_cache = tuple(
+                        t.cpu() if t is not None and isinstance(t, torch.Tensor) else t
+                        for t in uncond_te
+                    )
+                else:
+                    # Use the same generic encoding path as the main cache loop
+                    import torch
+                    with torch.no_grad():
+                        _uncond_inputs = tokenizer(
+                            [uncond_caption], padding="max_length",
+                            max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
+                            truncation=True, return_tensors="pt",
+                        ).input_ids.to(device)
+                        _uncond_out = text_encoder(_uncond_inputs, output_hidden_states=True)
+                        # Match the regular cache path's clip_skip logic:
+                        # _skip = max(clip_skip, 1), clamped to available layers.
+                        _skip = max(clip_skip, 1)
+                        _skip = min(_skip, len(_uncond_out.hidden_states) - 2)
+                        _h = _uncond_out.hidden_states[-(_skip + 1)]
+                        if caption_preprocessor is not None:
+                            # LLM path (Z-Image): store attention mask, not pooled
+                            _uncond_tok = tokenizer(
+                                [uncond_caption], padding="max_length",
+                                max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
+                                truncation=True, return_tensors="pt",
+                            )
+                            _p = _uncond_tok["attention_mask"].cpu()
+                        else:
+                            _p = getattr(_uncond_out, "text_embeds", getattr(_uncond_out, "pooler_output", None))
+                        uncond_parts = [_h.cpu(), _p.cpu() if (_p is not None and hasattr(_p, 'cpu')) else _p]
+
+                        if tokenizer_2 is not None and text_encoder_2 is not None:
+                            _ml2 = tokenizer_2.model_max_length if max_token_length_2 <= 0 else max_token_length_2
+                            _uncond_inputs2 = tokenizer_2(
+                                [uncond_caption], padding="max_length",
+                                max_length=_ml2, truncation=True, return_tensors="pt",
+                            ).input_ids.to(device)
+                            _uncond_out2 = text_encoder_2(_uncond_inputs2, output_hidden_states=True)
+                            _skip2 = max(clip_skip, 1)
+                            _skip2 = min(_skip2, len(_uncond_out2.hidden_states) - 2)
+                            _h2 = _uncond_out2.hidden_states[-(_skip2 + 1)]
+                            _p2 = getattr(_uncond_out2, "text_embeds", getattr(_uncond_out2, "pooler_output", None))
+                            uncond_parts.extend([_h2.cpu(), _p2.cpu() if _p2 is not None else None])
+
+                        if tokenizer_3 is not None and text_encoder_3 is not None:
+                            _uncond_inputs3 = tokenizer_3(
+                                [uncond_caption], padding="max_length",
+                                max_length=512, truncation=True, return_tensors="pt",
+                            ).input_ids.to(device)
+                            _uncond_out3 = text_encoder_3(_uncond_inputs3)
+                            uncond_parts.append(_uncond_out3.last_hidden_state.cpu())
+
+                        self._te_uncond_cache = tuple(uncond_parts)
+                log.info("Cached unconditional TE output for caption dropout")
+            except Exception as e:
+                log.warning(f"Failed to cache unconditional TE output: {e}. Caption dropout disabled with TE caching.")
+
     @staticmethod
     def _estimate_vae_batch_size(device) -> int:
         """Estimate optimal VAE batch size based on available VRAM.
@@ -738,6 +810,7 @@ class CachedTrainDataset(Dataset):
         self._latent_cache.clear()
         self._te_cache.clear()
         self._token_id_cache.clear()
+        self._te_uncond_cache = None
         self._latents_cached = False
         self._te_cached = False
         self._tokens_cached = False

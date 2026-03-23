@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -45,6 +46,22 @@ from dataset_sorter.ui.theme import (
 from dataset_sorter.ui.toast import show_toast
 
 log = logging.getLogger(__name__)
+
+
+def _safe_int(s: str, default: int) -> int:
+    """Parse an integer string, returning *default* on failure."""
+    try:
+        return int(s) if s else default
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(s: str, default: float) -> float:
+    """Parse a float string, returning *default* on failure."""
+    try:
+        return float(s) if s else default
+    except (ValueError, TypeError):
+        return default
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -287,6 +304,7 @@ class BatchGenerationTab(QWidget):
 
         btn_clear = QPushButton("Clear All")
         btn_clear.setToolTip("Remove all prompts from the queue")
+        btn_clear.setStyleSheet(DANGER_BUTTON_STYLE)
         btn_clear.clicked.connect(self._clear_queue)
         btn_row.addWidget(btn_clear)
 
@@ -420,6 +438,17 @@ class BatchGenerationTab(QWidget):
         self._update_count()
 
     def _clear_queue(self):
+        if not self._queue:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Clear Queue",
+            f"Remove all {len(self._queue)} prompts from the queue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self._table.setRowCount(0)
         self._queue.clear()
         self._update_count()
@@ -488,23 +517,31 @@ class BatchGenerationTab(QWidget):
         if not path:
             return
         try:
+            skipped = 0
             with open(path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 count = 0
-                for row_data in reader:
-                    prompt = BatchPrompt(
-                        positive=row_data.get("positive", row_data.get("prompt", "")),
-                        negative=row_data.get("negative", ""),
-                        seed=int(row_data.get("seed", "-1")),
-                        steps=int(row_data.get("steps", "0")),
-                        cfg_scale=float(row_data.get("cfg", row_data.get("cfg_scale", "0"))),
-                        width=int(row_data.get("width", "0")),
-                        height=int(row_data.get("height", "0")),
-                        count=int(row_data.get("count", "1")),
-                    )
-                    self._add_row(prompt)
-                    count += 1
-            show_toast(self, f"Imported {count} prompts from CSV", "success")
+                for row_num, row_data in enumerate(reader, start=2):
+                    try:
+                        prompt = BatchPrompt(
+                            positive=row_data.get("positive", row_data.get("prompt", "")),
+                            negative=row_data.get("negative", ""),
+                            seed=_safe_int(row_data.get("seed", ""), -1),
+                            steps=_safe_int(row_data.get("steps", ""), 0),
+                            cfg_scale=_safe_float(row_data.get("cfg", row_data.get("cfg_scale", "")), 0.0),
+                            width=_safe_int(row_data.get("width", ""), 0),
+                            height=_safe_int(row_data.get("height", ""), 0),
+                            count=_safe_int(row_data.get("count", ""), 1),
+                        )
+                        self._add_row(prompt)
+                        count += 1
+                    except Exception as row_exc:
+                        log.warning("CSV row %d skipped: %s", row_num, row_exc)
+                        skipped += 1
+            msg = f"Imported {count} prompts from CSV"
+            if skipped:
+                msg += f" ({skipped} rows skipped)"
+            show_toast(self, msg, "success")
         except Exception as exc:
             log.warning("CSV import failed: %s", exc)
             show_toast(self, f"CSV import failed: {exc}", "warning")
@@ -602,6 +639,9 @@ class BatchGenerationTab(QWidget):
             show_toast(self, "Load a model in the Generate tab first", "warning")
             return
 
+        # Clean up any previous worker before creating a new one
+        self._cleanup_worker()
+
         # Build worker
         self._worker = BatchGenerationWorker(self)
         self._worker.set_queue(self._queue)
@@ -690,7 +730,7 @@ class BatchGenerationTab(QWidget):
             item = self._table.item(qi, col)
             if item:
                 item.setForeground(
-                    __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor(color)
+                    QColor(color)
                 )
 
     def _on_batch_progress(self, completed: int, total: int, message: str):
@@ -716,3 +756,20 @@ class BatchGenerationTab(QWidget):
         self._eta_label.setText("")
         variant = "success" if success else "warning"
         show_toast(self, message, variant)
+        # Clean up worker thread to avoid memory/VRAM leaks
+        self._cleanup_worker()
+
+    def _cleanup_worker(self):
+        """Clean up batch generation worker thread."""
+        if self._worker is not None:
+            try:
+                self._worker.image_generated.disconnect()
+                self._worker.prompt_status.disconnect()
+                self._worker.batch_progress.disconnect()
+                self._worker.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            if self._worker.isRunning():
+                self._worker.wait(5000)
+            self._worker.deleteLater()
+            self._worker = None

@@ -305,6 +305,14 @@ def recommend(
         if rank >= 64:
             config.use_rslora = True
 
+        # LoRA+: different LR for lora_A vs lora_B (2024 breakthrough).
+        # Ratio of 16 converges ~30% faster. Skip for DoRA (already
+        # decomposes magnitude/direction) and adaptive optimizers.
+        if network_type not in ("dora", "loha", "lokr") and optimizer not in (
+            "Prodigy", "DAdaptAdam", "AdamWScheduleFree"
+        ):
+            config.lora_plus_ratio = 16.0
+
         # PiSSA: faster convergence for concept/subject LoRAs
         # (but can overfit at high timesteps for diffusion, so only for small)
         if size_cat == "small" and not is_flux:
@@ -320,6 +328,7 @@ def recommend(
         config.use_dora = False
         config.use_rslora = False
         config.lora_init = "default"
+        config.lora_plus_ratio = 0.0
 
     # --- SpeeD timestep sampling (CVPR 2025, ~3x speedup) ---
     config.speed_asymmetric = True   # Always recommend: low overhead, high impact
@@ -405,7 +414,11 @@ def recommend(
     config.warmup_steps = max(10, min(config.total_steps // 10, 200))
 
     # --- Scheduler ---
-    if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):
+    # Prodigy: cosine is preferred over constant (official repo recommendation).
+    # DAdaptAdam/ScheduleFree: constant is correct (built-in adaptation).
+    if optimizer == "Prodigy":
+        config.lr_scheduler = "cosine"
+    elif optimizer in ("DAdaptAdam", "AdamWScheduleFree"):
         config.lr_scheduler = "constant"
     elif optimizer == "Muon":
         config.lr_scheduler = "cosine"
@@ -494,7 +507,15 @@ def recommend(
         config.fp8_base_model = False
 
     # --- Advanced parameters ---
-    config.noise_offset = 0.05
+    # Noise offset: model-specific values from community research.
+    # Pony was trained with 0.0357 — matching it preserves style fidelity.
+    # Flow models (Flux, SD3, Z-Image) use lower values or zero.
+    if is_pony:
+        config.noise_offset = 0.0357
+    elif is_flux or is_sd3 or is_sd35 or is_zimage:
+        config.noise_offset = 0.05
+    else:
+        config.noise_offset = 0.1
     config.adaptive_noise_scale = 0.0
 
     if is_flux or is_sd3 or is_sd35:
@@ -527,8 +548,13 @@ def recommend(
         config.multires_noise_discount = 0.2
         config.multires_noise_iterations = 6
 
-    # Gradient clipping
-    config.max_grad_norm = 1.0
+    # Gradient clipping — flow model full finetunes benefit from tighter
+    # clipping (0.01) which allows training at higher LR for longer without
+    # overcooking. LoRA and epsilon models use standard 1.0.
+    if not is_lora and (is_flux or is_sd3 or is_sd35):
+        config.max_grad_norm = 0.01
+    else:
+        config.max_grad_norm = 1.0
 
     # --- Contextual notes ---
     config.notes = _build_notes(
@@ -589,13 +615,41 @@ def _build_notes(
     if num_active_buckets < 5 and total_images > 100:
         notes.append("Few active buckets — tags are very uniformly distributed.")
 
-    # EMA CPU offload note
-    if config.ema_cpu_offload:
-        notes.append(
-            "EMA CPU offload enabled: EMA weights stored in system RAM to save "
-            "~2-4 GB VRAM. Ensure you have sufficient system memory (16+ GB RAM). "
-            "Training speed impact is minimal (<5%)."
-        )
+    # EMA notes — context-aware advice
+    if config.use_ema:
+        if config.ema_cpu_offload:
+            notes.append(
+                f"EMA enabled with CPU offload (decay={config.ema_decay}): "
+                "shadow weights stored in system RAM, saving ~2-4 GB VRAM. "
+                "Requires 16+ GB system RAM. Speed impact <5%."
+            )
+        else:
+            notes.append(
+                f"EMA enabled on GPU (decay={config.ema_decay}): "
+                f"adds ~{2 if is_lora else 4} GB VRAM for shadow weights."
+            )
+        if is_lora and total_images < 50:
+            notes.append(
+                "EMA with small LoRA dataset: consider lowering decay to 0.999 "
+                "for faster adaptation, or disable EMA entirely — LoRA's low "
+                "parameter count already acts as regularization."
+            )
+        elif not is_lora and total_images >= 500:
+            notes.append(
+                "EMA is strongly recommended for large full-finetune runs — "
+                "compare EMA vs non-EMA checkpoints at inference for best results."
+            )
+    elif not config.use_ema:
+        if not is_lora and total_images >= 200:
+            notes.append(
+                "Consider enabling EMA: full finetune with 200+ images benefits "
+                "significantly from weight averaging to prevent overfitting."
+            )
+        elif is_lora and size_cat in ("large", "very_large"):
+            notes.append(
+                "Consider enabling EMA: large LoRA datasets benefit from "
+                "the smoothing effect of exponential weight averaging."
+            )
 
     # Fused backward pass
     if config.fused_backward_pass:
@@ -620,40 +674,128 @@ def _build_notes(
             "time on multi-epoch training."
         )
 
-    # Optimizer-specific
+    # Optimizer-specific (model-aware)
     if optimizer == "Prodigy":
         notes.append(
             "Prodigy: LR=1.0 is intentional (self-adjusting). "
-            "d_coef stabilizes in ~200-300 steps. Use constant scheduler."
+            "d_coef stabilizes in ~200-300 steps. "
+            "Using cosine scheduler (official recommendation — avoid restarts). "
+            "Args applied: decouple=True, d_coef=0.8, "
+            "safeguard_warmup=True, bias_correction=True."
         )
-        if not is_lora:
-            notes.append("Prodigy not recommended for full finetune — prefer AdamW or Adafactor.")
+        if is_lora and is_flux:
+            notes.append(
+                "Prodigy + Flux LoRA: good for auto-tuning when unsure of LR. "
+                "Expect ~1200-1500 steps (20-30% more than AdamW). "
+                "AdamW8bit with manual LR is more predictable for production."
+            )
+        elif not is_lora:
+            notes.append(
+                "Prodigy is less proven for full finetune — consider AdamW or "
+                "Adafactor for more predictable convergence."
+            )
     elif optimizer == "DAdaptAdam":
-        notes.append("D-Adapt Adam: LR=1.0 is intentional (self-adjusting).")
+        notes.append(
+            "D-Adapt Adam: LR=1.0 is intentional (self-adjusting). "
+            "Use constant scheduler. Similar to Prodigy but slightly less stable."
+        )
     elif optimizer == "Adafactor":
+        notes.append(
+            "Adafactor: ~50% less VRAM than AdamW. "
+            "Enable stochastic rounding for bf16 LoRA to avoid truncation bias."
+        )
         if "sdxl" in model_type or is_pony or is_zimage:
             notes.append(
-                "Adafactor + fused_backward_pass: dramatically reduces VRAM usage."
+                "Adafactor + fused_backward_pass: dramatically reduces VRAM usage. "
+                "This is the optimal combo for VRAM-constrained SDXL/Pony/Z-Image training."
             )
-        notes.append(
-            "Adafactor: stochastic rounding is important with bf16 LoRA weights."
-        )
+        if is_flux and is_lora:
+            notes.append(
+                "For Flux LoRA, Adafactor uses ~5x higher LR than AdamW. "
+                "Combined with cosine_with_restarts, this is the most VRAM-efficient setup."
+            )
+    elif optimizer in ("AdamW", "AdamW8bit"):
+        if optimizer == "AdamW8bit":
+            notes.append(
+                "AdamW8bit: 25-30% VRAM savings vs AdamW with identical output quality. "
+                "Recommended over AdamW unless you specifically need fp32 optimizer states."
+            )
+        if is_flux and is_lora:
+            notes.append(
+                "Flux LoRA + AdamW: community sweet spot is LR 1e-4 to 2e-3 with "
+                "cosine scheduler. Expect good results in 1000-2000 steps. "
+                "Tip: LoRA+ (16x LR ratio for lora_B) converges ~30% faster."
+            )
+        elif (is_pony or "sdxl" in model_type) and is_lora:
+            notes.append(
+                "SDXL/Pony LoRA + AdamW: use cosine_with_restarts (3-4 restarts). "
+                "Keep total steps under 4000 to avoid overtraining. "
+                "Noise offset 0.03 for fine details, 0.1 for diverse styles."
+            )
+        elif is_sd15 and is_lora:
+            notes.append(
+                "SD 1.5 LoRA + AdamW: well-established. LR 1e-4 to 2e-4, "
+                "rank 32-64, 10-15 epochs for small datasets."
+            )
     elif optimizer == "CAME":
-        notes.append("CAME: Adafactor-like memory with AdamW-like quality.")
+        notes.append(
+            "CAME: Adafactor-like memory efficiency with AdamW-like convergence quality. "
+            "Good choice when VRAM is tight but you want AdamW-level results."
+        )
     elif optimizer == "AdamWScheduleFree":
-        notes.append("AdamW Schedule-Free: set scheduler to 'constant'. No external scheduler needed.")
+        notes.append(
+            "AdamW Schedule-Free: set scheduler to 'constant' — the optimizer "
+            "handles schedule internally. No warmup needed."
+        )
     elif optimizer == "Lion":
-        notes.append("Lion: LR auto-reduced (~3x lower). Uses ~50% less memory than AdamW.")
+        notes.append(
+            "Lion: ~50% less memory than AdamW. LR auto-reduced (~3x lower). "
+            "Works well for LoRA; less proven for full finetune of large models."
+        )
+    elif optimizer == "SOAP":
+        notes.append(
+            "SOAP: strong convergence on DiT models (Flux, SD3, Z-Image). "
+            "Use cosine scheduler with weight_decay=0.01."
+        )
+    elif optimizer == "Muon":
+        notes.append(
+            "Muon: experimental high-LR optimizer (0.02). Best for DiT-based models. "
+            "Use cosine scheduler. Not recommended for UNet models (SD 1.5, SDXL)."
+        )
     elif optimizer == "SGD":
-        notes.append("SGD is not recommended. Adaptive optimizers converge significantly faster.")
+        notes.append(
+            "SGD is not recommended for diffusion model training. "
+            "Adaptive optimizers (AdamW, Prodigy, Adafactor) converge significantly faster."
+        )
 
-    # Network type
+    # Network type — model-aware guidance
     if network_type == "dora":
-        notes.append("DoRA: ~30% slower, ~15% more VRAM, often better quality than LoRA.")
+        if config.lora_rank <= 8:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: strongest advantage over LoRA at "
+                "low ranks. Up to 2x effective capacity — excellent choice here."
+            )
+        elif config.lora_rank >= 64:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: ~30% slower, ~15% more VRAM. "
+                "Quality gap vs standard LoRA narrows at high ranks — "
+                "consider standard LoRA for faster iteration."
+            )
+        else:
+            notes.append(
+                f"DoRA at rank {config.lora_rank}: better generalization than LoRA, "
+                "especially for complex subjects. ~30% slower but often needs fewer epochs."
+            )
     elif network_type == "loha":
-        notes.append("LoHa: dim^2 = effective rank. Good quality/size tradeoff.")
+        notes.append(
+            f"LoHa at dim {config.lora_rank}: effective rank = {config.lora_rank**2}. "
+            "Good quality/size tradeoff for style and concept LoRAs."
+        )
     elif network_type == "lokr":
-        notes.append("LoKr: very compact. Suited for simple styles, less for complex subjects.")
+        notes.append(
+            "LoKr: very compact adapter. Suited for simple styles and single-concept "
+            "training. Less effective for complex characters or multi-concept."
+        )
 
     # Conv layers
     if config.conv_rank > 0:
@@ -684,7 +826,8 @@ def _build_notes(
     if is_pony:
         notes.append(
             "Pony: clip_skip=2, enable tag shuffling, include score tags "
-            "(score_9, score_8_up, etc.) in captions."
+            "(score_9, score_8_up, etc.) in captions. "
+            f"Noise offset set to {config.noise_offset} (matches Pony's original training value)."
         )
 
     if is_zimage:
@@ -706,8 +849,24 @@ def _build_notes(
 
     if not is_lora:
         notes.append("Full finetune: save checkpoints every 100-200 steps.")
+        if config.max_grad_norm <= 0.1 and (is_flux or is_sd3 or is_sd35):
+            notes.append(
+                f"Gradient clipping set to {config.max_grad_norm} (tighter than default). "
+                "This allows training at higher LR for longer without overcooking — "
+                "proven for flow model full finetunes."
+            )
         if config.use_ema:
-            notes.append("EMA model often generalizes better — compare both at inference.")
+            if is_flux or is_zimage:
+                notes.append(
+                    f"EMA on {model_type}: large transformers drift easily during training. "
+                    "Save both EMA and non-EMA checkpoints, then compare at inference — "
+                    "EMA typically wins on generalization while non-EMA preserves sharp detail."
+                )
+            else:
+                notes.append(
+                    "EMA model often generalizes better than the raw trained weights. "
+                    "Compare both at inference to pick the best."
+                )
         if config.weight_decay >= 0.1:
             notes.append("Higher weight decay (0.1) for full finetune regularization.")
 
@@ -719,9 +878,10 @@ def _build_notes(
     if config.ip_noise_gamma > 0:
         notes.append(f"IP noise gamma={config.ip_noise_gamma}: input perturbation regularization.")
 
-    if is_lora and optimizer in ("AdamW", "AdamW8bit"):
+    if getattr(config, "lora_plus_ratio", 0) > 0:
         notes.append(
-            "LoRA+ tip: set lora_B LR to 16x lora_A LR for faster convergence."
+            f"LoRA+ enabled (ratio={config.lora_plus_ratio:.0f}x): lora_B weights get "
+            f"{config.lora_plus_ratio:.0f}x higher LR than lora_A for ~30% faster convergence."
         )
 
     # GPU recommendation
@@ -818,6 +978,14 @@ def format_config(config: TrainingConfig) -> str:
         if config.conv_rank > 0:
             lines.append(f"    Conv rank        {config.conv_rank}")
             lines.append(f"    Conv alpha       {config.conv_alpha}")
+        if getattr(config, "lora_plus_ratio", 0) > 0:
+            lines.append(f"    LoRA+ ratio      {config.lora_plus_ratio:.0f}x (lora_B LR multiplier)")
+        if config.use_dora:
+            lines.append(f"    DoRA             Enabled")
+        if config.use_rslora:
+            lines.append(f"    rsLoRA           Enabled")
+        if config.lora_init != "default":
+            lines.append(f"    Init method      {config.lora_init}")
         lines.append("")
     else:
         lines.append(f"  -- Training Mode {thin[18:]}")
@@ -1147,6 +1315,8 @@ def export_kohya_json(config: TrainingConfig) -> str:
         if config.conv_rank > 0:
             data["conv_dim"] = config.conv_rank
             data["conv_alpha"] = config.conv_alpha
+        if getattr(config, "lora_plus_ratio", 0) > 0:
+            data["loraplus_lr_ratio"] = config.lora_plus_ratio
 
     # EMA
     if config.use_ema:

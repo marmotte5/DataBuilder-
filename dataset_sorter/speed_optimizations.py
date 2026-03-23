@@ -142,9 +142,16 @@ class SpeedTimestepSampler:
         # Change-aware: weight = |current_ema - previous_ema| / prev (relative change)
         # Using relative change keeps the weighting effective throughout training,
         # not just when absolute loss values are large (early training).
+        # Only apply change weighting to timesteps that had a valid _loss_ema_prev.
+        # Timesteps unseen before the last prev snapshot have prev=0, causing
+        # astronomical weight spikes (change = |loss - 0| / 1e-8). Give those
+        # neutral weight (change=0) instead.
         t_idx = timesteps.long()
+        has_prev = self._loss_ema_prev[t_idx].abs() > 1e-6
         prev = self._loss_ema_prev[t_idx].abs().clamp(min=1e-8)
         change = (self._loss_ema[t_idx] - self._loss_ema_prev[t_idx]).abs() / prev
+        # Mask out timesteps with no prior observation to avoid 0→loss spike
+        change = torch.where(has_prev, change, torch.zeros_like(change))
         weights = 1.0 + change * 3.0  # Scale factor for impact (relative)
 
         # Normalize to mean=1 to not affect overall loss magnitude
@@ -383,10 +390,13 @@ class AsyncGPUPrefetcher:
                     self.device, dtype=self.dtype if val.is_floating_point() else val.dtype,
                     non_blocking=True,
                 )
-            elif isinstance(val, (list, tuple)) and all(isinstance(v, torch.Tensor) for v in val):
+            elif isinstance(val, (list, tuple)) and any(isinstance(v, torch.Tensor) for v in val):
+                # TE cache tuples may contain None entries (absent pooled output).
+                # Transfer tensors, pass through None.
                 result[key] = type(val)(
                     v.to(self.device, dtype=self.dtype if v.is_floating_point() else v.dtype,
                          non_blocking=True)
+                    if isinstance(v, torch.Tensor) else v
                     for v in val
                 )
             else:
@@ -717,9 +727,9 @@ class FusedBackwardPass:
             denom = (state["exp_avg_sq"].sqrt() / (bc2 ** 0.5)).add_(eps)
             p.data.addcdiv_(state["exp_avg"], denom, value=-step_size)
         else:
-            # SGD-style update
+            # SGD-style update with decoupled weight decay (consistent with AdamW path)
             if wd > 0:
-                grad = grad.add(p.data, alpha=wd)
+                p.data.mul_(1 - lr * wd)
             momentum = group.get("momentum", 0)
             if momentum > 0:
                 state = self.optimizer.state.get(p, {})
