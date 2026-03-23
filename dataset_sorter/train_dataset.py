@@ -264,6 +264,9 @@ class CachedTrainDataset(Dataset):
             compute_file_hashes, save_tensors_parallel,
         )
 
+        if vae is None:
+            log.warning("VAE is None — skipping latent caching (model has no VAE)")
+            return
         vae.eval()
         vae.requires_grad_(False)
 
