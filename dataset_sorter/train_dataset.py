@@ -746,7 +746,7 @@ class CachedTrainDataset(Dataset):
                         # _skip = max(clip_skip, 1), clamped to available layers.
                         _skip = max(clip_skip, 1)
                         _skip = min(_skip, len(_uncond_out.hidden_states) - 2)
-                        _h = _uncond_out.hidden_states[-(_skip + 1)]
+                        _h = _uncond_out.hidden_states[-(_skip + 1)].squeeze(0)
                         if caption_preprocessor is not None:
                             # LLM path (Z-Image): store attention mask, not pooled
                             _uncond_tok = tokenizer(
@@ -754,10 +754,10 @@ class CachedTrainDataset(Dataset):
                                 max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
                                 truncation=True, return_tensors="pt",
                             )
-                            _p = _uncond_tok["attention_mask"].cpu()
+                            _p = _uncond_tok["attention_mask"].squeeze(0).cpu()
                         else:
                             _p = getattr(_uncond_out, "text_embeds", getattr(_uncond_out, "pooler_output", None))
-                        uncond_parts = [_h.cpu(), _p.cpu() if (_p is not None and hasattr(_p, 'cpu')) else _p]
+                        uncond_parts = [_h.cpu(), _p.squeeze(0).cpu() if (_p is not None and hasattr(_p, 'cpu')) else _p]
 
                         if tokenizer_2 is not None and text_encoder_2 is not None:
                             _ml2 = tokenizer_2.model_max_length if max_token_length_2 <= 0 else max_token_length_2
@@ -768,9 +768,9 @@ class CachedTrainDataset(Dataset):
                             _uncond_out2 = text_encoder_2(_uncond_inputs2, output_hidden_states=True)
                             _skip2 = max(clip_skip, 1)
                             _skip2 = min(_skip2, len(_uncond_out2.hidden_states) - 2)
-                            _h2 = _uncond_out2.hidden_states[-(_skip2 + 1)]
+                            _h2 = _uncond_out2.hidden_states[-(_skip2 + 1)].squeeze(0)
                             _p2 = getattr(_uncond_out2, "text_embeds", getattr(_uncond_out2, "pooler_output", None))
-                            uncond_parts.extend([_h2.cpu(), _p2.cpu() if _p2 is not None else None])
+                            uncond_parts.extend([_h2.cpu(), _p2.squeeze(0).cpu() if _p2 is not None else None])
 
                         if tokenizer_3 is not None and text_encoder_3 is not None:
                             _uncond_inputs3 = tokenizer_3(
@@ -778,7 +778,7 @@ class CachedTrainDataset(Dataset):
                                 max_length=512, truncation=True, return_tensors="pt",
                             ).input_ids.to(device)
                             _uncond_out3 = text_encoder_3(_uncond_inputs3)
-                            uncond_parts.append(_uncond_out3.last_hidden_state.cpu())
+                            uncond_parts.append(_uncond_out3.last_hidden_state.squeeze(0).cpu())
 
                         self._te_uncond_cache = tuple(uncond_parts)
                 log.info("Cached unconditional TE output for caption dropout")
