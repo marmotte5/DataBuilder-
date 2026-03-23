@@ -383,13 +383,16 @@ class Trainer:
         # ── 6. Create dataset (with optional aspect ratio bucketing) ──
         cache_dir = None
         if config.cache_latents_to_disk:
+            # Include model type in cache path to prevent stale latent collisions
+            # when switching models (different VAEs produce different latent distributions).
+            _model_tag = self.backend.model_name
             if config.cache_to_ram_disk and Path("/dev/shm").is_dir():
                 # Use tmpfs RAM disk for faster cache I/O (Linux only)
-                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}"
+                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}" / _model_tag
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 log.info(f"Using RAM disk for cache: {cache_dir}")
             else:
-                cache_dir = output_dir / ".cache"
+                cache_dir = output_dir / ".cache" / _model_tag
                 if config.cache_to_ram_disk:
                     log.warning("cache_to_ram_disk=True but /dev/shm not available, using disk cache")
 
