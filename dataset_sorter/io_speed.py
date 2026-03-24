@@ -975,6 +975,9 @@ def compute_optimal_workers(
     Uses os.cpu_count() and os.sched_getaffinity() for accurate core count
     (important in containers where cpu_count() may be wrong).
     """
+    import sys
+    if sys.platform == "darwin":
+        return 0
     if num_cpu_cores is None:
         try:
             num_cpu_cores = len(os.sched_getaffinity(0))

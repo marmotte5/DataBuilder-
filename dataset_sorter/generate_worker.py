@@ -841,6 +841,50 @@ class GenerateWorker(QThread):
         )
         return None
 
+    def _remap_peft_lora_file(self, path: str) -> str | None:
+        """Convert PEFT-format LoRA keys to diffusers format.
+
+        PEFT saves LoRA weights with a 'base_model.model.' prefix, which
+        diffusers does not understand. This remaps the keys to the expected
+        'unet.' or 'transformer.' prefix, saves to a temp file, and returns
+        the temp path. Returns None if no remapping is needed.
+        """
+        try:
+            from safetensors import safe_open
+            from safetensors.torch import save_file
+            import tempfile
+            import torch
+
+            keys_to_check: list[str] = []
+            with safe_open(path, framework="pt", device="cpu") as f:
+                keys_to_check = list(f.keys())
+
+            if not any(k.startswith("base_model.model.") for k in keys_to_check):
+                return None
+
+            # Determine target prefix: transformer-based (DiT) or unet-based
+            # Heuristic: if any key contains 'transformer', use that prefix
+            has_transformer = any("transformer" in k for k in keys_to_check)
+            target_prefix = "transformer." if has_transformer else "unet."
+
+            tensors: dict[str, torch.Tensor] = {}
+            with safe_open(path, framework="pt", device="cpu") as f:
+                for key in keys_to_check:
+                    new_key = key.removeprefix("base_model.model.")
+                    if not new_key.startswith(("unet.", "transformer.", "text_encoder")):
+                        new_key = target_prefix + new_key
+                    tensors[new_key] = f.get_tensor(key)
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False)
+            tmp.close()
+            save_file(tensors, tmp.name)
+            log.info(f"Remapped PEFT LoRA keys to diffusers format: {path} -> {tmp.name}")
+            return tmp.name
+
+        except Exception as e:
+            log.warning(f"Could not remap PEFT LoRA keys for {path}: {e}")
+            return None
+
     def _load_loras(self, pipe, adapters: list[dict]):
         """Load one or more LoRA/DoRA adapters into the pipeline.
 
@@ -867,8 +911,15 @@ class GenerateWorker(QThread):
                 load_kwargs = {"adapter_name": name}
 
                 if p.is_file():
-                    load_kwargs["weight_name"] = p.name
-                    load_dir = str(p.parent)
+                    # Remap PEFT-format keys if needed before loading
+                    remapped = self._remap_peft_lora_file(str(p))
+                    if remapped:
+                        rp = Path(remapped)
+                        load_kwargs["weight_name"] = rp.name
+                        load_dir = str(rp.parent)
+                    else:
+                        load_kwargs["weight_name"] = p.name
+                        load_dir = str(p.parent)
                 else:
                     load_dir = str(p)
 
