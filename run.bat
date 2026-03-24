@@ -2,6 +2,9 @@
 :: Launch DataBuilder
 title DataBuilder
 
+echo Mise a jour...
+git pull --ff-only 2>nul || echo Pas de connexion, lancement avec la version locale
+
 if exist "venv\Scripts\activate.bat" (
     call venv\Scripts\activate.bat
 ) else (

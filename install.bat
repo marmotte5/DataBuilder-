@@ -14,6 +14,9 @@ setlocal enabledelayedexpansion
 title DataBuilder Installer
 color 0A
 
+echo Mise a jour...
+git pull --ff-only 2>nul || echo Pas de connexion, installation avec la version locale
+
 echo.
 echo  =============================================================
 echo     DataBuilder - Installer
