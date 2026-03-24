@@ -18,6 +18,12 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from dataset_sorter.constants import (
+    DEFAULT_CFG_SCALE,
+    DEFAULT_IMG2IMG_STRENGTH,
+    DEFAULT_INFERENCE_STEPS,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -279,8 +285,8 @@ class GenerateWorker(QThread):
         self.positive_prompt = ""
         self.negative_prompt = ""
         self.scheduler_name = "euler_a"
-        self.steps = 28
-        self.cfg_scale = 7.0
+        self.steps = DEFAULT_INFERENCE_STEPS
+        self.cfg_scale = DEFAULT_CFG_SCALE
         self.width = 1024
         self.height = 1024
         self.seed = -1  # -1 = random
@@ -290,7 +296,7 @@ class GenerateWorker(QThread):
         # img2img / inpainting
         self.init_image: Optional[Image.Image] = None   # img2img input
         self.mask_image: Optional[Image.Image] = None    # inpainting mask
-        self.strength = 0.75  # img2img denoising strength (0-1)
+        self.strength = DEFAULT_IMG2IMG_STRENGTH  # img2img denoising strength (0-1)
 
         # Speed optimizations
         self.taylorseer_enabled = False  # TaylorSeer inference cache

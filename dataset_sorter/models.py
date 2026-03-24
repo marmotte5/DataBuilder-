@@ -4,6 +4,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from dataset_sorter.constants import (
+    DEFAULT_EMA_DECAY,
+    DEFAULT_LORA_ALPHA,
+    DEFAULT_LORA_RANK,
+    DEFAULT_LR_LORA,
+    DEFAULT_LR_TEXT_ENCODER,
+    DEFAULT_MAX_GRAD_NORM,
+    DEFAULT_WEIGHT_DECAY,
+)
+
 
 @dataclass
 class TrainingConfig:
@@ -24,11 +34,11 @@ class TrainingConfig:
     clip_skip: int = 0              # 0 = auto, 1 = last layer, 2 = skip last
 
     # ── Learning ───────────────────────────────────────────────────────
-    learning_rate: float = 1e-4
+    learning_rate: float = DEFAULT_LR_LORA
     lr_scheduler: str = "cosine"
 
     # ── Text encoder ───────────────────────────────────────────────────
-    text_encoder_lr: float = 5e-5
+    text_encoder_lr: float = DEFAULT_LR_TEXT_ENCODER
     train_text_encoder: bool = True
     train_text_encoder_2: bool = True
 
@@ -45,8 +55,8 @@ class TrainingConfig:
 
     # ── Network ────────────────────────────────────────────────────────
     network_type: str = "lora"
-    lora_rank: int = 32
-    lora_alpha: int = 16
+    lora_rank: int = DEFAULT_LORA_RANK
+    lora_alpha: int = DEFAULT_LORA_ALPHA
     conv_rank: int = 0              # Conv layer rank (LoRA-C / LoCon)
     conv_alpha: int = 0             # Conv layer alpha
 
@@ -58,7 +68,7 @@ class TrainingConfig:
 
     # ── Optimizer ──────────────────────────────────────────────────────
     optimizer: str = "Adafactor"
-    weight_decay: float = 0.01
+    weight_decay: float = DEFAULT_WEIGHT_DECAY
     adafactor_relative_step: bool = False
     adafactor_scale_parameter: bool = False
     adafactor_warmup_init: bool = False
@@ -85,7 +95,7 @@ class TrainingConfig:
 
     # ── EMA ────────────────────────────────────────────────────────────
     use_ema: bool = False
-    ema_decay: float = 0.9999
+    ema_decay: float = DEFAULT_EMA_DECAY
     ema_cpu_offload: bool = False   # Offload EMA weights to CPU RAM
 
     # ── Memory & CUDA ──────────────────────────────────────────────────
@@ -224,7 +234,7 @@ class TrainingConfig:
     timestep_ema_num_buckets: int = 20     # Number of timestep buckets for EMA tracking
 
     # ── Regularization ─────────────────────────────────────────────────
-    max_grad_norm: float = 1.0      # Gradient clipping
+    max_grad_norm: float = DEFAULT_MAX_GRAD_NORM      # Gradient clipping
 
     # ── Smart Resume ─────────────────────────────────────────────────
     smart_resume: bool = False          # Analyse loss curve on resume and auto-adjust
@@ -298,7 +308,7 @@ class TrainingConfig:
 
     # ── Adversarial Fine-tuning ────────────────────────────────────────
     adversarial_enabled: bool = False       # Enable adversarial (GAN-like) training
-    adversarial_disc_lr: float = 1e-4      # Discriminator learning rate
+    adversarial_disc_lr: float = DEFAULT_LR_LORA      # Discriminator learning rate
     adversarial_weight: float = 0.1        # Adversarial loss weight
     adversarial_start_step: int = 100      # Step to activate discriminator
     adversarial_feature_match: bool = True  # Use feature matching loss

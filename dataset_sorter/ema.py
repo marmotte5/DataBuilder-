@@ -11,6 +11,8 @@ from typing import Iterable
 import torch
 import torch.nn as nn
 
+from dataset_sorter.constants import DEFAULT_EMA_DECAY
+
 log = logging.getLogger(__name__)
 
 
@@ -20,7 +22,7 @@ class EMAModel:
     def __init__(
         self,
         parameters: Iterable[nn.Parameter],
-        decay: float = 0.9999,
+        decay: float = DEFAULT_EMA_DECAY,
         cpu_offload: bool = False,
         update_after_step: int = 0,
     ):

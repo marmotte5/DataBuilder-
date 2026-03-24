@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from dataset_sorter.constants import MTIME_TOLERANCE, SQLITE_TIMEOUT
+
 log = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
@@ -71,7 +73,7 @@ class MetadataCache:
         """Per-thread connection (SQLite is not thread-safe by default)."""
         if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(
-                str(self.db_path), timeout=10.0,
+                str(self.db_path), timeout=SQLITE_TIMEOUT,
             )
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
@@ -109,7 +111,7 @@ class MetadataCache:
             return None
         try:
             st = os.stat(path)
-            if abs(st.st_mtime - info["mtime"]) < 0.01 and st.st_size == info["size_bytes"]:
+            if abs(st.st_mtime - info["mtime"]) < MTIME_TOLERANCE and st.st_size == info["size_bytes"]:
                 return info
         except OSError:
             pass
