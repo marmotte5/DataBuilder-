@@ -397,7 +397,7 @@ class TestRecommender:
     def test_prodigy_optimizer(self):
         cfg = self._recommend(optimizer="Prodigy")
         assert cfg.optimizer == "Prodigy"
-        # Prodigy uses cosine scheduler (official repo recommendation)
+        # Prodigy uses cosine scheduler (official recommendation)
         assert cfg.lr_scheduler == "cosine"
 
     def test_adamw_optimizer(self):
@@ -1677,8 +1677,7 @@ class TestGenerateWorkerNewFeatures:
         w.height = 1024
         w.clip_skip = 0
 
-        pnginfo, _ = w._build_png_metadata(seed=123)
-        params_text = self._extract_chunk_text(pnginfo, "parameters")
+        pnginfo, params_text = w._build_png_metadata(seed=123)
         assert "lora:style_v1:0.8" in params_text
         assert "lora:character:1.0" in params_text
 
@@ -1700,8 +1699,7 @@ class TestGenerateWorkerNewFeatures:
         w.init_image = PILImage.new("RGB", (512, 512))
         w.strength = 0.65
 
-        pnginfo, _ = w._build_png_metadata(seed=99)
-        params_text = self._extract_chunk_text(pnginfo, "parameters")
+        pnginfo, params_text = w._build_png_metadata(seed=99)
         assert "Denoising strength: 0.65" in params_text
 
     def test_get_pipeline_for_mode_txt2img(self):
@@ -2006,7 +2004,7 @@ class TestCachedTrainDatasetBucketing:
 class TestCrossPlatformScripts:
     """Test that launch scripts exist and are valid."""
 
-    # Project root is two levels up from this test file (tests/test_all_logic.py)
+    # Resolve project root dynamically so tests work on any machine
     ROOT = Path(__file__).parent.parent
 
     def test_run_sh_exists(self):
