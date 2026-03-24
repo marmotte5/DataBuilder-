@@ -228,6 +228,112 @@ class TrainingHistory:
             f"avg time={avg_time_s}"
         )
 
+    def export_csv(self, output_path: str | Path, model_type: str = "") -> int:
+        """Export training run history to a CSV file.
+
+        Args:
+            output_path: Destination .csv path.
+            model_type: If provided, export only runs of this model type.
+
+        Returns:
+            Number of rows written.
+        """
+        import csv
+        import datetime
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if model_type:
+            rows = self._conn.execute(
+                "SELECT * FROM training_runs WHERE model_type = ? ORDER BY timestamp ASC",
+                (model_type,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM training_runs ORDER BY timestamp ASC"
+            ).fetchall()
+
+        if not rows:
+            log.info("No runs to export (model_type=%r)", model_type)
+            return 0
+
+        # Build column list, replacing loss_curve_json with loss_curve_len
+        columns = [desc[0] for desc in self._conn.execute(
+            "SELECT * FROM training_runs LIMIT 0"
+        ).description]
+        export_columns = [
+            c if c != "loss_curve_json" else "loss_curve_len"
+            for c in columns
+        ]
+
+        with output_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=export_columns)
+            writer.writeheader()
+            for row in rows:
+                d = dict(row)
+                curve = d.pop("loss_curve_json", None)
+                d["loss_curve_len"] = len(json.loads(curve)) if curve else 0
+                # Human-readable timestamp
+                if d.get("timestamp"):
+                    d["timestamp"] = datetime.datetime.fromtimestamp(
+                        d["timestamp"]
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                writer.writerow(d)
+
+        log.info("Exported %d training runs to %s", len(rows), output_path)
+        return len(rows)
+
+    def export_loss_curves_csv(self, output_path: str | Path, model_type: str = "") -> int:
+        """Export flattened step-level loss data to CSV for plotting.
+
+        One row per (run_id, step) pair — suitable for plotting loss curves
+        in Excel, Pandas, or any visualisation tool.
+
+        Returns:
+            Total number of step rows written.
+        """
+        import csv
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if model_type:
+            rows = self._conn.execute(
+                "SELECT id, timestamp, model_type, optimizer, learning_rate, "
+                "loss_curve_json FROM training_runs "
+                "WHERE model_type = ? ORDER BY timestamp ASC",
+                (model_type,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, timestamp, model_type, optimizer, learning_rate, "
+                "loss_curve_json FROM training_runs ORDER BY timestamp ASC"
+            ).fetchall()
+
+        total_steps = 0
+        with output_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh, fieldnames=["run_id", "model_type", "optimizer", "learning_rate", "step", "loss"]
+            )
+            writer.writeheader()
+            for row in rows:
+                # loss_curve_json is a list[float] (loss values, no step info)
+                curve: list[float] = json.loads(row["loss_curve_json"]) if row["loss_curve_json"] else []
+                for step_idx, loss_val in enumerate(curve):
+                    writer.writerow({
+                        "run_id": row["id"],
+                        "model_type": row["model_type"],
+                        "optimizer": row["optimizer"],
+                        "learning_rate": row["learning_rate"],
+                        "step": step_idx,
+                        "loss": loss_val,
+                    })
+                    total_steps += 1
+
+        log.info("Exported %d loss-curve steps to %s", total_steps, output_path)
+        return total_steps
+
     def close(self):
         """Close database connection."""
         self._conn.close()
