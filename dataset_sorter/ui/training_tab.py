@@ -212,6 +212,33 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_out.clicked.connect(self._browse_output)
         paths_grid.addWidget(btn_out, 1, 2)
 
+        # Resume from checkpoint row
+        self._resume_lbl = self._muted("Resume From")
+        paths_grid.addWidget(self._resume_lbl, 2, 0)
+        self.resume_from_input = QLineEdit()
+        self.resume_from_input.setPlaceholderText("(auto-detected) checkpoint directory to resume from...")
+        self.resume_from_input.setToolTip(
+            "Path to a checkpoint directory to resume training from. "
+            "Auto-filled when a resumable checkpoint is found in the output directory."
+        )
+        paths_grid.addWidget(self.resume_from_input, 2, 1)
+        _resume_btn_row_widget = QWidget()
+        _resume_btn_row_layout = QHBoxLayout(_resume_btn_row_widget)
+        _resume_btn_row_layout.setContentsMargins(0, 0, 0, 0)
+        _resume_btn_row_layout.setSpacing(4)
+        btn_resume_browse = QPushButton("Browse")
+        btn_resume_browse.setToolTip("Browse for a checkpoint directory to resume from")
+        btn_resume_browse.clicked.connect(self._browse_resume_checkpoint)
+        _resume_btn_row_layout.addWidget(btn_resume_browse)
+        btn_resume_clear = QPushButton("Clear")
+        btn_resume_clear.setToolTip("Clear the resume-from path (start fresh)")
+        btn_resume_clear.clicked.connect(self.resume_from_input.clear)
+        _resume_btn_row_layout.addWidget(btn_resume_clear)
+        paths_grid.addWidget(_resume_btn_row_widget, 2, 2)
+
+        # Auto-detect resume checkpoint when output dir changes
+        self.output_dir_input.textChanged.connect(self._auto_detect_resume_checkpoint)
+
         main_layout.addLayout(paths_grid)
 
         # Training presets
@@ -554,6 +581,32 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         if path:
             self.output_dir_input.setText(path)
 
+    def _browse_resume_checkpoint(self):
+        """Open a directory picker to select a specific checkpoint to resume from."""
+        output_dir = self.output_dir_input.text().strip()
+        start_dir = str(Path(output_dir) / "checkpoints") if output_dir else ""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Checkpoint to Resume From", start_dir,
+        )
+        if path:
+            self.resume_from_input.setText(path)
+
+    def _auto_detect_resume_checkpoint(self, output_dir_text: str):
+        """Auto-fill the resume-from field with the latest resumable checkpoint."""
+        # Only auto-fill if the field is empty (don't overwrite a user's choice)
+        if self.resume_from_input.text().strip():
+            return
+        output_dir = output_dir_text.strip()
+        if not output_dir:
+            return
+        try:
+            from dataset_sorter.training_state_manager import TrainingStateManager
+            latest = TrainingStateManager.get_latest_resumable_checkpoint(Path(output_dir))
+            if latest is not None:
+                self.resume_from_input.setText(str(latest))
+        except Exception:
+            pass
+
     def _log(self, msg: str):
         """Append a message to the training log and auto-scroll to the bottom."""
         self.log_output.append(msg)
@@ -679,6 +732,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._disconnect_training_worker()
             self._training_worker = None
 
+        resume_from = self.resume_from_input.text().strip() or None
+
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
         self._training_worker = TrainingWorker(
             config=config,
@@ -687,7 +742,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             captions=captions,
             output_dir=output_dir,
             sample_prompts=config.sample_prompts or None,
+            resume_from=resume_from,
         )
+        if resume_from:
+            self._log(f"Resume: {resume_from}")
         self._training_worker.progress.connect(self._on_progress)
         self._training_worker.loss_update.connect(self._on_loss)
         self._training_worker.sample_generated.connect(self._on_sample)
