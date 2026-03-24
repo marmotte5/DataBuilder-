@@ -175,6 +175,63 @@ On headless Linux or minimal installations:
 sudo apt-get install libegl1 libgl1
 ```
 
+#### macOS / Apple Silicon
+
+> Tested on M1, M1 Pro/Max, M2, M3 series. Training runs on the MPS backend.
+
+**Hardware requirements**
+
+| Tier | Hardware | What you can train |
+|---|---|---|
+| Minimum | M1 8 GB | LoRA SD 1.5 @ 256 px, batch=1 |
+| Recommended | M1 Pro/Max 16 GB+ | LoRA SDXL @ 512 px |
+| Ideal | M2 Ultra 64 GB+ | Full fine-tune |
+
+**Prerequisites**
+
+```bash
+# 1. Install Xcode Command Line Tools (required for compilers)
+xcode-select --install
+
+# 2. Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 3. Install Python 3.10+ via Homebrew (do NOT use the macOS system Python)
+brew install python@3.10
+```
+
+**Installation**
+
+```bash
+# Clone and enter the repo
+git clone https://github.com/marmotte5/DataBuilder-.git
+cd DataBuilder-
+
+# Create a virtual environment with the Homebrew Python
+python3.10 -m venv .venv
+source .venv/bin/activate
+
+# Install PyTorch — MPS support is built-in, no special index URL needed
+pip install torch torchvision
+
+# Install DataBuilder with training support
+# Use [training] instead of [all] on macOS — [all] pulls in flash-attn,
+# triton, and transformer-engine which are CUDA-only and will fail to build.
+pip install -e ".[training]"
+
+# Launch
+.venv/bin/dataset-sorter
+# or: python -m dataset_sorter
+```
+
+**Known MPS limitations**
+
+- FP16 training is not stable on MPS — DataBuilder automatically falls back to BF16/FP32.
+- `flash-attn`, `triton`, and `transformer-engine` are CUDA-only; skip the `[speed]` and `[all]` extras.
+- `bitsandbytes` has limited MPS support; 8-bit/4-bit quantised optimizers will not be available.
+- `num_workers > 0` in the DataLoader can cause hangs on macOS — DataBuilder sets `num_workers=0` automatically when MPS is detected.
+- `torch.compile` requires `triton` (not available on MPS) and is automatically disabled.
+
 ---
 
 ## Your First LoRA in 5 Steps
