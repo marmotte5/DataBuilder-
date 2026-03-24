@@ -435,6 +435,10 @@ class TestAdaptiveWorkers:
         n = compute_optimal_workers(1000, latents_cached=True, te_cached=True, num_cpu_cores=8)
         assert n <= 2
 
+    @pytest.mark.skipif(
+        __import__("sys").platform == "darwin",
+        reason="macOS forces num_workers=0 for multiprocessing compatibility",
+    )
     def test_uncached_more_workers(self):
         """Uncached dataset should use more workers."""
         n = compute_optimal_workers(1000, latents_cached=False, te_cached=False, num_cpu_cores=8)

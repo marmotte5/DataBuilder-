@@ -559,7 +559,7 @@ def recommend(
     # --- Contextual notes ---
     config.notes = _build_notes(
         model_type, vram_gb, total_images, diversity, size_cat,
-        is_lora, is_flux, is_sd3, is_sd35, is_pony, is_zimage,
+        is_lora, is_flux, is_sd3, is_sd35, is_pony, is_zimage, is_sd15,
         max_bucket_images, num_active_buckets,
         optimizer, network_type, config, used_fallback,
     )
@@ -574,7 +574,7 @@ def recommend(
 def _build_notes(
     model_type: str, vram_gb: int, total_images: int,
     diversity: float, size_cat: str, is_lora: bool,
-    is_flux: bool, is_sd3: bool, is_sd35: bool, is_pony: bool, is_zimage: bool,
+    is_flux: bool, is_sd3: bool, is_sd35: bool, is_pony: bool, is_zimage: bool, is_sd15: bool,
     max_bucket_images: int, num_active_buckets: int,
     optimizer: str, network_type: str,
     config: TrainingConfig, used_fallback: bool,
