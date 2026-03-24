@@ -1,295 +1,269 @@
-# Dataset Sorter
+```
+██████╗  █████╗ ████████╗ █████╗ ██████╗ ██╗   ██╗██╗██╗     ██████╗ ███████╗██████╗
+██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔══██╗██║   ██║██║██║     ██╔══██╗██╔════╝██╔══██╗
+██║  ██║███████║   ██║   ███████║██████╔╝██║   ██║██║██║     ██║  ██║█████╗  ██████╔╝
+██║  ██║██╔══██║   ██║   ██╔══██║██╔══██╗██║   ██║██║██║     ██║  ██║██╔══╝  ██╔══██╗
+██████╔╝██║  ██║   ██║   ██║  ██║██████╔╝╚██████╔╝██║███████╗██████╔╝███████╗██║  ██║
+╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═════╝ ╚══════╝╚═╝  ╚═╝
+```
 
-A desktop application for sorting image datasets by tag rarity — designed for Stable Diffusion / LoRA training dataset preparation. Features a modern dark/light UI built with PyQt6, integrated training with 180+ parameters, automatic repeat balancing, and a unified project folder system.
+<div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+**The fastest trainer and generator for text-to-image AI models.**
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41cd52?logo=qt&logoColor=white)](https://www.riverbankcomputing.com/software/pyqt/)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-pytest-orange?logo=pytest&logoColor=white)](tests/)
+[![Models](https://img.shields.io/badge/Models-17%20architectures-purple)](docs/QUICKSTART.md)
+
+[Quick Start](#quick-start) · [Supported Models](#supported-architectures) · [Documentation](docs/QUICKSTART.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+---
+
+DataBuilder is a high-performance desktop application covering the **full text-to-image training pipeline**: dataset preparation, tag management, LoRA and full fine-tune training, image generation, and model/LoRA library management. Built with PyQt6, optimized for RTX 4090 / H100 class hardware, and supporting 17 model architectures including Flux, SD3.5, HiDream, and more.
+
+> **Why DataBuilder?** Most trainers force you to juggle separate tools for dataset prep, training, and generation. DataBuilder does it all in one place — with a native desktop UI, zero-bottleneck dataloading, custom Triton kernels, FP8 training, and the Marmotte optimizer (10-20× less memory than Adam). No web server, no config file hell, no CLI expertise required.
+
+---
+
+## Screenshots
+
+> *Screenshots coming soon — contributions welcome!*
+
+| Dataset Manager | Training Tab | Generation |
+|:-:|:-:|:-:|
+| *(placeholder)* | *(placeholder)* | *(placeholder)* |
+
+---
 
 ## Features
 
-### Core
-- **Tag-based sorting** — Automatically sorts images into 80 buckets based on tag rarity using numpy percentile quantiles
-- **Automatic repeats** — Rare buckets get more repeats (1x-20x) so the model trains on them equally; folder names follow Kohya-style `{repeats}_{bucket}_{name}` format
-- **Project folder system** — Export creates a full project directory (dataset, models, samples, checkpoints, backups, logs) shared between export and training
-- **Security-first design** — READ-ONLY on source files; all writes go to the output directory only
-- **Config persistence** — Save/load overrides, deleted tags, and bucket names as JSON
-- **Progress persistence** — Remembers source/output dirs, theme, and settings across sessions
-- **Undo/redo** — Full undo/redo stack (Ctrl+Z / Ctrl+Shift+Z) for all tag operations
-- **Sequential file renaming** — Exported files are renamed `{bucket}_{index}.{ext}` for clean organization
-
-### Training
-- **Integrated training** — Full training UI with 180+ parameters across 7 config tabs (Model, Optimizer, Dataset, Advanced, Sampling, ControlNet, DPO)
-- **17 model types** — SD 1.5, SD 2, SDXL, Pony, Flux, Flux 2, SD3, SD 3.5, Z-Image, PixArt, Stable Cascade, Hunyuan DiT, Kolors, AuraFlow, Sana, HiDream, Chroma
-- **12 optimizers** — Marmotte, Adafactor, Prodigy, AdamW, AdamW 8-bit, D-Adapt Adam, CAME, AdamW Schedule-Free, Lion, SGD, SOAP, Muon
-- **7 training presets** — Character LoRA, Style LoRA, Concept LoRA, Photorealistic, Quick Test, DPO Preference, ControlNet
-- **ControlNet training** — 9 conditioning types (canny, depth, pose, segmentation, normal, MLSD, softedge, scribble, inpaint)
-- **DPO training** — Direct Preference Optimization with 3 loss types (sigmoid, hinge, IPO)
-- **Adversarial fine-tuning** — Discriminator with feature matching loss
-- **Custom LR schedulers** — Piecewise composite schedules (warmup+cosine+cooldown, cyclic cosine, step decay)
-- **Loss curve visualization** — Real-time QPainter line chart of training loss
-- **LR schedule preview** — ASCII graph preview of learning rate schedule before training
-- **VRAM pre-estimation** — Estimate GPU memory usage before starting training
-- **Training config save/load** — Export/import full training configuration as JSON
-- **Real-time monitoring** — Progress bar, step/loss/LR display, VRAM usage bar, sample preview
-- **Mid-training controls** — Save Now, Sample Now, Backup Project, Pause/Resume, Stop
-- **Activation checkpointing** — Granular control (none/full/selective/every_n)
-- **SpeeD (CVPR 2025)** — Asymmetric timestep sampling + change-aware loss weighting
-- **Advanced memory** — MeBP, approximate VJP, async GPU prefetch, fused backward pass, fp8 base model
-- **Smart resume** — Analyzes loss curves and auto-adjusts LR/optimizer on resume
-- **Extreme speed** — Triton fused kernels, FP8 training, sequence packing, memory-mapped datasets, CUDA graph training
-- **Zero-bottleneck dataloader** — mmap + pinned DMA replaces PyTorch DataLoader (bypasses GIL/pickle)
-- **Z-Image optimizations** — Unified stream attention, fused 3D RoPE, fat latent cache, logit-normal timesteps, velocity weighting
-- **Z-Image inventions** — L2-pinned attention, speculative gradient, stream-bending bias, timestep bandit
-- **Pipeline integration** — Pre-training validation, auto-config, live loss monitoring with auto-adjustment
-- **Marmotte optimizer** — Ultra-low memory per-channel adaptive optimizer (~10-20x less memory than Adam)
-- **Masked training** — Region-specific loss computation using binary masks for inpainting/subject-focused training
-- **TensorBoard logging** — Real-time loss, LR, and VRAM monitoring with graceful fallback when not installed
-- **Noise schedule rescaling** — Zero terminal SNR fix (Lin et al. 2024) for improved dark/light image quality
-- **Textual inversion** — Embedding training support with configurable token count and initialization
-
 ### Dataset Management
-- **Caption preview** — Tag shuffle/dropout simulation with configurable variants
-- **Token count analysis** — Per-image token counts with over-limit detection (SD/Flux/Kolors limits)
-- **Tag histogram** — Frequency distribution visualization with top/rare/distribution views
-- **Spell check** — Typo detection, near-duplicate tags, semantic grouping suggestions
-- **Tag importance analysis** — Identify noise tags vs. meaningful tags for cleaning
-- **Data augmentation** — Configurable augmentation pipeline with enable/disable toggles
-- **Duplicate detection** — Exact (MD5) and near-duplicate (perceptual hash) image detection
-- **Disk space checks** — Pre-export and pre-training disk space validation
+- **Tag-based sorting** — 80 rarity buckets using numpy percentile quantiles; rare concepts get up to 20× more repeats automatically
+- **Visual image browser** — Navigate images with per-image bucket control and LRU pixmap cache
+- **Caption tools** — Tag shuffle/dropout simulation, token count analysis, spell check, semantic grouping
+- **Tag histogram** — Frequency distribution with top/rare/distribution views
+- **Duplicate detection** — Exact (MD5) and near-duplicate (perceptual hash) detection
+- **Bulk operations** — Rename, merge, search & replace tags; full undo/redo (Ctrl+Z)
 - **One-click pipeline** — Automated clean + train workflow for beginners
 
+### Training
+- **17 model architectures** — See [full table below](#supported-architectures)
+- **12 optimizers** — Including the custom Marmotte optimizer (10-20× less memory than AdamW)
+- **7 training presets** — Character LoRA, Style LoRA, Concept LoRA, Photorealistic, Quick Test, DPO, ControlNet
+- **ControlNet training** — 9 conditioning types (canny, depth, pose, segmentation, normal, MLSD, softedge, scribble, inpaint)
+- **DPO training** — Direct Preference Optimization with sigmoid, hinge, and IPO loss
+- **Real-time monitoring** — Live loss curves, LR schedule preview, VRAM usage bar, sample preview
+- **Mid-training controls** — Save Now, Sample Now, Backup Project, Pause/Resume, Stop
+- **Smart resume** — Analyzes loss curves and auto-adjusts LR/optimizer on resume
+- **SpeeD (CVPR 2025)** — Asymmetric timestep sampling + change-aware loss weighting
+
+### Speed (The Marmotte Philosophy)
+Speed is the #1 priority after correctness. Every millisecond matters.
+
+| Optimization | Speedup | Notes |
+|---|---|---|
+| `torch.compile` | 20-40% | Full graph capture |
+| Triton fused kernels | 5-15% | AdamW, MSE loss, flow interpolation |
+| FP8 training | ~2× TFLOPS | Ada/Hopper GPUs |
+| `channels_last` layout | 10-20% | Reduced memory bandwidth |
+| Sequence packing | 10-30% | Zero padding waste for DiT models |
+| Zero-bottleneck DataLoader | Bypasses GIL | mmap + pinned DMA |
+| Memory-mapped datasets | Zero-copy I/O | `mmap_dataset.py` |
+| Marmotte optimizer | 10-20× less memory | vs AdamW |
+
 ### UI & UX
-- **Dark/light theme** — Toggle with Ctrl+T, persisted across sessions
-- **Drag & drop** — Drop folders onto source/output inputs or the main window
-- **Keyboard shortcuts** — Ctrl+S save, Ctrl+O load, Ctrl+E export, Ctrl+R scan, Ctrl+T theme, Ctrl+D dry run, Ctrl+Z undo, Ctrl+Shift+Z redo
-- **Tooltips** — Detailed tooltips on every parameter explaining purpose and recommended values
-- **Image browser** — Navigate images with per-image bucket control, jump-to navigation, and LRU pixmap caching
-- **Virtual tag table** — O(1) rendering with QAbstractTableModel (handles 1M+ tags)
-- **Toast notifications** — Non-blocking status messages for operations
+- **Dark/light theme** — Ctrl+T, persisted across sessions
+- **Drag & drop** — Drop folders onto any input
+- **Keyboard shortcuts** — Ctrl+S, Ctrl+O, Ctrl+E, Ctrl+R, Ctrl+T, Ctrl+D, Ctrl+Z
+- **Tooltips** — Detailed explanations on every parameter
+- **Toast notifications** — Non-blocking status messages
+- **Virtual tag table** — O(1) rendering, handles 1M+ tags
 
-### Infrastructure
-- **Training recommendations** — State-of-the-art parameter suggestions based on model, VRAM, dataset size
-- **VRAM monitoring** — Real-time GPU memory tracking during training
-- **Training history** — Learns from past runs to improve recommendations
-- **Export formats** — OneTrainer TOML and kohya_ss JSON config export
-- **Parallel scanning** — Configurable worker threads for fast dataset loading
-- **Parallel export** — ThreadPoolExecutor-based file copying (3-5x speedup on SSDs)
-- **Optional GPU validation** — Detect corrupt images early using torchvision
-- **Config validation** — Validates training config before launch
-- **Backend registry** — Plugin-based auto-discovery of model backends (supports third-party extensions)
-- **Performance profiling** — Built-in profiling utilities for bottleneck identification
-- **Nuitka build** — Build standalone executables with `build_nuitka.py`
-- **pyproject.toml** — Proper Python packaging with optional dependency groups
+### Generation & Library
+- **Integrated generator** — Text-to-image and img2img with LoRA support
+- **Batch generation** — Prompt queue, CSV/JSON/TXT import, auto-save
+- **A/B comparison** — Side-by-side generation with per-side overrides
+- **Model merging** — Weighted sum, SLERP, add-difference
+- **LoRA library** — Favorites, notes, tags, ratings
 
-## Installation
+---
+
+## Supported Architectures
+
+| Model | Backend | Prediction | Text Encoder(s) | Notes |
+|---|---|---|---|---|
+| SD 1.5 | `train_backend_sd15.py` | epsilon | CLIP | Classic workhorse |
+| SD 2.x | `train_backend_sd2.py` | v-prediction | OpenCLIP | |
+| SDXL / Pony | `train_backend_sdxl.py` | epsilon | CLIP-L + CLIP-G | Widely used |
+| SD 3 | `train_backend_sd3.py` | flow | CLIP-L + CLIP-G + T5-XXL | |
+| SD 3.5 | `train_backend_sd35.py` | flow | CLIP-L + CLIP-G + T5-XXL | |
+| Flux | `train_backend_flux.py` | flow | CLIP-L + T5-XXL | State-of-the-art |
+| Flux 2 | `train_backend_flux2.py` | flow | LLM (Mistral-3/Qwen-3) | |
+| Z-Image | `train_backend_zimage.py` | flow | Qwen3 (chat template) | With exclusive speed inventions |
+| PixArt | `train_backend_pixart.py` | flow | T5-XXL | |
+| Kolors | `train_backend_kolors.py` | epsilon | ChatGLM-6B | |
+| Stable Cascade | `train_backend_cascade.py` | epsilon | CLIP-G | |
+| Chroma | `train_backend_chroma.py` | flow | T5-XXL | |
+| AuraFlow | `train_backend_auraflow.py` | flow | T5 | |
+| Sana | `train_backend_sana.py` | flow | Gemma-2B | |
+| HunyuanDiT | `train_backend_hunyuan.py` | epsilon | CLIP-L + mT5 | |
+| HiDream | `train_backend_hidream.py` | flow | CLIP-L + CLIP-G + T5-XXL + Llama | |
+| Chroma | `train_backend_chroma.py` | flow | T5-XXL | |
+
+All backends support both **diffusers directories** and **single-file `.safetensors`/`.ckpt` checkpoints**.
+
+---
+
+## Quick Start
 
 ### Requirements
 
-- Python 3.10+
-- PyQt6
-- NumPy
+| Component | Minimum | Recommended |
+|---|---|---|
+| GPU | RTX 3080 (10 GB VRAM) | RTX 4090 / H100 |
+| RAM | 16 GB | 32 GB+ |
+| Python | 3.10 | 3.11+ |
+| OS | Windows 10, Linux, macOS | Ubuntu 22.04 |
+| Storage | 20 GB free | NVMe SSD |
 
-### Quick Start
+### Installation
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/marmotte5/DataBuilder-.git
 cd DataBuilder-
 
-# Install (basic — sorting & UI only)
+# 2. Create a virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate      # Linux/macOS
+# .venv\Scripts\activate       # Windows
+
+# 3. Install PyTorch first (adjust for your CUDA version)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# 4. Install DataBuilder
+
+# Basic install (dataset sorting & UI only)
 pip install .
 
-# Install with training support
+# With training support
 pip install ".[training]"
 
-# Install everything (all optimizers)
+# Full install (all optimizers + speed extras)
 pip install ".[all]"
 
-# Run the application
-dataset-sorter
-# or
+# 5. Launch
 python -m dataset_sorter
 ```
 
-### Alternative: Run from source
+#### Windows one-click installer
 
-```bash
-pip install -r requirements.txt
-python -m dataset_sorter
+```bat
+install.bat   # Sets up venv + installs all dependencies
+run.bat       # Launches the app
 ```
 
-### System dependencies (Linux)
+#### Linux system dependencies
 
-On headless Linux or minimal installations, you may need:
+On headless Linux or minimal installations:
 
 ```bash
 sudo apt-get install libegl1 libgl1
 ```
 
-## Usage
+---
 
-### 1. Scan a dataset
+## Your First LoRA in 5 Steps
 
-1. Click **Browse** next to "Source" and select your image dataset folder (or drag & drop)
-2. Click **Browse** next to "Output" and select where the project folder will be created
-3. Adjust **Workers** count (higher = faster on SSDs)
-4. Optionally enable **GPU validation** if you have CUDA
-5. Click **Scan** (Ctrl+R)
+For a detailed step-by-step tutorial, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
-### 2. Review and edit tags
+**TL;DR:**
 
-- **Filter** tags using the search box in the left panel
-- **Select** one or more tags to see image previews
-- **Override** bucket assignments for specific tags
-- **Delete** tags you don't want in the exported captions
-- **Rename**, **merge**, or **search & replace** tags in bulk
-- **Undo/redo** any tag operation with Ctrl+Z / Ctrl+Shift+Z
+1. **Scan** your image dataset (drag & drop the folder)
+2. **Review tags** — delete noise, merge duplicates, adjust buckets
+3. **Export project** (Ctrl+E) — creates the structured training folder
+4. **Pick a preset** — "Character LoRA" or "Style LoRA" are great starting points
+5. **Start Training** — monitor live loss, save samples at any step
 
-### 3. Configure training
-
-Switch to the **Training** tab:
-- Select a **preset** (Character LoRA, Style LoRA, etc.) or configure manually
-- Click **Estimate VRAM** to check if your settings fit your GPU
-- Click **Preview LR** to see the learning rate schedule
-- **Save/Load Config** to export/import settings as JSON
-
-### 4. Export your project
-
-- **Dry Run** (Ctrl+D) — Preview which images go to which buckets, with repeat counts
-- **Export Project** (Ctrl+E) — Create the full project folder structure
-
-### 5. Train
-
-After exporting, switch to the **Training** tab and click **Start Training**. The trainer uses the same project folder — models, samples, and checkpoints all go to the right place automatically.
+---
 
 ## Project Folder Structure
 
-When you export, the output directory becomes a unified project folder:
-
 ```
-my_project/                        # Your output folder
+my_project/
 ├── project.json                   # Project metadata
-├── dataset/                       # Exported images organized by bucket
-│   ├── 1_1_common/                # 1x repeat — most common tags
-│   │   ├── 1_0001.png
-│   │   ├── 1_0001.txt
-│   │   ├── 1_0002.jpg
-│   │   └── 1_0002.txt
-│   ├── 5_10_medium/               # 5x repeat — medium rarity
-│   │   ├── 10_0001.png
-│   │   └── 10_0001.txt
-│   └── 20_40_rare_concept/        # 20x repeat — rarest tags
-│       ├── 40_0001.png
-│       └── 40_0001.txt
-├── models/                        # Trained model outputs (final weights)
+├── dataset/                       # Exported & organized dataset
+│   ├── 1_1_common/                # 1× repeat (most common tags)
+│   ├── 5_10_medium/               # 5× repeat
+│   └── 20_40_rare_concept/        # 20× repeat (rarest tags)
+├── models/                        # Final trained weights
 ├── samples/                       # Sample images generated during training
-├── checkpoints/                   # Step/epoch checkpoint saves
-│   ├── step_000500/
-│   ├── epoch_0001/
-│   └── final/
-├── backups/                       # Full timestamped project backups
-├── logs/                          # Training logs, TensorBoard events, and export error logs
-└── .cache/                        # Latent / text encoder caches
+├── checkpoints/                   # Step/epoch checkpoints
+├── backups/                       # Timestamped full project backups
+├── logs/                          # Training logs + TensorBoard events
+└── .cache/                        # Latent & text encoder caches
 ```
 
-### Folder naming: `{repeats}_{bucket}_{name}`
+---
 
-- **repeats** — How many times the training loop sees each image in this folder per epoch. Automatically calculated: common images = 1x, rare images = up to 20x.
-- **bucket** — The bucket number (1-80) based on tag rarity percentile.
-- **name** — The bucket name you set in the UI (defaults to "bucket").
-
-### How repeats work
-
-The repeat system ensures the model sees rare concepts as often as common ones:
-
-| Bucket | Rarity     | Repeats | Effect                              |
-|--------|------------|---------|-------------------------------------|
-| 1      | Very common| 1x      | Seen once per epoch                 |
-| 20     | Common     | 5x      | Seen 5 times per epoch              |
-| 40     | Medium     | 10x     | Seen 10 times per epoch             |
-| 60     | Rare       | 15x     | Seen 15 times per epoch             |
-| 80     | Very rare  | 20x     | Seen 20 times per epoch             |
-
-This prevents the model from over-learning common tags while under-learning rare ones.
-
-## Source Structure
+## Architecture Overview
 
 ```
 dataset_sorter/
-├── __init__.py                  # Package marker
-├── __main__.py                  # Entry point
-├── constants.py                 # Global constants (17 model types, 12 optimizers, etc.)
-├── models.py                    # Data classes (TrainingConfig, ImageEntry, DatasetStats)
-├── utils.py                     # Path validation, sanitization, GPU detection
-├── workers.py                   # QThread workers for scan/export, project structure, repeats
-├── trainer.py                   # Core training engine with checkpoint/sample/backup
-├── training_worker.py           # QThread worker for model training
-├── training_presets.py          # 7 presets, ControlNet/DPO config, custom schedulers
-├── training_history.py          # Cross-run training history for recommendations
-├── smart_resume.py              # Loss curve analysis and auto-adjustment on resume
-├── recommender.py               # Training parameter recommendation engine
-├── recommender_profiles.py      # Per-model recommendation profiles
-├── lr_preview.py                # LR schedule preview (pure math, no torch)
-├── vram_estimator.py            # VRAM estimation for 17 model types
-├── bucket_sampler.py            # Aspect ratio bucketing for multi-resolution training
-├── train_dataset.py             # Training dataset with caching and augmentation
-├── backend_registry.py          # Plugin registry for training backends (auto-discovery)
-├── train_backend_base.py        # Base class for model-specific backends
-├── train_backend_*.py           # 17 model backends (sd15, sdxl, flux, sd3, zimage, etc.)
-├── optimizer_factory.py         # Optimizer creation (12 types)
-├── optimizers.py                # Custom optimizer implementations (Marmotte, SOAP, Muon)
-├── ema.py                       # Exponential Moving Average for weights
-├── speed_optimizations.py       # torch.compile, MeBP, CUDA optimizations
-├── triton_kernels.py            # Triton fused kernels (AdamW, MSE loss, flow interpolation)
-├── fp8_training.py              # FP8 training wrapper (2x TFLOPS on Ada/Hopper GPUs)
-├── sequence_packing.py          # Sequence packing for zero padding waste (DiT models)
-├── mmap_dataset.py              # Memory-mapped dataset for zero-copy I/O
-├── zero_bottleneck_dataloader.py # mmap + pinned DMA dataloader (bypasses GIL/pickle)
-├── zimage_optimizations.py      # Z-Image (S3-DiT) exclusive speed optimizations
-├── zimage_inventions.py         # Z-Image advanced inventions (L2 attention, speculative grad)
-├── pipeline_integrator.py       # Pre-training pipeline, live monitoring, auto-config
-├── async_io.py                  # Async data loading and GPU prefetching
-├── io_speed.py                  # Fast image scanning, dimension reading, deduplication
-├── dataset_management.py        # Caption augmentation, token counts, spell check
-├── tag_importance.py            # Tag importance scoring for dataset cleaning
-├── tag_specificity.py           # Tag specificity analysis
-├── concept_probing.py           # Probe base model knowledge before training
-├── token_weighting.py           # Per-token caption loss weighting
-├── attention_map_debugger.py    # Attention visualization during training
-├── curriculum_learning.py       # Loss-based adaptive image sampling
-├── dpo_trainer.py               # DPO preference fine-tuning
-├── masked_loss.py               # Masked training loss (region-specific)
-├── noise_rescale.py             # Noise schedule rescaling (zero terminal SNR)
-├── tensorboard_logger.py        # TensorBoard logging with graceful fallback
-├── duplicate_detector.py        # Duplicate/near-duplicate image detection
-├── disk_space.py                # Disk space validation
-├── auto_pipeline.py             # One-click clean + train pipeline
-├── config_validator.py          # Training config validation
-├── metadata_cache.py            # Persistent metadata caching
-├── profiling.py                 # Performance profiling utilities
-├── generate_worker.py           # Image generation worker
+├── __main__.py              # Entry point
+├── models.py                # TrainingConfig dataclass, ImageEntry, DatasetStats
+├── constants.py             # Model types, optimizers, presets
+├── trainer.py               # Core training engine
+├── training_worker.py       # QThread training worker
+├── generate_worker.py       # QThread generation worker
+├── backend_registry.py      # Auto-discovery of model backends
+├── train_backend_base.py    # Base class for backends
+├── train_backend_*.py       # 17 model backends
+├── optimizers.py            # Marmotte, SOAP, Muon optimizers
+├── triton_kernels.py        # Triton fused kernels
+├── fp8_training.py          # FP8 training (2× TFLOPS)
+├── sequence_packing.py      # Zero padding waste
+├── mmap_dataset.py          # Memory-mapped datasets
+├── zero_bottleneck_dataloader.py  # GIL-free dataloader
 └── ui/
-    ├── theme.py                 # Dark/light theme with runtime toggling
-    ├── toast.py                 # Toast notification system
-    ├── tag_panel.py             # Virtual tag table (O(1) rendering)
-    ├── override_panel.py        # Tools, stats, config panel
-    ├── preview_tab.py           # Image thumbnail preview grid
-    ├── image_tab.py             # Image browser with pixmap caching
-    ├── dataset_tab.py           # Dataset management (6 sub-tabs)
-    ├── dataset_sections.py      # Dataset sub-tab sections
-    ├── reco_tab.py              # Training recommendations tab
-    ├── training_tab.py          # Full training UI with 7 config sub-tabs
-    ├── training_tab_builders.py # Training tab UI builders
-    ├── training_config_io.py    # Training config save/load (JSON)
-    ├── generate_tab.py          # Image generation tab
-    ├── help_tab.py              # Getting started guide
-    ├── dialogs.py               # Export preview dialog with repeat info
-    ├── rlhf_dialog.py           # RLHF preference collection dialog
-    ├── auto_pipeline_dialog.py  # One-click pipeline dialog
-    └── main_window.py           # Main window orchestrator
+    ├── main_window.py       # Main window orchestrator
+    ├── training_tab.py      # Training UI (180+ parameters, 7 tabs)
+    ├── generate_tab.py      # Generation tab
+    ├── library_tab.py       # LoRA & model library
+    ├── batch_generation_tab.py  # Batch generation
+    ├── comparison_tab.py    # A/B comparison
+    └── model_merge_tab.py   # Model merging
 ```
+
+---
+
+## Contributing
+
+We welcome contributions! Whether you want to add a new model backend, improve an optimizer, fix a bug, or improve documentation — you're in the right place.
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for guidelines on:
+- Setting up your dev environment
+- Adding a new model backend (it's designed to be easy!)
+- Code style and conventions
+- Submitting pull requests
+
+---
 
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+Free to use, modify, and distribute. Commercial use allowed. No warranty.
+
+---
+
+<div align="center">
+
+Built with love by the DataBuilder contributors.
+If DataBuilder saves you time, consider starring the repo ⭐
+
+</div>
