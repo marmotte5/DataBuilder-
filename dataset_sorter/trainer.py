@@ -138,15 +138,37 @@ class Trainer:
         self.state = TrainingState()
         self.device = get_device()
 
+        # Detect hardware capabilities once and log summary
+        from dataset_sorter.hardware_detect import detect_hardware, log_hardware_summary
+        self._hw = detect_hardware()
+        log_hardware_summary(self._hw)
+
         # Pick dtype
         _is_cuda = self.device.type == "cuda"
         _is_mps = self.device.type == "mps"
-        if config.mixed_precision == "bf16" and (_is_mps or (_is_cuda and torch.cuda.is_bf16_supported())):
+        _is_xpu = self.device.type == "xpu"
+        if _is_mps:
+            # MPS does not support fp16 training (Metal framework limitation).
+            # bf16 is always used on Apple Silicon regardless of user config.
+            if config.mixed_precision == "fp16":
+                log.warning(
+                    "fp16 mixed precision is not supported on MPS (Apple Silicon). "
+                    "Forcing bf16 instead. Update your config to 'bf16' to suppress this warning."
+                )
+            self.dtype = torch.bfloat16
+        elif _is_xpu:
+            # Intel XPU: bf16 is recommended; fp16 is available but less stable
+            if config.mixed_precision == "fp16":
+                log.info("Intel XPU: fp16 requested; using fp16 (bf16 is preferred for stability).")
+                self.dtype = torch.float16
+            else:
+                self.dtype = torch.bfloat16
+        elif config.mixed_precision == "bf16" and _is_cuda and torch.cuda.is_bf16_supported():
             self.dtype = torch.bfloat16
         elif config.mixed_precision == "fp16":
             self.dtype = torch.float16
         else:
-            self.dtype = torch.bfloat16 if (_is_mps or (_is_cuda and torch.cuda.is_bf16_supported())) else torch.float16
+            self.dtype = torch.bfloat16 if (_is_cuda and torch.cuda.is_bf16_supported()) else torch.float16
 
         self.backend = None
         self.dataset = None
@@ -179,6 +201,9 @@ class Trainer:
         self._pause_event = threading.Event()    # set = paused
         self._resume_event = threading.Event()   # set = resume requested
         self._resume_event.set()                 # start unpaused
+
+        # ScheduleFree optimizer flag (needs .train()/.eval() lifecycle calls)
+        self._is_schedulefree: bool = False
 
         # Last training batch caption (used as sample prompt)
         self._last_batch_caption: Optional[str] = None
@@ -336,6 +361,12 @@ class Trainer:
             self.backend.setup_lora()
         else:
             self.backend.setup_full_finetune()
+
+        # ── 2b. Intel IPEX optimization (XPU backend) ──
+        if self.device.type == "xpu":
+            from dataset_sorter.hardware_detect import apply_ipex_optimize
+            if self.backend.unet is not None:
+                self.backend.unet = apply_ipex_optimize(self.backend.unet, self.dtype, self._hw)
 
         # ── 3. Apply all speed optimizations ──
         self.backend.apply_speed_optimizations()
@@ -581,6 +612,16 @@ class Trainer:
             log.info("Using Triton FusedAdamW (8 ops → 1 kernel)")
         else:
             self.optimizer = _get_optimizer(config, self._build_param_groups())
+
+        # ScheduleFree optimizers (schedulefree.AdamWScheduleFree) require
+        # explicit .train() / .eval() calls to switch between training and
+        # evaluation modes, which trigger internal interpolation of averaged
+        # weights.  Detect by duck-typing: standard torch optimizers do not
+        # have a .train() method.
+        if hasattr(self.optimizer, 'train') and callable(self.optimizer.train):
+            self._is_schedulefree = True
+            self.optimizer.train()
+            log.info("ScheduleFree optimizer detected: calling optimizer.train()")
 
         # ── 10. Steps calculation ──
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
@@ -1347,13 +1388,21 @@ class Trainer:
                     # Save checkpoint
                     if (config.save_every_n_steps > 0 and
                             self.state.global_step % config.save_every_n_steps == 0):
+                        if self._is_schedulefree:
+                            self.optimizer.eval()
                         self._save_checkpoint(f"step_{self.state.global_step:06d}")
+                        if self._is_schedulefree:
+                            self.optimizer.train()
 
                     # Generate samples
                     if (config.sample_every_n_steps > 0 and
                             self.state.global_step % config.sample_every_n_steps == 0 and
                             sample_fn):
+                        if self._is_schedulefree:
+                            self.optimizer.eval()
                         self._generate_samples(sample_fn)
+                        if self._is_schedulefree:
+                            self.optimizer.train()
 
                     # Attention map debug report
                     if (self._attention_debugger is not None and
@@ -1407,7 +1456,11 @@ class Trainer:
 
             # Epoch checkpoint
             if config.save_every_n_epochs > 0 and (epoch + 1) % config.save_every_n_epochs == 0:
+                if self._is_schedulefree:
+                    self.optimizer.eval()
                 self._save_checkpoint(f"epoch_{epoch + 1:04d}")
+                if self._is_schedulefree:
+                    self.optimizer.train()
 
         # Clean up DataLoader workers (persistent_workers keep processes alive)
         if _zero_loader is not None:
@@ -1421,8 +1474,12 @@ class Trainer:
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
-        # Final save
+        # Final save (use eval mode for ScheduleFree to get averaged weights)
+        if self._is_schedulefree:
+            self.optimizer.eval()
         self._save_checkpoint("final")
+        if self._is_schedulefree:
+            self.optimizer.train()
 
         # Copy final model to models/ for easy access
         final_ckpt = self.output_dir / "checkpoints" / "final"
