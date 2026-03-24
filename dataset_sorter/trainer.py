@@ -138,9 +138,15 @@ class Trainer:
         self.state = TrainingState()
         self.device = get_device()
 
+        # Detect hardware capabilities once and log summary
+        from dataset_sorter.hardware_detect import detect_hardware, log_hardware_summary
+        self._hw = detect_hardware()
+        log_hardware_summary(self._hw)
+
         # Pick dtype
         _is_cuda = self.device.type == "cuda"
         _is_mps = self.device.type == "mps"
+        _is_xpu = self.device.type == "xpu"
         if _is_mps:
             # MPS does not support fp16 training (Metal framework limitation).
             # bf16 is always used on Apple Silicon regardless of user config.
@@ -150,6 +156,13 @@ class Trainer:
                     "Forcing bf16 instead. Update your config to 'bf16' to suppress this warning."
                 )
             self.dtype = torch.bfloat16
+        elif _is_xpu:
+            # Intel XPU: bf16 is recommended; fp16 is available but less stable
+            if config.mixed_precision == "fp16":
+                log.info("Intel XPU: fp16 requested; using fp16 (bf16 is preferred for stability).")
+                self.dtype = torch.float16
+            else:
+                self.dtype = torch.bfloat16
         elif config.mixed_precision == "bf16" and _is_cuda and torch.cuda.is_bf16_supported():
             self.dtype = torch.bfloat16
         elif config.mixed_precision == "fp16":
@@ -348,6 +361,12 @@ class Trainer:
             self.backend.setup_lora()
         else:
             self.backend.setup_full_finetune()
+
+        # ── 2b. Intel IPEX optimization (XPU backend) ──
+        if self.device.type == "xpu":
+            from dataset_sorter.hardware_detect import apply_ipex_optimize
+            if self.backend.unet is not None:
+                self.backend.unet = apply_ipex_optimize(self.backend.unet, self.dtype, self._hw)
 
         # ── 3. Apply all speed optimizations ──
         self.backend.apply_speed_optimizations()

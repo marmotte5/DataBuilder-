@@ -51,21 +51,46 @@ def validate_paths(source: str, output: str) -> tuple[bool, str]:
 
 
 def has_gpu() -> bool:
-    """Check if a GPU is available (CUDA on PC/Linux, MPS on Apple Silicon)."""
+    """Check if a GPU is available (CUDA/ROCm, MPS, Intel XPU, or CPU)."""
     try:
         import torch
-        return torch.cuda.is_available() or torch.backends.mps.is_available()
+        if torch.cuda.is_available():
+            return True
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return True
+        # Intel XPU via IPEX
+        try:
+            import intel_extension_for_pytorch  # noqa: F401
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                return True
+        except ImportError:
+            pass
+        return False
     except (ImportError, AttributeError, OSError):
         return False
 
 
 def get_device() -> "torch.device":
-    """Return the best available torch device (cuda > mps > cpu)."""
+    """Return the best available torch device (cuda/rocm > mps > xpu > cpu).
+
+    Priority order:
+    1. CUDA (covers both NVIDIA CUDA and AMD ROCm — same API)
+    2. Apple Silicon MPS
+    3. Intel GPU via XPU (requires intel_extension_for_pytorch)
+    4. CPU fallback
+    """
     import torch
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
+    # Intel XPU via IPEX
+    try:
+        import intel_extension_for_pytorch  # noqa: F401
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            return torch.device("xpu")
+    except ImportError:
+        pass
     return torch.device("cpu")
 
 
@@ -76,13 +101,32 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         torch.mps.empty_cache()
+    else:
+        # Intel XPU
+        try:
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                torch.xpu.empty_cache()
+        except Exception:
+            pass
 
 
 def autocast_device_type() -> str:
-    """Return the correct device_type string for torch.autocast."""
+    """Return the correct device_type string for torch.autocast.
+
+    - CUDA/ROCm → "cuda"
+    - MPS       → "cpu" (MPS autocast is not supported; CPU autocast is a no-op)
+    - Intel XPU → "xpu"
+    - CPU       → "cpu"
+    """
     import torch
     if torch.cuda.is_available():
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "cpu"  # MPS does not support autocast; fall back to CPU autocast
+    try:
+        import intel_extension_for_pytorch  # noqa: F401
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            return "xpu"
+    except ImportError:
+        pass
     return "cpu"

@@ -977,7 +977,19 @@ def compute_optimal_workers(
     """
     import sys
     if sys.platform == "darwin":
-        return 0
+        # macOS MPS has multiprocessing limitations with PyTorch DataLoader.
+        # ROCm and XPU are Linux/Windows only, so darwin → 0 is correct for MPS.
+        try:
+            from dataset_sorter.hardware_detect import detect_hardware
+            _hw = detect_hardware()
+            if _hw["backend"] == "mps":
+                return 0
+            # Non-MPS on darwin (e.g., CPU fallback): allow workers
+        except Exception:
+            return 0  # Safe default if detection fails
+        else:
+            if _hw["backend"] not in ("cuda", "rocm", "ipex"):
+                return 0
     if num_cpu_cores is None:
         try:
             num_cpu_cores = len(os.sched_getaffinity(0))
