@@ -91,6 +91,11 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     elif config.optimizer == "Prodigy":
         try:
             from prodigyopt import Prodigy
+            if abs(lr - 1.0) > 1e-6:
+                log.warning(
+                    f"Prodigy: lr={lr:.2e} — Prodigy estimates the actual learning rate "
+                    "internally; recommended starting lr is 1.0 (e.g. learning_rate=1.0)."
+                )
             return Prodigy(
                 param_groups, lr=lr, weight_decay=config.weight_decay,
                 d_coef=config.prodigy_d_coef,
@@ -127,6 +132,11 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     elif config.optimizer == "DAdaptAdam":
         try:
             from dadaptation import DAdaptAdam
+            if abs(lr - 1.0) > 1e-6:
+                log.warning(
+                    f"DAdaptAdam: lr={lr:.2e} — D-Adaptation estimates the step size "
+                    "automatically; recommended starting lr is 1.0 (e.g. learning_rate=1.0)."
+                )
             return DAdaptAdam(param_groups, lr=lr, weight_decay=config.weight_decay)
         except ImportError:
             log.warning("dadaptation not installed, falling back to AdamW")
@@ -251,6 +261,23 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
             "constant",
             optimizer=optimizer,
             num_warmup_steps=0,
+            num_training_steps=num_training_steps,
+        )
+
+    # Adaptive-LR optimizers estimate the learning rate internally.
+    # An external decaying scheduler (cosine, linear, etc.) will fight
+    # with their adaptation and degrade convergence.  Force constant.
+    _adaptive_lr_opts = {"Prodigy", "DAdaptAdam", "AdamWScheduleFree"}
+    if config.optimizer in _adaptive_lr_opts and config.lr_scheduler != "constant":
+        log.warning(
+            f"{config.optimizer} manages its own learning rate — overriding "
+            f"lr_scheduler='{config.lr_scheduler}' with 'constant' to avoid "
+            "interference with the optimizer's internal adaptation."
+        )
+        return _get_scheduler(
+            "constant",
+            optimizer=optimizer,
+            num_warmup_steps=config.warmup_steps,
             num_training_steps=num_training_steps,
         )
 

@@ -142,13 +142,17 @@ ATTENTION_MODES = {
 }
 
 # ── Sample Samplers ───────────────────────────────────────────────────
+# Must stay in sync with SCHEDULER_MAP in generate_worker.py.
 SAMPLE_SAMPLERS = {
-    "euler_a":    "Euler Ancestral",
-    "euler":      "Euler",
-    "dpm++_2m":   "DPM++ 2M",
-    "dpm++_sde":  "DPM++ SDE",
-    "ddim":       "DDIM",
-    "lms":        "LMS",
+    "euler_a":          "Euler Ancestral",
+    "euler":            "Euler",
+    "dpm++_2m":         "DPM++ 2M",
+    "dpm++_sde":        "DPM++ SDE",
+    "dpm++_2m_karras":  "DPM++ 2M Karras",
+    "ddim":             "DDIM",
+    "lms":              "LMS",
+    "pndm":             "PNDM",
+    "unipc":            "UniPC",
 }
 
 # ── Save Precision ────────────────────────────────────────────────────
