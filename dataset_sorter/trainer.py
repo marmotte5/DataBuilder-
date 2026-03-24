@@ -38,6 +38,11 @@ from dataset_sorter.smart_resume import (
     save_loss_history, load_loss_history, analyze_loss_curve,
     compute_adjustments, format_analysis_report, apply_adjustments_to_config,
 )
+from dataset_sorter.training_state_manager import (
+    write_checkpoint_metadata,
+    capture_random_states,
+    restore_random_states,
+)
 from dataset_sorter.train_dataset import CachedTrainDataset
 from dataset_sorter.utils import get_device, empty_cache
 from dataset_sorter.pipeline_integrator import (
@@ -1910,10 +1915,39 @@ class Trainer:
         # Save DataLoader generator state for reproducible shuffle on resume
         if getattr(self, '_dl_generator', None) is not None:
             state_dict["dl_generator"] = self._dl_generator.get_state()
+        # Save random states for exact reproducibility on resume
+        state_dict["random_states"] = capture_random_states()
         state_path = save_dir / "training_state.pt"
         tmp_path = save_dir / "training_state.pt.tmp"
         torch.save(state_dict, str(tmp_path))
         tmp_path.replace(state_path)  # Atomic on POSIX
+
+        # Write human-readable JSON sidecar for UI checkpoint discovery
+        _current_lr = self._lr_history[-1][1] if self._lr_history else config.learning_rate
+        _recent_losses = [l for _, l in self._loss_history[-50:]]
+        _total_steps = (
+            config.max_train_steps if config.max_train_steps > 0
+            else getattr(self.state, 'total_steps', 0)
+        )
+        write_checkpoint_metadata(
+            save_dir,
+            epoch=self.state.epoch,
+            global_step=self.state.global_step,
+            total_steps=_total_steps,
+            training_config={
+                "model_type": config.model_type,
+                "learning_rate": config.learning_rate,
+                "batch_size": config.batch_size,
+                "epochs": config.epochs,
+                "lora_rank": config.lora_rank,
+                "optimizer": config.optimizer,
+                "lr_scheduler": config.lr_scheduler,
+            },
+            loss_history=_recent_losses,
+            learning_rate=_current_lr,
+            elapsed_time_seconds=getattr(self.state, 'elapsed_seconds', 0.0),
+            device=str(self.device),
+        )
 
         # Save loss history for Smart Resume
         if self._loss_history:
@@ -2344,6 +2378,13 @@ class Trainer:
         # Restore DataLoader generator state for reproducible shuffle on resume
         if "dl_generator" in state:
             self._resume_dl_generator_state = state["dl_generator"]
+
+        # Restore random states for exact reproducibility
+        if "random_states" in state:
+            try:
+                restore_random_states(state["random_states"])
+            except Exception as exc:
+                log.warning("Could not restore random states: %s", exc)
 
         # Restore model weights (LoRA or full)
         is_lora = self.config.model_type.endswith("_lora")

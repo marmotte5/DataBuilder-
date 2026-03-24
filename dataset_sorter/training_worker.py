@@ -5,10 +5,12 @@ Supports pause/resume/save-now/sample-now/backup during training.
 Includes periodic VRAM usage monitoring (CUDA/MPS).
 """
 
+import atexit
 import logging
 import threading
 import time
 import traceback
+import weakref
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -91,6 +93,28 @@ class TrainingWorker(QThread):
 
         if sample_prompts:
             self.config.sample_prompts = sample_prompts
+
+        # Register a weak-ref atexit handler so that if the process exits
+        # unexpectedly (crash, SIGKILL not possible, but SIGTERM/exit()),
+        # we attempt an emergency checkpoint save.
+        _self_ref = weakref.ref(self)
+
+        def _emergency_checkpoint():
+            worker = _self_ref()
+            if worker is None:
+                return
+            t = worker.trainer
+            if t is None:
+                return
+            if not getattr(t, '_running', False):
+                return
+            try:
+                log.warning("Emergency checkpoint save triggered by process exit")
+                t._save_checkpoint(f"emergency_{t.state.global_step:06d}")
+            except Exception as exc:
+                log.warning("Emergency checkpoint save failed: %s", exc)
+
+        atexit.register(_emergency_checkpoint)
 
     def run(self):
         try:
