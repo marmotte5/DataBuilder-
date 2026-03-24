@@ -1025,7 +1025,7 @@ class GenerateWorker(QThread):
         _width = width if width is not None else self.width
         _height = height if height is not None else self.height
         _clip_skip = clip_skip if clip_skip is not None else self.clip_skip
-        _init_image = init_image
+        _init_image = init_image if init_image is not None else self.init_image
         _strength = strength if strength is not None else self.strength
 
         # Build parameters string (compatible with A1111 / civitai metadata readers)

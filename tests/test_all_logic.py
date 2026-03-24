@@ -350,7 +350,7 @@ class TestRecommender:
 
     def test_flux_lora(self):
         cfg = self._recommend(model_type="flux_lora")
-        assert cfg.model_prediction_type == "raw"
+        assert cfg.model_prediction_type == "flow"
         assert cfg.timestep_sampling == "sigmoid"
         assert cfg.train_text_encoder is False
 
@@ -397,8 +397,8 @@ class TestRecommender:
     def test_prodigy_optimizer(self):
         cfg = self._recommend(optimizer="Prodigy")
         assert cfg.optimizer == "Prodigy"
-        # Prodigy should set lr_scheduler to constant
-        assert cfg.lr_scheduler == "constant"
+        # Prodigy uses cosine scheduler (official repo recommendation)
+        assert cfg.lr_scheduler == "cosine"
 
     def test_adamw_optimizer(self):
         cfg = self._recommend(optimizer="AdamW")
@@ -1648,7 +1648,7 @@ class TestGenerateWorkerNewFeatures:
         w.height = 1024
         w.clip_skip = 0
 
-        pnginfo = w._build_png_metadata(seed=42)
+        pnginfo, _ = w._build_png_metadata(seed=42)
         keys = self._get_chunk_keys(pnginfo)
 
         assert "parameters" in keys
@@ -1677,7 +1677,7 @@ class TestGenerateWorkerNewFeatures:
         w.height = 1024
         w.clip_skip = 0
 
-        pnginfo = w._build_png_metadata(seed=123)
+        pnginfo, _ = w._build_png_metadata(seed=123)
         params_text = self._extract_chunk_text(pnginfo, "parameters")
         assert "lora:style_v1:0.8" in params_text
         assert "lora:character:1.0" in params_text
@@ -1700,7 +1700,7 @@ class TestGenerateWorkerNewFeatures:
         w.init_image = PILImage.new("RGB", (512, 512))
         w.strength = 0.65
 
-        pnginfo = w._build_png_metadata(seed=99)
+        pnginfo, _ = w._build_png_metadata(seed=99)
         params_text = self._extract_chunk_text(pnginfo, "parameters")
         assert "Denoising strength: 0.65" in params_text
 
@@ -2006,37 +2006,40 @@ class TestCachedTrainDatasetBucketing:
 class TestCrossPlatformScripts:
     """Test that launch scripts exist and are valid."""
 
+    # Project root is two levels up from this test file (tests/test_all_logic.py)
+    ROOT = Path(__file__).parent.parent
+
     def test_run_sh_exists(self):
-        assert Path("/home/user/DataBuilder-/run.sh").exists()
+        assert (self.ROOT / "run.sh").exists()
 
     def test_install_sh_exists(self):
-        assert Path("/home/user/DataBuilder-/install.sh").exists()
+        assert (self.ROOT / "install.sh").exists()
 
     def test_run_command_exists(self):
-        assert Path("/home/user/DataBuilder-/run.command").exists()
+        assert (self.ROOT / "run.command").exists()
 
     def test_run_sh_executable(self):
-        assert os.access("/home/user/DataBuilder-/run.sh", os.X_OK)
+        assert os.access(self.ROOT / "run.sh", os.X_OK)
 
     def test_install_sh_executable(self):
-        assert os.access("/home/user/DataBuilder-/install.sh", os.X_OK)
+        assert os.access(self.ROOT / "install.sh", os.X_OK)
 
     def test_run_command_executable(self):
-        assert os.access("/home/user/DataBuilder-/run.command", os.X_OK)
+        assert os.access(self.ROOT / "run.command", os.X_OK)
 
     def test_run_sh_has_shebang(self):
-        content = Path("/home/user/DataBuilder-/run.sh").read_text()
+        content = (self.ROOT / "run.sh").read_text()
         assert content.startswith("#!/")
 
     def test_install_sh_has_shebang(self):
-        content = Path("/home/user/DataBuilder-/install.sh").read_text()
+        content = (self.ROOT / "install.sh").read_text()
         assert content.startswith("#!/")
 
     def test_run_bat_exists(self):
-        assert Path("/home/user/DataBuilder-/run.bat").exists()
+        assert (self.ROOT / "run.bat").exists()
 
     def test_install_bat_exists(self):
-        assert Path("/home/user/DataBuilder-/install.bat").exists()
+        assert (self.ROOT / "install.bat").exists()
 
 
 if __name__ == "__main__":
