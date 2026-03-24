@@ -738,7 +738,6 @@ class CachedTrainDataset(Dataset):
                     )
                 else:
                     # Use the same generic encoding path as the main cache loop
-                    import torch
                     with torch.no_grad():
                         # Apply caption preprocessor (e.g., Z-Image chat template)
                         # to match the conditioning path's encoding
