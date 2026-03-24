@@ -36,13 +36,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from dataset_sorter.app_settings import AppSettings
-from dataset_sorter.workers import PROJECT_SUBDIRS, create_project_structure
+from dataset_sorter.workers import create_project_structure
 
 log = logging.getLogger(__name__)
 

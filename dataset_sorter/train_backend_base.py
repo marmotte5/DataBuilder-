@@ -454,17 +454,15 @@ class TrainBackendBase(ABC):
         Supports int8 and int4 (NF4) via bitsandbytes. Subclasses can call
         this when loading text encoders to reduce TE VRAM by 50-75%.
         """
+        import importlib.util
         quant = self.config.quantize_text_encoder
         if quant == "int8":
-            try:
-                import bitsandbytes  # noqa: F401
+            if importlib.util.find_spec("bitsandbytes") is not None:
                 log.info("Loading text encoder in INT8 (saves ~50%% TE VRAM)")
                 return {"load_in_8bit": True, "device_map": "auto"}
-            except ImportError:
-                log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
+            log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
         elif quant == "int4":
             try:
-                import bitsandbytes  # noqa: F401
                 from transformers import BitsAndBytesConfig
                 bnb_config = BitsAndBytesConfig(
                     load_in_4bit=True,

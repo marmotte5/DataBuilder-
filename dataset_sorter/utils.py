@@ -2,6 +2,10 @@
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 from dataset_sorter.constants import SAFE_NAME_RE
 

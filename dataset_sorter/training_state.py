@@ -1,10 +1,8 @@
 """Training state management for pause/resume functionality."""
 
 import json
-import os
 import random
 import shutil
-import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path

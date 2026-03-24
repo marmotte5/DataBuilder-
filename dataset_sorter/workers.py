@@ -98,7 +98,6 @@ def _parse_single_image(args: tuple) -> ImageEntry | tuple[ImageEntry, str]:
     error_msg = None
     if use_gpu:
         try:
-            import torch
             from torchvision.io import read_image, ImageReadMode
             # Read and validate image can be decoded to RGB tensor
             tensor = read_image(str(img_path), mode=ImageReadMode.RGB)

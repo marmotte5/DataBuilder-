@@ -563,7 +563,6 @@ class GenerateWorker(QThread):
         custom trust_remote_code models (via _load_single_file_custom), and
         standard diffusers-format directories (via from_pretrained).
         """
-        import torch
         import diffusers
 
         kwargs = {
@@ -804,9 +803,8 @@ class GenerateWorker(QThread):
         except Exception as e:
             self.error.emit(f"Failed to load weights from {model_path}: {e}")
             # Free the base pipeline to avoid leaking VRAM
-            del pipe
+            pipe = None
             gc.collect()
-            import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return None

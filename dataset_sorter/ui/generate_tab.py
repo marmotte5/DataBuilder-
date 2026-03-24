@@ -688,7 +688,8 @@ class GenerateTab(QWidget):
 
         # Pre-check: verify torch can be imported before starting the worker
         try:
-            import torch  # noqa: F401
+            import torch as _torch_check
+            del _torch_check
         except OSError:
             self.status_label.setText(
                 "PyTorch DLL failed to load. Run update.bat to fix, "

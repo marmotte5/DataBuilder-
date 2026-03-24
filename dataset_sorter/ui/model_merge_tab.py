@@ -21,7 +21,6 @@ Architecture:
 """
 
 import logging
-import math
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -29,11 +28,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QDoubleSpinBox, QComboBox,
     QFileDialog, QGroupBox, QCheckBox, QProgressBar,
-    QFrame, QSlider,
+    QSlider,
 )
 
 from dataset_sorter.ui.theme import (
-    COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
+    COLORS, SUCCESS_BUTTON_STYLE,
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
 from dataset_sorter.ui.toast import show_toast
@@ -204,8 +203,6 @@ class MergeWorker(QThread):
 
     def _merge(self, a: dict, b: dict, c: dict | None) -> dict:
         """Perform the actual weight merging (legacy fallback, unused by streaming path)."""
-        import torch
-
         alpha = self.alpha
         result = {}
 

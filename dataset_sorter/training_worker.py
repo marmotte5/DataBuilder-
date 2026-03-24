@@ -8,7 +8,6 @@ Includes periodic VRAM usage monitoring (CUDA/MPS).
 import atexit
 import logging
 import threading
-import time
 import traceback
 import weakref
 from pathlib import Path

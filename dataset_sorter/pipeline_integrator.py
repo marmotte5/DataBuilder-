@@ -381,13 +381,11 @@ def auto_enable_speed_optimizations(config, report: IntegrationReport) -> None:
 
         # Hopper+ (SM 9.0+): enable flash attention if not already
         if compute_cap >= (9, 0) and not config.flash_attention:
-            try:
-                import flash_attn  # noqa: F401
+            import importlib.util
+            if importlib.util.find_spec("flash_attn") is not None:
                 config.flash_attention = True
                 config.sdpa = False
                 opts.append("Flash Attention 2 (Hopper+ detected)")
-            except ImportError:
-                pass
 
         # SDPA: always enable on PyTorch 2.0+
         torch_major = int(torch.__version__.split(".")[0])

@@ -8,7 +8,6 @@ Step 2: Review & Launch — See analysis, approve cleaning, start training
 """
 
 from collections import Counter
-from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
