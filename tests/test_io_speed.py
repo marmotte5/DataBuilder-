@@ -2,6 +2,7 @@
 
 import json
 import struct
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -435,11 +436,13 @@ class TestAdaptiveWorkers:
         n = compute_optimal_workers(1000, latents_cached=True, te_cached=True, num_cpu_cores=8)
         assert n <= 2
 
+    @pytest.mark.skipif(sys.platform == "darwin", reason="macOS forces num_workers=0 to avoid spawn crash")
     def test_uncached_more_workers(self):
         """Uncached dataset should use more workers."""
         n = compute_optimal_workers(1000, latents_cached=False, te_cached=False, num_cpu_cores=8)
         assert n >= 2
 
+    @pytest.mark.skipif(sys.platform == "darwin", reason="macOS forces num_workers=0 to avoid spawn crash")
     def test_partial_cache(self):
         """Partial cache should be between fully cached and uncached."""
         n_full = compute_optimal_workers(1000, True, True, num_cpu_cores=8)

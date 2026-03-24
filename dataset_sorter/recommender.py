@@ -580,6 +580,7 @@ def _build_notes(
     config: TrainingConfig, used_fallback: bool,
 ) -> list[str]:
     notes: list[str] = []
+    is_sd15 = "sd15" in model_type
 
     if used_fallback:
         notes.append(

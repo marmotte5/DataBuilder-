@@ -81,7 +81,6 @@ class SequencePacker:
             seq_lens.append(h * w)
 
         if not sequences:
-            import torch
             empty = torch.empty(1, 0, 0, device=self.device)
             cu = torch.zeros(1, dtype=torch.int32, device=self.device)
             return empty, cu, torch.tensor(0, device=self.device), []
