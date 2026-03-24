@@ -5,6 +5,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+echo "Mise à jour..."
+git pull --ff-only 2>/dev/null || echo "Pas de connexion, lancement avec la version locale"
+
 if [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
 else

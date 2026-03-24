@@ -13,6 +13,9 @@
 
 set -e
 
+echo "Mise à jour..."
+git pull --ff-only 2>/dev/null || echo "Pas de connexion, installation avec la version locale"
+
 BOLD='\033[1m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
