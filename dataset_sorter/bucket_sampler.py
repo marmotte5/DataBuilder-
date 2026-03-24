@@ -118,8 +118,8 @@ def _load_bucket_cache(
         if len(assignments) == len(image_paths):
             log.info(f"Loaded {len(assignments)} bucket assignments from cache")
             return assignments
-    except (json.JSONDecodeError, KeyError, OSError, TypeError):
-        pass
+    except (json.JSONDecodeError, KeyError, OSError, TypeError) as e:
+        log.debug("Failed to load bucket assignment cache: %s", e)
     return None
 
 

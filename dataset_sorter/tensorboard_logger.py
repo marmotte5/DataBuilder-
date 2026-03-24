@@ -141,8 +141,8 @@ class TensorBoardLogger:
         if self._writer is not None:
             try:
                 self._writer.add_text(tag, text, step)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("TensorBoard text log failed: %s", e)
 
     def flush(self):
         """Flush pending writes."""

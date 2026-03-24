@@ -199,8 +199,8 @@ class MergeWorker(QThread):
                 if _h is not None:
                     try:
                         _h.__exit__(None, None, None)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug("File handle cleanup failed: %s", e)
 
     def _merge(self, a: dict, b: dict, c: dict | None) -> dict:
         """Perform the actual weight merging (legacy fallback, unused by streaming path)."""

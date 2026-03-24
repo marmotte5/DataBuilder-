@@ -240,8 +240,8 @@ def detect_gpu_vram() -> int:
             except Exception as e:
                 log.debug(f"Apple Silicon memory detection failed: {e}")
             return 16  # Conservative default for Apple Silicon
-    except (ImportError, OSError):
-        pass
+    except (ImportError, OSError) as e:
+        log.debug("VRAM detection unavailable: %s", e)
     return 0
 
 
@@ -284,8 +284,8 @@ class AdaptiveVRAMMonitor:
                 self._samples.append(reserved)
                 self._peak_gb = max(self._peak_gb, reserved)
                 return reserved
-        except (ImportError, RuntimeError):
-            pass
+        except (ImportError, RuntimeError) as e:
+            log.debug("VRAM sampling failed: %s", e)
         return 0.0
 
     def record_oom(self):
