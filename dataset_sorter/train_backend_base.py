@@ -218,6 +218,39 @@ class TrainBackendBase(ABC):
 
     # ── Shared flow matching helpers ───────────────────────────────────
 
+    def _apply_timestep_bias(self, timesteps: torch.Tensor) -> torch.Tensor:
+        """Apply timestep_bias_strategy to integer timestep samples.
+
+        Strategies:
+          none    — no-op, returns timesteps unchanged
+          earlier — bias toward high-noise (large) timesteps via power law
+          later   — bias toward low-noise (small) timesteps via power law;
+                    recommended for turbo/distilled models
+          range   — restrict to [timestep_bias_begin, timestep_bias_end]
+        """
+        strategy = getattr(self.config, 'timestep_bias_strategy', 'none')
+        if strategy == "none":
+            return timesteps
+
+        num_ts = self.noise_scheduler.config.num_train_timesteps
+
+        if strategy == "range":
+            lo = int(getattr(self.config, 'timestep_bias_begin', 0))
+            hi = int(getattr(self.config, 'timestep_bias_end', num_ts))
+            hi = max(lo + 1, min(hi, num_ts))
+            return torch.randint(lo, hi, timesteps.shape, device=self.device).long()
+
+        # Power-law resampling: draw uniform [0,1], raise to exponent, rescale.
+        mult = float(getattr(self.config, 'timestep_bias_multiplier', 1.5))
+        u = torch.rand(timesteps.shape, device=self.device, dtype=torch.float32)
+        if strategy == "later":
+            # u^mult pushes mass toward 0 → small (low-noise) timesteps
+            u = u ** mult
+        else:  # "earlier"
+            # (1-u)^mult then flip pushes mass toward 1 → large (high-noise) timesteps
+            u = 1.0 - (u ** mult)
+        return (u * num_ts).clamp(0, num_ts - 1).long()
+
     def _sample_flow_timesteps(self, batch_size: int) -> torch.Tensor:
         """Sample timesteps for flow matching models."""
         sampling = self.config.timestep_sampling
@@ -546,6 +579,8 @@ class TrainBackendBase(ABC):
                 0, self.noise_scheduler.config.num_train_timesteps,
                 (batch_size,), device=self.device,
             ).long()
+            # Bias toward specific timestep regions (e.g. "later" for turbo models)
+            timesteps = self._apply_timestep_bias(timesteps)
 
         # Add noise to latents
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)

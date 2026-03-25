@@ -159,6 +159,16 @@ class TrainingConfig:
     sigma_min: float = 0.0
     sigma_max: float = 0.0
 
+    # Timestep bias strategy — shifts sampling toward low or high noise levels.
+    # "none"    : uniform sampling (default)
+    # "earlier" : more weight on high-noise timesteps (early denoising)
+    # "later"   : more weight on low-noise timesteps — recommended for turbo/distilled models
+    # "range"   : restrict sampling to [timestep_bias_begin, timestep_bias_end]
+    timestep_bias_strategy: str = "none"
+    timestep_bias_multiplier: float = 1.5   # Exponent strength for earlier/later bias
+    timestep_bias_begin: int = 0            # Range lower bound (used with "range")
+    timestep_bias_end: int = 1000           # Range upper bound (used with "range")
+
     # SpeeD: asymmetric timestep sampling + change-aware weighting (CVPR 2025)
     speed_asymmetric: bool = False      # Enable SpeeD asymmetric sampling
     speed_change_aware: bool = False    # Enable change-aware loss weighting

@@ -466,7 +466,7 @@ def analyze_dataset(
 
     if total == 0:
         log.warning("analyze_dataset: no images found in %s", folder)
-        result["suggestions"].append("Le dossier ne contient aucune image.")
+        result["suggestions"].append("The folder contains no images.")
         return result
 
     # ------------------------------------------------------------------
@@ -579,37 +579,37 @@ def analyze_dataset(
     dup_count = len(result["duplicates"])
     if dup_count:
         suggestions.append(
-            f"{dup_count} paire(s) d'images quasi-identiques détectée(s). "
-            "Supprimez les doublons pour améliorer la diversité."
+            f"{dup_count} near-duplicate image pair(s) detected. "
+            "Remove duplicates to improve dataset diversity."
         )
 
     miss_cap = len(result["missing_captions"])
     if miss_cap:
         suggestions.append(
-            f"{miss_cap} image(s) n'ont pas de caption. "
-            "Ajoutez des descriptions textuelles pour chaque image."
+            f"{miss_cap} image(s) have no caption. "
+            "Add text descriptions for every image."
         )
 
     short_cap = len(result["short_captions"])
     if short_cap:
         suggestions.append(
-            f"{short_cap} caption(s) contiennent moins de {SHORT_CAPTION_WORDS} mots. "
-            "Des captions plus détaillées améliorent la qualité du training."
+            f"{short_cap} caption(s) contain fewer than {SHORT_CAPTION_WORDS} words. "
+            "More detailed captions improve training quality."
         )
 
     long_cap = len(result["long_captions"])
     if long_cap:
         suggestions.append(
-            f"{long_cap} caption(s) dépassent {LONG_CAPTION_TOKENS} tokens. "
-            "Raccourcissez-les pour éviter la troncature lors du training."
+            f"{long_cap} caption(s) exceed {LONG_CAPTION_TOKENS} tokens. "
+            "Shorten them to avoid truncation during training."
         )
 
     if trigger_word:
         miss_tw = len(result["missing_trigger_word"])
         if miss_tw:
             suggestions.append(
-                f"{miss_tw} image(s) n'ont pas le trigger word '{trigger_word}'. "
-                "Ajoutez-le au début de chaque caption."
+                f"{miss_tw} image(s) are missing the trigger word '{trigger_word}'. "
+                "Add it at the beginning of each caption."
             )
 
     portrait_pct = result["aspect_ratio_distribution"]["portrait"]
@@ -618,42 +618,42 @@ def analyze_dataset(
 
     if portrait_pct >= 80:
         suggestions.append(
-            f"{portrait_pct:.0f}% de vos images sont en portrait. "
-            "Ajoutez des images en paysage ou carrées pour plus de diversité."
+            f"{portrait_pct:.0f}% of your images are portrait. "
+            "Add landscape or square images to improve diversity."
         )
     elif landscape_pct >= 80:
         suggestions.append(
-            f"{landscape_pct:.0f}% de vos images sont en paysage. "
-            "Ajoutez des portraits ou des images carrées pour plus de diversité."
+            f"{landscape_pct:.0f}% of your images are landscape. "
+            "Add portrait or square images to improve diversity."
         )
     elif square_pct >= 80:
         suggestions.append(
-            f"{square_pct:.0f}% de vos images sont carrées. "
-            "Ajoutez des portraits ou des paysages pour plus de diversité."
+            f"{square_pct:.0f}% of your images are square. "
+            "Add portrait or landscape images to improve diversity."
         )
 
     small_pct = 100.0 * res_counts.get("small", 0) / total
     if small_pct >= 50:
         suggestions.append(
-            f"{small_pct:.0f}% de vos images ont une résolution inférieure à 512px. "
-            "Utilisez des images plus grandes pour un meilleur training."
+            f"{small_pct:.0f}% of your images have a resolution below 512px. "
+            "Use higher-resolution images for better training results."
         )
 
     score = result["diversity_score"]
     if score < 30:
         suggestions.append(
-            f"Score de diversité faible ({score}/100). "
-            "Votre dataset est très homogène : variez les sujets, angles et compositions."
+            f"Low diversity score ({score}/100). "
+            "Your dataset is very homogeneous: vary subjects, angles and compositions."
         )
     elif score < 60:
         suggestions.append(
-            f"Score de diversité moyen ({score}/100). "
-            "Ajoutez des images plus variées en termes de composition et de couleurs."
+            f"Average diversity score ({score}/100). "
+            "Add more varied images in terms of composition and colors."
         )
 
     if not suggestions:
         suggestions.append(
-            "Votre dataset semble bien équilibré. Bon training !"
+            "Your dataset looks well-balanced. Happy training!"
         )
 
     result["suggestions"] = suggestions
@@ -679,39 +679,39 @@ def format_report(analysis: dict[str, Any]) -> str:
     _add = lines.append
 
     _add("=" * 60)
-    _add("  RAPPORT D'ANALYSE DU DATASET")
+    _add("  DATASET ANALYSIS REPORT")
     _add("=" * 60)
     _add("")
 
     total = analysis.get("total_images", 0)
-    _add(f"Images totales : {total}")
-    _add(f"Score de diversité : {analysis.get('diversity_score', 0):.1f} / 100")
+    _add(f"Total images    : {total}")
+    _add(f"Diversity score : {analysis.get('diversity_score', 0):.1f} / 100")
     _add("")
 
     # Aspect ratios
     ar = analysis.get("aspect_ratio_distribution", {})
-    _add("Distribution des ratios :")
+    _add("Aspect ratio distribution:")
     _add(f"  Portrait  : {ar.get('portrait', 0):.1f}%")
-    _add(f"  Carré     : {ar.get('square', 0):.1f}%")
-    _add(f"  Paysage   : {ar.get('landscape', 0):.1f}%")
+    _add(f"  Square    : {ar.get('square', 0):.1f}%")
+    _add(f"  Landscape : {ar.get('landscape', 0):.1f}%")
     _add("")
 
     # Resolutions
     rs = analysis.get("resolution_stats", {})
     if rs.get("min"):
-        _add("Résolutions :")
-        _add(f"  Min  : {rs['min'][0]}×{rs['min'][1]}")
-        _add(f"  Max  : {rs['max'][0]}×{rs['max'][1]}")
-        _add(f"  Moy  : {rs['mean'][0]}×{rs['mean'][1]}")
+        _add("Resolutions:")
+        _add(f"  Min  : {rs['min'][0]}x{rs['min'][1]}")
+        _add(f"  Max  : {rs['max'][0]}x{rs['max'][1]}")
+        _add(f"  Mean : {rs['mean'][0]}x{rs['mean'][1]}")
         _add("")
 
     # Duplicates
     dups = analysis.get("duplicates", [])
-    _add(f"Doublons / near-duplicates : {len(dups)}")
+    _add(f"Duplicates / near-duplicates: {len(dups)}")
     for d in dups[:10]:
-        _add(f"  {Path(d['img1']).name}  ↔  {Path(d['img2']).name}  (dist={d['distance']})")
+        _add(f"  {Path(d['img1']).name}  <->  {Path(d['img2']).name}  (dist={d['distance']})")
     if len(dups) > 10:
-        _add(f"  … et {len(dups) - 10} paire(s) supplémentaire(s)")
+        _add(f"  ... and {len(dups) - 10} more pair(s)")
     _add("")
 
     # Caption quality
@@ -720,28 +720,28 @@ def format_report(analysis: dict[str, Any]) -> str:
     long_cap = analysis.get("long_captions", [])
     miss_tw = analysis.get("missing_trigger_word", [])
 
-    _add("Qualité des captions :")
-    _add(f"  Sans caption         : {len(miss_cap)}")
-    _add(f"  Trop courtes (<{SHORT_CAPTION_WORDS} mots) : {len(short_cap)}")
-    _add(f"  Trop longues (>{LONG_CAPTION_TOKENS} tokens): {len(long_cap)}")
+    _add("Caption quality:")
+    _add(f"  No caption           : {len(miss_cap)}")
+    _add(f"  Too short (<{SHORT_CAPTION_WORDS} words)  : {len(short_cap)}")
+    _add(f"  Too long (>{LONG_CAPTION_TOKENS} tokens): {len(long_cap)}")
     if miss_tw:
-        _add(f"  Trigger word manquant : {len(miss_tw)}")
+        _add(f"  Missing trigger word : {len(miss_tw)}")
     _add("")
 
     # Top words
     wf = analysis.get("word_frequency", {})
     if wf:
         top = sorted(wf.items(), key=lambda x: -x[1])[:15]
-        _add("Mots les plus fréquents :")
+        _add("Most frequent words:")
         _add("  " + ", ".join(f"{w} ({c})" for w, c in top))
         _add("")
 
     # Suggestions
     suggestions = analysis.get("suggestions", [])
     if suggestions:
-        _add("Suggestions :")
+        _add("Suggestions:")
         for s in suggestions:
-            _add(f"  • {s}")
+            _add(f"  * {s}")
         _add("")
 
     _add("=" * 60)
