@@ -18,6 +18,8 @@ import math
 import torch
 import torch.nn.functional as F
 
+from dataset_sorter.constants import DEFAULT_LR_LORA, DEFAULT_WEIGHT_DECAY, OPTIMIZER_EPSILON
+
 log = logging.getLogger(__name__)
 
 _TRITON_AVAILABLE = False
@@ -239,10 +241,10 @@ class FusedAdamW:
     def __init__(
         self,
         params,
-        lr: float = 1e-4,
+        lr: float = DEFAULT_LR_LORA,
         betas: tuple[float, float] = (0.9, 0.999),
-        eps: float = 1e-8,
-        weight_decay: float = 0.01,
+        eps: float = OPTIMIZER_EPSILON,
+        weight_decay: float = DEFAULT_WEIGHT_DECAY,
     ):
         # Accept either a list of param groups (dicts) or a flat iterable of params.
         # Materialize generators first — indexing params[0] would consume/crash.

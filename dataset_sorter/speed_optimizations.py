@@ -49,6 +49,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from dataset_sorter.constants import OPTIMIZER_EPSILON
+
 log = logging.getLogger(__name__)
 
 
@@ -719,7 +721,7 @@ class FusedBackwardPass:
             state["step"] += 1
             step = state["step"]
             beta1, beta2 = group["betas"]
-            eps = group.get("eps", 1e-8)
+            eps = group.get("eps", OPTIMIZER_EPSILON)
 
             # Decoupled weight decay
             if wd > 0:

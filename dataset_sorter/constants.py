@@ -243,3 +243,26 @@ ZIMAGE_INVENTIONS = {
 # ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
 MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"
+
+# ── Default Learning Rates ─────────────────────────────────────────────
+DEFAULT_LR_LORA: float = 1e-4           # LoRA / network default learning rate
+DEFAULT_LR_TEXT_ENCODER: float = 5e-5   # Text encoder default learning rate
+
+# ── Optimizer Defaults ────────────────────────────────────────────────
+OPTIMIZER_EPSILON: float = 1e-8         # Numerical stability epsilon (Adam-family optimizers)
+DEFAULT_EMA_DECAY: float = 0.9999       # EMA model weight averaging decay
+DEFAULT_MAX_GRAD_NORM: float = 1.0      # Gradient clipping max norm
+DEFAULT_WEIGHT_DECAY: float = 0.01      # L2 weight decay
+
+# ── Default LoRA Parameters ───────────────────────────────────────────
+DEFAULT_LORA_RANK: int = 32             # LoRA decomposition rank
+DEFAULT_LORA_ALPHA: int = 16            # LoRA alpha scaling factor
+
+# ── Database ──────────────────────────────────────────────────────────
+SQLITE_TIMEOUT: float = 10.0            # SQLite connection timeout (seconds)
+MTIME_TOLERANCE: float = 0.01           # File mtime comparison tolerance (seconds)
+
+# ── Default Generation Parameters ─────────────────────────────────────
+DEFAULT_INFERENCE_STEPS: int = 28       # Default diffusion inference steps
+DEFAULT_CFG_SCALE: float = 7.0          # Default classifier-free guidance scale
+DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no change, 1=full noise)

@@ -13,8 +13,11 @@ import json
 import math
 
 from dataset_sorter.constants import (
-    MODEL_RESOLUTIONS, MODEL_CLIP_SKIP,
-    MODEL_PREDICTION_TYPE, MODEL_TIMESTEP_SAMPLING,
+    DEFAULT_EMA_DECAY,
+    MODEL_CLIP_SKIP,
+    MODEL_PREDICTION_TYPE,
+    MODEL_RESOLUTIONS,
+    MODEL_TIMESTEP_SAMPLING,
 )
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.recommender_profiles import (
@@ -350,7 +353,7 @@ def recommend(
             config.use_ema = vram_gb >= 96 and total_images >= 500
         elif is_zimage:
             config.use_ema = vram_gb >= 48 and total_images >= 200
-    config.ema_decay = 0.9999
+    config.ema_decay = DEFAULT_EMA_DECAY
 
     # EMA CPU offloading: offload EMA weights to system RAM
     # Essential for 24 GB training — saves ~2-4 GB VRAM

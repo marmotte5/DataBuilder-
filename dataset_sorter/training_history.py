@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from dataset_sorter.constants import DEFAULT_LORA_RANK, DEFAULT_LR_LORA, SQLITE_TIMEOUT
+
 log = logging.getLogger(__name__)
 
 def _get_data_dir() -> Path:
@@ -64,8 +66,8 @@ class TrainingRunRecord:
     model_type: str = ""
     optimizer: str = ""
     network_type: str = "lora"
-    lora_rank: int = 32
-    learning_rate: float = 1e-4
+    lora_rank: int = DEFAULT_LORA_RANK
+    learning_rate: float = DEFAULT_LR_LORA
     batch_size: int = 1
     resolution: int = 1024
     epochs: int = 1
@@ -89,7 +91,7 @@ class TrainingHistory:
     def __init__(self, db_path: Path = _DB_PATH):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path), timeout=10.0)
+        self._conn = sqlite3.connect(str(db_path), timeout=SQLITE_TIMEOUT)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
 

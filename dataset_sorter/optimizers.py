@@ -23,6 +23,8 @@ from typing import Iterable
 import torch
 from torch.optim import Optimizer
 
+from dataset_sorter.constants import DEFAULT_LR_LORA, DEFAULT_WEIGHT_DECAY, OPTIMIZER_EPSILON
+
 log = logging.getLogger(__name__)
 
 
@@ -80,10 +82,10 @@ class Marmotte(Optimizer):
     def __init__(
         self,
         params: Iterable,
-        lr: float = 1e-4,
+        lr: float = DEFAULT_LR_LORA,
         momentum: float = 0.9,
-        weight_decay: float = 0.01,
-        eps: float = 1e-8,
+        weight_decay: float = DEFAULT_WEIGHT_DECAY,
+        eps: float = OPTIMIZER_EPSILON,
         agreement_boost: float = 1.5,
         disagreement_damp: float = 0.5,
         error_feedback_alpha: float = 0.1,
@@ -453,8 +455,8 @@ class SOAP(Optimizer):
         params: Iterable,
         lr: float = 3e-4,
         betas: tuple[float, float] = (0.9, 0.999),
-        eps: float = 1e-8,
-        weight_decay: float = 0.01,
+        eps: float = OPTIMIZER_EPSILON,
+        weight_decay: float = DEFAULT_WEIGHT_DECAY,
         precondition_frequency: int = 10,
         max_precond_dim: int = 2048,
         merge_dims: bool = True,
@@ -716,8 +718,8 @@ class Muon(Optimizer):
         return X.to(orig_dtype).reshape(orig_shape)
 
 
-def create_muon_param_groups(model, lr: float = 0.02, adamw_lr: float = 1e-4,
-                              weight_decay: float = 0.01):
+def create_muon_param_groups(model, lr: float = 0.02, adamw_lr: float = DEFAULT_LR_LORA,
+                              weight_decay: float = DEFAULT_WEIGHT_DECAY):
     """Split model params into Muon (hidden 2D+) and AdamW (embed/bias/norm) groups.
 
     Returns: (muon_params, adamw_params) as lists of dicts.
