@@ -107,6 +107,87 @@ MODEL_RESOLUTIONS: dict[str, int] = _expand_variants({
     "sd2":  768,
 })
 
+# ── Resolution presets by architecture and aspect ratio ──────────────────────
+
+# Aspect-ratio label (no dimensions — used to build "{w}×{h}  ({label})" items)
+RESOLUTION_LABELS: dict[str, str] = {
+    "square_512":       "1:1 Square",
+    "square_640":       "1:1 Square",
+    "square_1024":      "1:1 Square",
+    "portrait_2_3":     "Portrait 2:3",
+    "landscape_3_2":    "Landscape 3:2",
+    "portrait_9_16":    "Portrait 9:16 (Phone)",
+    "landscape_16_9":   "Landscape 16:9 (Widescreen)",
+    "portrait_3_4":     "Portrait 3:4",
+    "landscape_4_3":    "Landscape 4:3",
+    "portrait_9_21":    "Portrait 9:21 (Ultra Tall)",
+    "landscape_21_9":   "Landscape 21:9 (Ultra Wide)",
+    "cinematic_16_9":   "Cinematic 16:9",
+    "mobile_9_16":      "Mobile 9:16",
+}
+
+RESOLUTION_PRESETS: dict[str, dict[str, tuple[int, int]]] = {
+    "sd15": {
+        "square_512":     (512, 512),
+        "portrait_2_3":   (512, 768),
+        "landscape_3_2":  (768, 512),
+        "portrait_9_16":  (512, 896),
+        "landscape_16_9": (896, 512),
+        "square_640":     (640, 640),
+    },
+    "sdxl": {
+        "square_1024":    (1024, 1024),
+        "portrait_2_3":   (832, 1216),
+        "landscape_3_2":  (1216, 832),
+        "portrait_9_16":  (768, 1344),
+        "landscape_16_9": (1344, 768),
+        "portrait_3_4":   (896, 1152),
+        "landscape_4_3":  (1152, 896),
+        "portrait_9_21":  (640, 1536),
+        "landscape_21_9": (1536, 640),
+    },
+    "flux": {
+        "square_1024":    (1024, 1024),
+        "portrait_2_3":   (832, 1216),
+        "landscape_3_2":  (1216, 832),
+        "portrait_9_16":  (768, 1344),
+        "landscape_16_9": (1344, 768),
+        "portrait_3_4":   (896, 1152),
+        "landscape_4_3":  (1152, 896),
+        "cinematic_16_9": (1024, 576),
+        "mobile_9_16":    (576, 1024),
+    },
+    "sd3": {
+        "square_1024":    (1024, 1024),
+        "portrait_2_3":   (832, 1216),
+        "landscape_3_2":  (1216, 832),
+        "portrait_9_16":  (768, 1344),
+        "landscape_16_9": (1344, 768),
+    },
+}
+
+# Maps generation model-type keys → resolution preset family
+MODEL_RESOLUTION_FAMILY: dict[str, str] = {
+    "sd15":     "sd15",
+    "sd2":      "sd15",
+    "sdxl":     "sdxl",
+    "pony":     "sdxl",
+    "sd3":      "sd3",
+    "sd35":     "sd3",
+    "flux":     "flux",
+    "flux2":    "flux",
+    "zimage":   "flux",
+    "pixart":   "flux",
+    "cascade":  "sdxl",
+    "hunyuan":  "sdxl",
+    "kolors":   "sdxl",
+    "auraflow": "flux",
+    "sana":     "flux",
+    "hidream":  "flux",
+    "chroma":   "flux",
+    "auto":     "sdxl",
+}
+
 # ── LR Schedulers ─────────────────────────────────────────────────────
 LR_SCHEDULERS = {
     "cosine":                  "Cosine — Smooth decay to zero",
