@@ -363,7 +363,7 @@ class TestAnalyzeDataset:
         result = analyze_dataset(tmp_path)
         assert result["total_images"] == 0
         assert result["duplicates"] == []
-        assert any("aucune image" in s for s in result["suggestions"])
+        assert any("no images" in s for s in result["suggestions"])
 
     def test_returns_all_required_keys(self, tmp_path):
         img = _solid(tmp_path / "img.png", (100, 100, 100))
@@ -421,8 +421,8 @@ class TestFormatReport:
         analysis = analyze_dataset(tmp_path, trigger_word="sks")
         report = format_report(analysis)
 
-        assert "RAPPORT" in report
-        assert "diversité" in report.lower() or "Diversité" in report or "Score" in report
+        assert "REPORT" in report
+        assert "Score" in report or "diversity" in report.lower()
         assert "caption" in report.lower()
         assert "Suggestions" in report
 
@@ -438,4 +438,4 @@ class TestFormatReport:
 
         analysis = analyze_dataset(tmp_path)
         report = format_report(analysis)
-        assert "doublon" in report.lower() or "Doublon" in report
+        assert "duplicate" in report.lower()

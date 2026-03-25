@@ -198,6 +198,142 @@ TRAINING_PRESETS = {
 }
 
 
+# ── Turbo / Distilled Model LoRA Presets ─────────────────────────────
+
+TURBO_LORA_PRESETS: dict[str, dict] = {
+    "sdxl_turbo_lora": {
+        "label": "SDXL Turbo LoRA",
+        "description": "LoRA fine-tune for SDXL Turbo / LCM-SDXL. "
+                       "Generates at 1-4 steps with low/no CFG.",
+        "config": {
+            "network_type": "lora",
+            "lora_rank": 8,
+            "lora_alpha": 8,
+            "learning_rate": 1e-5,        # Lower than normal to preserve distillation
+            "text_encoder_lr": 0.0,
+            "lr_scheduler": "constant",
+            "optimizer": "adafactor",
+            "max_train_steps": 300,
+            "resolution": 512,            # SDXL Turbo was trained at 512
+            "gradient_checkpointing": True,
+            "mixed_precision": "bf16",
+            "sample_every_n_steps": 50,
+            "save_every_n_steps": 100,
+            "noise_offset": 0.0,
+            "min_snr_gamma": 0,
+            "train_text_encoder": False,
+            "cache_latents": True,
+            "timestep_bias_strategy": "later",  # Focus on low-noise timesteps
+        },
+    },
+    "lcm_sd15_lora": {
+        "label": "LCM SD 1.5 LoRA",
+        "description": "LoRA fine-tune for LCM SD 1.5 (e.g. LCM_Dreamshaper_v7). "
+                       "Generates at 2-8 steps with minimal CFG.",
+        "config": {
+            "network_type": "lora",
+            "lora_rank": 8,
+            "lora_alpha": 8,
+            "learning_rate": 1e-5,
+            "text_encoder_lr": 0.0,
+            "lr_scheduler": "constant",
+            "optimizer": "adafactor",
+            "max_train_steps": 300,
+            "resolution": 512,
+            "gradient_checkpointing": True,
+            "mixed_precision": "fp16",
+            "sample_every_n_steps": 50,
+            "save_every_n_steps": 100,
+            "noise_offset": 0.0,
+            "min_snr_gamma": 0,
+            "train_text_encoder": False,
+            "cache_latents": True,
+            "timestep_bias_strategy": "later",
+        },
+    },
+    "lightning_sdxl_lora": {
+        "label": "SDXL Lightning LoRA",
+        "description": "LoRA fine-tune for SDXL Lightning. "
+                       "Generates at 1-4 steps. Keep CFG at 1.0.",
+        "config": {
+            "network_type": "lora",
+            "lora_rank": 8,
+            "lora_alpha": 8,
+            "learning_rate": 1e-5,
+            "text_encoder_lr": 0.0,
+            "lr_scheduler": "constant",
+            "optimizer": "adafactor",
+            "max_train_steps": 400,
+            "resolution": 1024,
+            "gradient_checkpointing": True,
+            "mixed_precision": "bf16",
+            "sample_every_n_steps": 100,
+            "save_every_n_steps": 200,
+            "noise_offset": 0.0,
+            "min_snr_gamma": 0,
+            "train_text_encoder": False,
+            "cache_latents": True,
+            "timestep_bias_strategy": "later",
+        },
+    },
+    "hyper_sdxl_lora": {
+        "label": "Hyper-SDXL LoRA",
+        "description": "LoRA fine-tune for Hyper-SDXL. "
+                       "Generates at 1-2 steps with zero CFG.",
+        "config": {
+            "network_type": "lora",
+            "lora_rank": 8,
+            "lora_alpha": 8,
+            "learning_rate": 1e-5,
+            "text_encoder_lr": 0.0,
+            "lr_scheduler": "constant",
+            "optimizer": "adafactor",
+            "max_train_steps": 400,
+            "resolution": 1024,
+            "gradient_checkpointing": True,
+            "mixed_precision": "bf16",
+            "sample_every_n_steps": 100,
+            "save_every_n_steps": 200,
+            "noise_offset": 0.0,
+            "min_snr_gamma": 0,
+            "guidance_scale": 0.0,        # Hyper uses zero CFG
+            "train_text_encoder": False,
+            "cache_latents": True,
+            "timestep_bias_strategy": "later",
+        },
+    },
+    "zimage_turbo_lora": {
+        "label": "Z-Image Turbo LoRA",
+        "description": "LoRA fine-tune for Z-Image-Turbo. "
+                       "Flow matching model with few-step inference.",
+        "config": {
+            "network_type": "lora",
+            "lora_rank": 8,
+            "lora_alpha": 8,
+            "learning_rate": 1e-5,
+            "text_encoder_lr": 0.0,
+            "lr_scheduler": "constant",
+            "optimizer": "adafactor",
+            "max_train_steps": 300,
+            "resolution": 1024,
+            "gradient_checkpointing": True,
+            "mixed_precision": "bf16",
+            "sample_every_n_steps": 50,
+            "save_every_n_steps": 100,
+            "noise_offset": 0.0,
+            "min_snr_gamma": 0,
+            "model_prediction_type": "flow",
+            "train_text_encoder": False,
+            "cache_latents": True,
+            "timestep_bias_strategy": "later",
+        },
+    },
+}
+
+# Merge turbo presets into the main registry
+TRAINING_PRESETS.update(TURBO_LORA_PRESETS)
+
+
 def get_preset_names() -> list[str]:
     """Return list of preset keys."""
     return list(TRAINING_PRESETS.keys())
