@@ -117,6 +117,7 @@ class TrainingConfig:
     flash_attention: bool = False   # Flash Attention 2
     torch_compile: bool = False     # torch.compile() JIT
     cudnn_benchmark: bool = True    # cuDNN auto-tuner
+    enable_tf32: bool = False       # TF32 matmul on NVIDIA Ampere+ (faster fp32, no dtype change)
     fp8_base_model: bool = False    # Load base model in fp8 (saves ~50% VRAM)
     quantize_text_encoder: str = "none"  # none, int8, int4 — quantize frozen TE via bitsandbytes
 

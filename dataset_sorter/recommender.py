@@ -493,7 +493,21 @@ def recommend(
     config.save_precision = "bf16"
 
     # --- GPU & memory optimizations ---
-    config.mixed_precision = "bf16"
+    # Recommend the best precision for the detected hardware.
+    from dataset_sorter.hardware_detect import detect_hardware, get_available_precisions
+    _hw = detect_hardware()
+    _available = get_available_precisions(_hw["device"])
+    if "bf16" in _available:
+        config.mixed_precision = "bf16"
+    elif "fp16" in _available:
+        config.mixed_precision = "fp16"
+    else:
+        config.mixed_precision = "no"  # Full fp32 fallback (CPU / unsupported hardware)
+
+    # Enable TF32 on NVIDIA Ampere+ for a free ~3× matmul speedup.
+    # BF16 support is a reliable proxy: NVIDIA GPUs support BF16 iff they are Ampere+ (SM 8.0+).
+    config.enable_tf32 = _hw["device"] == "cuda" and _hw.get("supports_bf16", False)
+
     config.sdpa = True              # PyTorch 2.0+ native SDPA (best default)
     config.xformers = False         # Only if SDPA unavailable
     config.flash_attention = False  # Requires manual install

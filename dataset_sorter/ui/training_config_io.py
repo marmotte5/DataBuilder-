@@ -32,7 +32,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QFileDialog
 
-from dataset_sorter.constants import MODEL_TYPE_KEYS, VRAM_TIERS
+from dataset_sorter.constants import MODEL_TYPE_KEYS, VRAM_TIERS, MIXED_PRECISION_LABELS
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.ui.toast import show_toast
 
@@ -168,7 +168,8 @@ class TrainingConfigIOMixin:
         config.zero_terminal_snr = self.zero_snr_check.isChecked()
 
         config.cudnn_benchmark = self.cudnn_check.isChecked()
-        config.mixed_precision = self.precision_combo.currentText()
+        config.enable_tf32 = self.tf32_check.isChecked()
+        config.mixed_precision = self.precision_combo.currentData() or "bf16"
 
         attn = self.attention_combo.currentData() or "sdpa"
         config.sdpa = attn == "sdpa"
@@ -393,8 +394,13 @@ class TrainingConfigIOMixin:
         self.zero_snr_check.setChecked(config.zero_terminal_snr)
 
         self.cudnn_check.setChecked(config.cudnn_benchmark)
-        pidx = ["bf16", "fp16", "fp32"].index(config.mixed_precision) if config.mixed_precision in ["bf16", "fp16", "fp32"] else 0
-        self.precision_combo.setCurrentIndex(pidx)
+        self.tf32_check.setChecked(getattr(config, "enable_tf32", False))
+        # Migrate legacy "fp32" value to "no" (accelerate-style naming)
+        _prec = config.mixed_precision if config.mixed_precision != "fp32" else "no"
+        _prec_keys = list(MIXED_PRECISION_LABELS.keys())
+        self.precision_combo.setCurrentIndex(
+            _prec_keys.index(_prec) if _prec in _prec_keys else 0
+        )
 
         if config.sdpa:
             self.attention_combo.setCurrentIndex(0)
