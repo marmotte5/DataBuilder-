@@ -1,16 +1,36 @@
-"""Flux training backend.
+"""
+Module: train_backend_flux.py
+================================
+Backend for Flux.1 training (Black Forest Labs).
 
-Architecture: FluxTransformer2DModel (MMDiT-style transformer, NOT UNet).
-Prediction: flow matching (raw prediction / rectified flow).
-Resolution: 1024x1024 native.
-Text encoders: CLIP-L + T5-XXL.
+Architecture: FluxTransformer2DModel — MMDiT-style double-stream transformer (NOT a UNet)
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps in [0, 1])
+Text encoders:
+    - TE1: CLIP ViT-L/14 — 77 tokens max, provides pooled embedding (guidance emb)
+    - TE2: T5-XXL — 512 tokens max, provides the main sequence representation
+VAE: AutoencoderKLFlux (16-channel latent space, 8x spatial compression)
+Native resolution: 1024×1024
+
+Flow matching specifics:
+    - Targets the velocity field v = x1 - x0 (data minus noise direction)
+    - No discrete timesteps; uses continuous t ∈ [0, 1]
+    - Guidance embedding from CLIP-L pooled output (replaces classifier-free guidance)
+    - Text conditioning: CLIP-L hidden states + T5 hidden states, padded and concatenated
 
 Key differences from SDXL:
-- Uses transformer instead of UNet
-- Flow matching loss instead of epsilon/v-prediction
-- T5 text encoder (much larger, benefits from caching)
-- Guidance embedding instead of CFG
-- Different noise schedule (shifted sigmoid)
+    - FluxTransformer2DModel replaces UNet — double-stream MMDiT blocks process
+      text and image tokens jointly via bidirectional attention
+    - Flow matching loss (velocity target) instead of epsilon/v-prediction
+    - T5-XXL enables much longer, more descriptive prompts (512 vs. 77 tokens)
+    - No time_ids conditioning — uses pooled_projections from CLIP-L instead
+    - Guidance embedding instead of traditional CFG at training time
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Flux.1-dev et Flux.1-schnell
+    - La perte flow matching est calculée dans train_backend_base.flow_training_step()
+    - Appelé par trainer.py via le backend registry (model_name="flux")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

@@ -1,21 +1,59 @@
-"""Base training backend — shared speed optimizations for all models.
+"""
+Module: train_backend_base.py
+================================
+Abstract base class for all 17 model-specific training backends.
 
-Every model-specific backend inherits from this base and overrides:
-- load_model()           — load the correct pipeline
-- encode_text()          — model-specific text encoding
-- compute_loss()         — model-specific loss (epsilon, v-pred, flow)
-- get_added_cond()       — extra conditioning (time_ids for SDXL, etc.)
-- generate_sample()      — model-specific inference
-- save_lora()            — model-specific LoRA saving
+Every model-specific backend inherits from TrainBackendBase and overrides:
+    - load_model()         — load the correct pipeline, extract components
+    - encode_text_batch()  — model-specific tokenization and text encoding
+    - training_step()      — forward pass + loss (default: epsilon/v-pred)
+    - get_added_cond()     — extra conditioning kwargs (time_ids for SDXL, pooled for SD3, etc.)
+    - generate_sample()    — model-specific inference (default: pipeline(prompt=...) call)
+    - save_lora()          — model-specific LoRA adapter saving
+
+Shared infrastructure provided by this base:
+    - Loss functions:
+        * _compute_epsilon_loss()  — MSE(noise_pred, noise), optional v-pred override
+        * _compute_vpred_loss()    — velocity target v = alpha_t*noise - sigma_t*latent
+        * _compute_flow_loss()     — flow matching MSE(pred, noise - latent)
+        * _apply_spatial_mask()    — weighted MSE for masked training regions
+    - Flow matching:
+        * _sample_flow_timesteps() — sample t ~ [0,1] with optional debiased distribution
+        * _flow_interpolate()      — linear interpolation: noisy = (1-t)*latent + t*noise
+        * flow_training_step()     — full flow matching loop shared by Flux/SD3/Chroma/etc.
+    - Single-file loading:
+        * _load_single_file_or_pretrained() — tries from_single_file, then from_pretrained,
+          then HF fallback repo + weight swap
+    - Text encoding utilities:
+        * _te_no_grad()  — context manager: no_grad when TE is frozen, passthrough when training TE
+        * _pad_and_cat() — pad tensors to equal sequence length before concatenating (for CLIP+T5)
+    - Advanced loss features (applied automatically in flow_training_step and training_step):
+        * Min-SNR-gamma weighting — reduces loss weight at noisy timesteps
+        * SpeeD change-aware sampling — CVPR 2025 asymmetric timestep sampler
+        * Per-timestep EMA weighting — adaptive loss scaling per timestep bucket
+        * Token-level caption weighting — upweight/downweight specific caption tokens
+        * Adaptive sample weights — per-sample weights from adaptive tag weighting
+        * Spatial mask training — train only on masked image regions
 
 Speed optimizations applied here (shared by all models):
-- torch.compile() with reduce-overhead backend
-- channels_last memory format for UNet/transformer
-- torch.autocast() context manager for mixed precision
-- Fused backward pass for Adafactor (saves ~14 GB VRAM)
-- Cached time_ids / add_cond tensors (no per-step allocation)
-- Batch tensor transfers (minimize CPU-GPU syncs)
-- Gradient scaling for fp16 (GradScaler)
+    - torch.compile() with reduce-overhead backend (20–40% speedup)
+    - channels_last memory format for UNet/transformer (10–20% speedup)
+    - torch.autocast() context manager for mixed precision (bf16/fp16)
+    - Triton fused MSE+cast kernel (15% faster loss computation)
+    - Cached time_ids / add_cond tensors (no per-step GPU allocation)
+    - Batch tensor transfers (minimize CPU↔GPU syncs)
+    - Gradient scaling for fp16 via GradScaler
+
+VAE dtype policy:
+    - VAE must never run in fp16 — produces NaN outputs and decode artifacts
+    - When training dtype is fp16, VAE automatically uses bf16 instead
+    - VAE is always frozen (requires_grad=False) and on-device for latent encoding
+
+Rôle dans DataBuilder:
+    - Sert de contrat d'interface pour tous les backends (ABC avec méthodes abstraites)
+    - Centralise toutes les optimisations de vitesse pour éviter la duplication
+    - Instancié via backend_registry.py qui auto-découvre les sous-classes
+    - Appelé par trainer.py pour load_model(), encode_text_batch(), training_step()
 """
 
 import gc

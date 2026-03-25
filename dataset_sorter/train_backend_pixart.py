@@ -1,18 +1,44 @@
-"""PixArt Alpha/Sigma training backend.
+"""
+Module: train_backend_pixart.py
+=================================
+Backend for PixArt Alpha / Sigma training (Alpha Vllm / Hunyuan team).
 
-Architecture: PixArtTransformer2DModel (DiT with cross-attention).
-Prediction: flow matching (Sigma) / epsilon (Alpha).
-Resolution: 512-1024 native.
-Text encoder: T5-XXL (single encoder).
+Architecture: PixArtTransformer2DModel — DiT (Diffusion Transformer) with cross-attention
+              (NOT MMDiT — text and image tokens attend to each other via cross-attention,
+              not joint bidirectional attention as in SD3/Flux)
+Prediction type: flow matching (PixArt Sigma) / epsilon (PixArt Alpha)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (Sigma) or DDPMScheduler (Alpha)
+Text encoder: T5-XXL — 300 tokens max (encoder-only T5, no CLIP)
+VAE: AutoencoderKL (8x spatial compression)
+Native resolution: 512–1024×1024 (aspect-ratio bucketing supported)
 
-PixArt Alpha: epsilon prediction, DDPM scheduler.
-PixArt Sigma: flow matching, rectified flow.
+Conditioning specifics:
+    - encoder_hidden_states: T5-XXL hidden states passed via cross-attention
+    - added_cond_kwargs["resolution"]: [height, width] tensor for res-conditioning
+    - added_cond_kwargs["aspect_ratio"]: [h/w] float tensor for AR-conditioning
+    - No CLIP pooled embedding — T5 is the sole text signal
+
+PixArt Alpha vs. Sigma:
+    - Alpha: epsilon prediction, DDPM schedule, 512px native resolution
+    - Sigma: flow matching, rectified flow schedule, 1024px native resolution
+    - Both use the same PixArtTransformer2DModel backbone
+    - This backend defaults to Sigma (flow matching, 1024px)
+
+Timestep normalization:
+    - PixArt passes raw integer timesteps (not normalized to [0, 1])
+    - flow_training_step is called with normalize_timestep=False
 
 Key differences from SDXL:
-- Uses DiT transformer instead of UNet
-- T5-XXL only (no CLIP)
-- Simpler conditioning (no time_ids, no pooled)
-- PixArt Sigma uses flow matching like SD3
+    - PixArtTransformer2DModel replaces UNet — pure DiT, no encoder-decoder structure
+    - T5-XXL only (no CLIP at all) — longer prompts, no pooled embeddings
+    - Resolution + aspect ratio conditioning instead of SDXL's time_ids
+    - Flow matching loss (Sigma) vs. epsilon (Alpha vs. SDXL)
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour PixArt-Alpha et PixArt-Sigma
+    - Applique le conditioning résolution/AR dans get_added_cond()
+    - Appelé par trainer.py via le backend registry (model_name="pixart")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

@@ -1,18 +1,42 @@
-"""Chroma training backend.
+"""
+Module: train_backend_chroma.py
+=================================
+Backend for Chroma training (Lodestone Horizon).
 
-Architecture: ChromaTransformer2DModel (custom MMDiT variant).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoder: T5-XXL (single encoder, no CLIP).
+Architecture: ChromaTransformer2DModel — custom MMDiT variant
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps)
+Text encoder: T5-XXL — 512 tokens max, single encoder (no CLIP at all)
+VAE: AutoencoderKL (variant shipped with Chroma pipeline)
+Native resolution: 1024×1024
 
-Chroma is a T5-only flow matching model with a custom transformer
-architecture. Similar to Flux in concept but without the CLIP encoder.
+T5-only conditioning:
+    - Unlike Flux (CLIP-L + T5-XXL), Chroma relies exclusively on T5-XXL
+    - No CLIP pooled embedding → get_added_cond returns None (no added_cond_kwargs)
+    - attention_mask passed to T5 to properly handle padding tokens
 
-Key differences from Flux:
-- ChromaTransformer2DModel (not FluxTransformer)
-- T5-only (no CLIP pooled output)
-- Different LoRA targets
-- Flow matching with FlowMatchEulerDiscreteScheduler
+ChromaTransformer2DModel:
+    - Custom MMDiT architecture, separate from FluxTransformer2DModel
+    - Requires trust_remote_code=True when loading from pipeline
+    - LoRA targets: Q/K/V/out projections + MLP proj_mlp/proj_out + AdaLN norm linears
+      (same target names as Flux but different implementation)
+
+Key differences from Flux 1:
+    - ChromaTransformer2DModel vs. FluxTransformer2DModel
+    - T5-only (no CLIP-L, no pooled guidance embedding)
+    - No pooled_projections conditioning — model handles guidance internally
+    - Potentially lighter VRAM footprint (single T5 vs. CLIP-L + T5)
+
+Key differences from SD3:
+    - Single T5 encoder instead of CLIP-L + CLIP-G + T5 triple encoder
+    - No pooled text embedding concatenation
+    - Chroma architecture vs. SD3Transformer
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Chroma
+    - Utilise flow_training_step() standard avec normalisation des timesteps
+    - Appelé par trainer.py via le backend registry (model_name="chroma")
+    - Nécessite trust_remote_code=True (classe pipeline personnalisée)
 """
 
 import logging

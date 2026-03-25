@@ -1,15 +1,43 @@
-"""SD3 training backend.
+"""
+Module: train_backend_sd3.py
+==============================
+Backend for Stable Diffusion 3 training (Stability AI).
 
-Architecture: SD3Transformer2DModel (MMDiT with joint attention).
-Prediction: flow matching.
-Resolution: 1024x1024 native.
-Text encoders: CLIP-L + CLIP-G + T5-XXL (triple encoder).
+Architecture: SD3Transformer2DModel — MMDiT (Multimodal Diffusion Transformer)
+              with joint text-image attention blocks
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps)
+Text encoders (triple encoder setup):
+    - TE1: CLIP ViT-L/14 — 77 tokens max, hidden states + pooled output (clip_l_pooled)
+    - TE2: OpenCLIP ViT-bigG/14 — 77 tokens max, hidden states + pooled output (clip_g_pooled)
+    - TE3: T5-XXL — 512 tokens max, sequence representation only (optional, can be disabled)
+VAE: AutoencoderKL (16-channel latent space, 8x spatial compression)
+Native resolution: 1024×1024
+
+Text conditioning:
+    - encoder_hidden_states: CLIP-L hidden ⊕ CLIP-G hidden, padded-concatenated with T5 hidden
+      (uses _pad_and_cat because CLIP seq=77 and T5 seq=512 differ)
+    - pooled_projections: CLIP-L pooled ⊕ CLIP-G pooled (dim 1280+1280=2560)
+    - T5 encoder is optional: if None, only CLIP hidden states are used (saves ~6 GB VRAM)
+
+MMDiT joint attention:
+    - Unlike UNet cross-attention, both text tokens and image tokens attend to each other
+      bidirectionally in every transformer block
+    - Allows deeper text-image feature interaction than SDXL's cross-attention approach
 
 Key differences from SDXL:
-- Uses transformer instead of UNet
-- Flow matching loss (rectified flow)
-- Triple text encoder (CLIP-L + OpenCLIP-G + T5-XXL)
-- Shifted sigmoid timestep sampling
+    - SD3Transformer2DModel replaces UNet — no separate encoder/decoder/skip connections
+    - Flow matching loss (velocity target) instead of epsilon/v-prediction
+    - Triple text encoder for richer semantic representations
+    - No time_ids conditioning — uses pooled_projections instead
+    - Shifted sigmoid timestep schedule biases training toward mid-denoising steps
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour SD3-medium
+    - Sert de classe de base pour SD35Backend (même architecture, poids différents)
+    - La perte flow matching est calculée dans train_backend_base.flow_training_step()
+    - Appelé par trainer.py via le backend registry (model_name="sd3")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

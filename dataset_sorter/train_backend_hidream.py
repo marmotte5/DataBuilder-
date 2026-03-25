@@ -1,23 +1,56 @@
-"""HiDream training backend.
+"""
+Module: train_backend_hidream.py
+==================================
+Backend for HiDream training (HiDream-ai).
 
-Architecture: HiDreamImageTransformer2DModel (custom DiT).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoders: 4 encoders — 2x CLIP + T5 + Llama.
-  - CLIPTextModelWithProjection (CLIP-L)
-  - CLIPTextModelWithProjection (CLIP-G)
-  - T5EncoderModel (T5-XXL)
-  - LlamaForCausalLM (Llama 3.1 8B)
+Architecture: HiDreamImageTransformer2DModel — custom DiT with 4-encoder conditioning
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps in [0, 1])
+Text encoders (4 encoders — highest encoder count of any supported model):
+    - TE1: CLIP ViT-L/14 (CLIPTextModelWithProjection) — pooled output only
+    - TE2: OpenCLIP ViT-bigG/14 (CLIPTextModelWithProjection) — pooled output only
+    - TE3: T5-XXL (T5EncoderModel) — 512 tokens max, sequence output
+    - TE4: Llama 3.1 8B (LlamaForCausalLM) — 512 tokens max, last hidden layer
+VAE: AutoencoderKL (standard latent diffusion VAE)
+Native resolution: 1024×1024
 
-HiDream is one of the most encoder-heavy models, using four
-text encoders for maximum prompt understanding.
+4-encoder conditioning specifics:
+    - CLIP-L and CLIP-G: only their POOLED outputs are used (hidden states discarded)
+      Concatenated: [clip_l_pooled ⊕ clip_g_pooled] → passed as pooled_embeds
+    - T5-XXL: sequence hidden states → passed as encoder_hidden_states_t5
+    - Llama: last hidden layer [-1] → passed as encoder_hidden_states_llama3
+    - CLIP hidden states are NOT passed to the transformer (only pooled embeddings)
+    - T5 and Llama are passed as SEPARATE keyword args (cannot be concatenated —
+      different hidden dimensions)
 
-Key differences from other models:
-- 4 text encoders (most of any model)
-- LLM (Llama) as one of the text encoders
-- Custom DiT transformer architecture
-- Flow matching loss
-- Very high VRAM requirements due to 4 encoders
+Base class extension:
+    - TrainBackendBase supports up to 3 text encoders (tokenizer/text_encoder 1-3)
+    - HiDreamBackend adds tokenizer_4 / text_encoder_4 for Llama
+    - freeze_text_encoders(), offload_text_encoders(), cleanup() all overridden to
+      include TE4 (Llama) in addition to base class handling of TE1-3
+
+VRAM considerations:
+    - CLIP-L (~400M) + CLIP-G (~700M) + T5-XXL (~11B) + Llama 3.1 8B (~8B):
+      total ~20B parameters in text encoders alone — significant VRAM footprint
+    - Text encoders should be offloaded to CPU after caching to free GPU memory
+
+Training step override:
+    - Uses keyword argument forward() like HunyuanDiT
+    - Debiased estimation weighting: 1 / (1 - t + ε) for flow matching loss
+    - t5_hidden, llama_hidden passed as separate named kwargs to transformer
+    - Inherits SpeeD, EMA timestep weighting, token weighting from flow_training_step
+
+Key differences from SD3:
+    - 4 text encoders vs. 3 (adds Llama LLM on top of SD3's CLIP+T5)
+    - CLIP used for pooled conditioning only (not as sequence encoder)
+    - HiDreamImageTransformer2DModel vs. SD3Transformer2DModel
+    - Requires trust_remote_code=True
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour HiDream-I1 (Full, Fast, Dev)
+    - Étend la classe de base avec un 4ème encodeur (Llama) et ses méthodes associées
+    - Appelé par trainer.py via le backend registry (model_name="hidream")
+    - Nécessite trust_remote_code=True (classes pipeline personnalisées HiDream-ai)
 """
 
 import logging

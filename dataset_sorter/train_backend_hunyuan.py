@@ -1,15 +1,48 @@
-"""Hunyuan DiT training backend.
+"""
+Module: train_backend_hunyuan.py
+==================================
+Backend for Hunyuan DiT training (Tencent).
 
-Architecture: HunyuanDiT2DModel (DiT with cross-attention).
-Prediction: epsilon prediction with DDPM scheduler.
-Resolution: 1024x1024 native.
-Text encoders: CLIP-L (bilingual) + T5 (mT5-xl for Chinese support).
+Architecture: HunyuanDiT2DModel — DiT with cross-attention (NOT MMDiT joint attention)
+Prediction type: epsilon (direct noise prediction, same as SD 1.5/SDXL)
+Noise scheduler: DDPMScheduler (1000 timesteps) — unusual for a DiT model
+Text encoders (dual encoder, bilingual):
+    - TE1: Bilingual CLIP-L — 77 tokens max, Chinese + English, hidden states + pooled
+    - TE2: mT5-xl (multilingual T5) — 256 tokens max, Chinese + English, sequence output
+VAE: AutoencoderKL (standard 8x compression)
+Native resolution: 1024×1024 (with aspect-ratio bucketing)
+
+Dual encoder specifics:
+    - CLIP-L and mT5 produce different hidden sizes (CLIP=1024, mT5=2048)
+    - They CANNOT be concatenated along the hidden dimension (unlike SD3's same-size CLIP encoders)
+    - Instead, passed as separate kwargs: encoder_hidden_states (CLIP) and
+      encoder_hidden_states_t5 (mT5) — direct cross-attention in DiT blocks
+    - Attention masks (1=real token, 0=padding) must be passed for both encoders
+
+Added conditioning (image_meta_size + style):
+    - image_meta_size: [img_H, img_W, img_H, img_W, crop_top=0, crop_left=0] tensor
+      (similar concept to SDXL time_ids but different format)
+    - text_embedding_mask / text_embedding_mask_t5: tokenizer attention masks
+    - style: long tensor of zeros (placeholder for style conditioning)
+    - All conditioning is passed via kwargs unpacked into HunyuanDiT2DModel.forward()
+    - NOT wrapped in an added_cond_kwargs dict (unlike SDXL)
+
+Training step override:
+    - Uses keyword argument forward() instead of positional (hidden_states=, timestep=, ...)
+    - added_cond dict is unpacked with **fwd_kwargs directly
+    - epsilon loss computed with compute_loss() after standard noise addition
 
 Key differences from SDXL:
-- Uses DiT transformer instead of UNet
-- Bilingual CLIP + mT5 for Chinese/English
-- Resolution/aspect ratio conditioning
-- Supports both Chinese and English prompts natively
+    - HunyuanDiT2DModel replaces UNet — DiT with cross-attention blocks
+    - Bilingual dual encoder (CLIP-L + mT5) vs. monolingual dual CLIP
+    - epsilon prediction retained despite DiT architecture (vs. flow matching)
+    - image_meta_size conditioning instead of SDXL time_ids
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Hunyuan DiT v1.x
+    - encode_text_batch retourne également les masques d'attention pour get_added_cond()
+    - Appelé par trainer.py via le backend registry (model_name="hunyuan")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging
