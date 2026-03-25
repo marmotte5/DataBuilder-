@@ -444,6 +444,43 @@ def apply_ipex_optimize(model, dtype, hw: dict[str, Any] | None = None):
     return model
 
 
+def get_available_precisions(device: str) -> list[str]:
+    """Return the list of supported mixed_precision options for the current hardware.
+
+    The returned values match the keys in ``MIXED_PRECISION_LABELS`` and the
+    ``mixed_precision`` field of ``TrainingConfig``.
+
+    Notes:
+    - "no" (fp32) is always available as the baseline.
+    - fp16 training on MPS is broken in most PyTorch versions; bf16 is used instead.
+    - fp8 requires NVIDIA Ada Lovelace (SM 8.9, RTX 40xx) or Hopper (SM 9.0+)
+      and the torchao / transformer-engine library at runtime.
+    """
+    try:
+        import torch
+    except ImportError:
+        return ["no"]
+
+    available: list[str] = ["no"]  # fp32 always supported
+
+    if device == "cuda" and torch.cuda.is_available():
+        available.append("fp16")
+        if torch.cuda.is_bf16_supported():
+            available.append("bf16")
+        # fp8 support: Ada Lovelace (SM 8.9) and Hopper (SM 9.0+)
+        major, minor = torch.cuda.get_device_capability()
+        if major * 10 + minor >= 89:
+            available.append("fp8")
+    elif device == "mps":
+        # fp16 training is broken on MPS — bf16 is the only reduced-precision option
+        available.append("bf16")
+    elif device == "xpu":
+        available.append("fp16")
+        available.append("bf16")
+
+    return available
+
+
 def log_hardware_summary(hw: dict[str, Any] | None = None) -> None:
     """Log a one-line hardware capability summary plus any advisory notes."""
     info = hw or detect_hardware()

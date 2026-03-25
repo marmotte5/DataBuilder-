@@ -162,6 +162,26 @@ SAVE_PRECISIONS = {
     "fp32":   "Float32 — Full precision (large files)",
 }
 
+# ── Mixed Precision (training autocast dtype) ─────────────────────────
+# "no" matches accelerate's naming for full fp32 (no mixed precision).
+MIXED_PRECISION_OPTIONS = ["no", "fp16", "bf16"]
+
+# Extended list for hardware that supports FP8 (Ada Lovelace / Hopper+).
+EXTENDED_PRECISION_OPTIONS = ["no", "fp16", "bf16", "fp8"]
+
+# Human-readable labels shown in the UI combo box.
+MIXED_PRECISION_LABELS = {
+    "no":   "FP32 — Full precision (no mixed precision)",
+    "fp16": "FP16 — Half precision (NVIDIA / ROCm)",
+    "bf16": "BF16 — BFloat16 (Ampere+ / Apple Silicon) — recommended",
+    "fp8":  "FP8 — 8-bit float (Ada Lovelace RTX 40xx / H100 only)",
+}
+
+# TF32 is a separate toggle: it accelerates fp32 matmul on NVIDIA Ampere+
+# without changing the compute dtype.  Enabled via
+#   torch.backends.cuda.matmul.allow_tf32 = True
+# It is NOT part of mixed_precision and must not be confused with fp32 training.
+
 # Clip skip (non-zero only; default is 0)
 MODEL_CLIP_SKIP: dict[str, int] = _expand_variants({
     **{k: 0 for k in _BASE_MODELS},

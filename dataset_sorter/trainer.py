@@ -147,28 +147,89 @@ class Trainer:
         _is_cuda = self.device.type == "cuda"
         _is_mps = self.device.type == "mps"
         _is_xpu = self.device.type == "xpu"
+
+        # Normalize legacy "fp32" to "no" (accelerate-style naming)
+        _prec = config.mixed_precision if config.mixed_precision != "fp32" else "no"
+
         if _is_mps:
             # MPS does not support fp16 training (Metal framework limitation).
             # bf16 is always used on Apple Silicon regardless of user config.
-            if config.mixed_precision == "fp16":
+            if _prec == "fp16":
                 log.warning(
                     "fp16 mixed precision is not supported on MPS (Apple Silicon). "
                     "Forcing bf16 instead. Update your config to 'bf16' to suppress this warning."
                 )
-            self.dtype = torch.bfloat16
+            elif _prec == "fp8":
+                log.warning(
+                    "fp8 mixed precision is not supported on MPS. Falling back to bf16."
+                )
+            elif _prec == "no":
+                log.info("MPS: full fp32 training requested. This will be slower than bf16.")
+                self.dtype = torch.float32
+                _prec = "_resolved"
+            if _prec != "_resolved":
+                self.dtype = torch.bfloat16
         elif _is_xpu:
             # Intel XPU: bf16 is recommended; fp16 is available but less stable
-            if config.mixed_precision == "fp16":
+            if _prec == "fp16":
                 log.info("Intel XPU: fp16 requested; using fp16 (bf16 is preferred for stability).")
                 self.dtype = torch.float16
+            elif _prec in ("no", "fp32"):
+                self.dtype = torch.float32
+            elif _prec == "fp8":
+                log.warning("fp8 is not supported on Intel XPU. Falling back to bf16.")
+                self.dtype = torch.bfloat16
             else:
                 self.dtype = torch.bfloat16
-        elif config.mixed_precision == "bf16" and _is_cuda and torch.cuda.is_bf16_supported():
+        elif _prec in ("no",):
+            # Full fp32 — no mixed precision
+            self.dtype = torch.float32
+        elif _prec == "fp8":
+            # FP8 forward/backward on Ada Lovelace (SM 8.9, RTX 40xx) or Hopper (SM 9.0+).
+            # We use bf16 as the autocast dtype and route through the FP8 training wrapper.
+            if _is_cuda:
+                _cc_major, _cc_minor = torch.cuda.get_device_capability()
+                if _cc_major * 10 + _cc_minor >= 89:
+                    log.info(
+                        "FP8 mixed precision: using bf16 autocast + FP8 ops via fp8_training wrapper "
+                        f"(SM {_cc_major}.{_cc_minor})."
+                    )
+                    self.dtype = torch.bfloat16
+                    config.fp8_training = True  # Activate FP8 wrapper in training loop
+                else:
+                    log.warning(
+                        f"FP8 not supported on this GPU (SM {_cc_major}.{_cc_minor}); "
+                        "requires Ada Lovelace (SM 8.9 / RTX 40xx) or Hopper (SM 9.0+). "
+                        "Falling back to bf16."
+                    )
+                    self.dtype = torch.bfloat16
+            else:
+                log.warning("FP8 mixed precision requires a CUDA device. Falling back to bf16.")
+                self.dtype = torch.bfloat16
+        elif _prec == "bf16" and _is_cuda and torch.cuda.is_bf16_supported():
             self.dtype = torch.bfloat16
-        elif config.mixed_precision == "fp16":
+        elif _prec == "fp16":
             self.dtype = torch.float16
         else:
+            # Fallback: use bf16 if supported, else fp16
             self.dtype = torch.bfloat16 if (_is_cuda and torch.cuda.is_bf16_supported()) else torch.float16
+
+        # TF32 toggle (NVIDIA Ampere+, SM 8.0+).
+        # TF32 accelerates fp32 matrix multiplications without changing the training dtype.
+        if config.enable_tf32:
+            if _is_cuda:
+                _cc_major = torch.cuda.get_device_properties(0).major
+                if _cc_major >= 8:
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
+                    log.info("TF32 matmul enabled (NVIDIA Ampere+ SM %d.x).", _cc_major)
+                else:
+                    log.warning(
+                        "TF32 requires NVIDIA Ampere+ (SM 8.0+); this GPU is SM %d.x. "
+                        "enable_tf32 ignored.", _cc_major
+                    )
+            else:
+                log.debug("enable_tf32 has no effect on non-CUDA hardware — ignored.")
 
         self.backend = None
         self.dataset = None

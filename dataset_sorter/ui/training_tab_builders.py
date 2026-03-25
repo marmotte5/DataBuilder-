@@ -16,7 +16,7 @@ from dataset_sorter.constants import (
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
     ATTENTION_MODES, SAMPLE_SAMPLERS, SAVE_PRECISIONS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES,
-    LORA_INIT_METHODS,
+    LORA_INIT_METHODS, MIXED_PRECISION_LABELS,
 )
 from dataset_sorter.training_presets import (
     CONTROLNET_TYPES, DPO_LOSS_TYPES,
@@ -1277,9 +1277,26 @@ class TrainingTabBuildersMixin:
         prec_row = QHBoxLayout()
         prec_row.addWidget(QLabel("Mixed Precision"))
         self.precision_combo = QComboBox()
-        self.precision_combo.addItems(["bf16", "fp16", "fp32"])
+        for key, label in MIXED_PRECISION_LABELS.items():
+            self.precision_combo.addItem(label, key)
+        self.precision_combo.setToolTip(
+            "Training autocast dtype.\n"
+            "BF16: best default for NVIDIA Ampere+ and Apple Silicon.\n"
+            "FP16: use on older NVIDIA GPUs that lack BF16 (Turing, Pascal).\n"
+            "FP32: full precision — highest quality, 2× more VRAM.\n"
+            "FP8: 2× throughput on RTX 40xx / H100; requires torchao or transformer-engine."
+        )
         prec_row.addWidget(self.precision_combo, 1)
         g3l.addLayout(prec_row)
+
+        self.tf32_check = QCheckBox("Enable TF32 (NVIDIA Ampere+ matmul speedup)")
+        self.tf32_check.setChecked(False)
+        self.tf32_check.setToolTip(
+            "Enable TF32 precision for CUDA matrix multiplications on NVIDIA Ampere+ GPUs.\n"
+            "Accelerates fp32 ops by ~3× with negligible quality loss.\n"
+            "Has no effect on non-NVIDIA or pre-Ampere hardware."
+        )
+        g3l.addWidget(self.tf32_check)
 
         g3.setLayout(g3l)
         layout.addWidget(g3)
