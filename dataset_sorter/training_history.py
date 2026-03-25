@@ -1,7 +1,28 @@
-"""Training history database — learns from past runs to improve recommendations.
+"""
+Module: training_history.py
+============================
+Base de données d'historique d'entraînement — apprentissage par l'expérience.
 
-Logs training metrics (loss curves, convergence speed, final quality) per
-configuration and uses that history to refine future recommendations.
+Rôle dans DataBuilder:
+    - Enregistre les métriques de chaque run d'entraînement dans une base SQLite locale
+    - Utilise l'historique pour suggérer des hyperparamètres optimaux (LR, batch size)
+      en fonction du type de modèle, de la taille du dataset et de la VRAM disponible
+    - Permet d'exporter l'historique en CSV pour analyse externe (Pandas, Excel)
+
+Classes/Fonctions principales:
+    - TrainingRunRecord: Dataclass décrivant les paramètres et métriques d'un run
+      (config, loss finale, divergence, OOM, courbe de loss, temps d'entraînement)
+    - TrainingHistory: Interface SQLite avec log_run(), get_best_config(),
+      get_lr_suggestion(), export_csv() et export_loss_curves_csv()
+
+Dépendances: sqlite3, json, logging, pathlib, dataset_sorter.constants
+
+Notes techniques:
+    - La base SQLite est stockée dans ~/.local/share/dataset_sorter/training_history.db
+      (ou DATASET_SORTER_DATA / XDG_DATA_HOME si défini)
+    - Les courbes de loss sont tronquées à 200 points pour limiter la taille de la DB
+    - get_lr_suggestion() utilise une moyenne pondérée par l'inverse de la loss finale :
+      les runs avec une meilleure loss ont plus de poids dans la recommandation
 """
 
 import json
@@ -62,7 +83,18 @@ CREATE INDEX IF NOT EXISTS idx_optimizer ON training_runs(optimizer);
 
 @dataclass
 class TrainingRunRecord:
-    """A single training run's metadata and outcome."""
+    """Paramètres et métriques d'un run d'entraînement complet.
+
+    Rempli par training_worker.py à la fin de chaque run et persisté via
+    TrainingHistory.log_run(). Les champs de configuration (model_type, optimizer,
+    lora_rank, etc.) servent à retrouver les runs similaires lors des suggestions.
+
+    Attributes:
+        diverged: True si la loss a divergé (NaN/Inf ou explosion > 10x).
+        oom_occurred: True si une erreur CUDA OOM a été catchée pendant le run.
+        loss_curve: Valeurs de loss par step (échantillonnées, pas toutes les steps).
+        convergence_step: Step auquel la loss a atteint son minimum pour la 1ère fois.
+    """
     model_type: str = ""
     optimizer: str = ""
     network_type: str = "lora"
@@ -86,7 +118,12 @@ class TrainingRunRecord:
 
 
 class TrainingHistory:
-    """SQLite-backed training history for learning from past runs."""
+    """Historique d'entraînement persisté en SQLite pour l'apprentissage par l'expérience.
+
+    Fournit des recommandations basées sur les runs précédents réussis, en filtrant
+    les configurations ayant divergé ou causé des OOM. Les suggestions de LR utilisent
+    une moyenne pondérée par l'inverse de la loss finale (meilleurs runs = plus de poids).
+    """
 
     def __init__(self, db_path: Path = _DB_PATH):
         self.db_path = db_path
@@ -111,7 +148,7 @@ class TrainingHistory:
                 record.batch_size, record.resolution, record.epochs,
                 record.total_steps, record.dataset_size, record.vram_gb,
                 record.final_loss, record.min_loss, record.convergence_step,
-                json.dumps(record.loss_curve[-200:]),  # Cap stored curve
+                json.dumps(record.loss_curve[-200:]),  # Limite à 200 points pour éviter les blobs trop lourds
                 int(record.diverged), int(record.oom_occurred),
                 record.peak_vram_gb, record.training_time_s, record.notes,
             ),
@@ -162,7 +199,8 @@ class TrainingHistory:
         if len(rows) < 2:
             return None
 
-        # Weighted average by inverse loss (better runs get more weight)
+        # Moyenne pondérée par l'inverse de la loss : 1/loss donne plus de poids
+        # aux runs avec une meilleure (plus basse) loss finale. 1e-6 évite la division par zéro.
         total_weight = 0.0
         weighted_lr = 0.0
         for row in rows:
@@ -260,7 +298,8 @@ class TrainingHistory:
             log.info("No runs to export (model_type=%r)", model_type)
             return 0
 
-        # Build column list, replacing loss_curve_json with loss_curve_len
+        # Remplace loss_curve_json (blob illisible) par loss_curve_len (nombre de points)
+        # pour produire un CSV exploitable directement dans un tableur.
         columns = [desc[0] for desc in self._conn.execute(
             "SELECT * FROM training_runs LIMIT 0"
         ).description]
