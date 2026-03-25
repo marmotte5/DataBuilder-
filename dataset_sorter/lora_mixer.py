@@ -1,9 +1,31 @@
-"""LoRA Mixer — combine multiple LoRA adapters into a single merged LoRA.
+"""
+Module: lora_mixer.py
+========================
+Fusion de plusieurs adaptateurs LoRA en un seul fichier merged.
 
-Supports weighted_average, add, and svd_merge fusion modes. Handles PEFT,
-diffusers, and kohya key formats with automatic normalization before merging.
+Rôle dans DataBuilder:
+    - Combine des LoRAs de styles/concepts différents avec pondération par
+      fichier (ex: style.safetensors:0.7 + concept.safetensors:0.3)
+    - Supporte trois modes de fusion : weighted_average, add, svd_merge
+    - Détecte et normalise automatiquement les formats de clés divergents
+      (PEFT, diffusers, kohya) vers un format canonique interne avant fusion
+    - Expose une API Python (LoRAMixer) et une interface CLI
 
-Usage (CLI):
+Classes/Fonctions principales:
+    - LoRAMixer            : API principale — add_lora(), validate(), mix()
+    - _detect_format()     : Détecte le format des clés (kohya/peft/diffusers)
+    - _normalize_key()     : Convertit les clés vers un format canonique interne
+    - _kohya_path_to_dotted(): Reconvertit les chemins kohya underscore en points
+
+Modes de fusion:
+    - weighted_average : tensor = sum(t_i * w_i) / sum(w_i)  — recommandé
+    - add              : tensor = sum(t_i * w_i)  — pour combinaison additive
+    - svd_merge        : reconstruit W_delta = up @ down, puis re-décompose
+                         par SVD tronquée — meilleure qualité, plus lent
+
+Dépendances: torch, safetensors
+
+Usage CLI:
     python -m dataset_sorter.lora_mixer lora1.safetensors:0.7 lora2.safetensors:0.3 -o mixed.safetensors
     python -m dataset_sorter.lora_mixer lora1.safetensors lora2.safetensors --mode add -o out.safetensors
 """
@@ -20,7 +42,13 @@ log = logging.getLogger(__name__)
 
 MergeMode = Literal["weighted_average", "add", "svd_merge"]
 
-# ─── Key format patterns ──────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Patterns regex pour les formats de clés LoRA
+# ============================================================
+
+# Les trois outils majeurs (kohya-ss, PEFT, diffusers) utilisent des
+# conventions de nommage incompatibles. On normalise vers un format
+# canonique <component>.<path>.<suffix> avant toute opération.
 
 # kohya: lora_unet_down_blocks_0_attentions_0_proj_in.lora_down.weight
 _KOHYA_RE = re.compile(r"^lora_(unet|te|te1|te2)_(.+)\.(lora_down|lora_up|alpha)(?:\.weight)?$")
@@ -90,7 +118,9 @@ def _get_rank(tensors: dict[str, torch.Tensor], norm_key: str) -> int | None:
     return None
 
 
-# ─── LoRAMixer ────────────────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Classe principale LoRAMixer
+# ============================================================
 
 
 class LoRAMixer:
@@ -281,6 +311,15 @@ class LoRAMixer:
         return merged
 
     def _merge_svd(self, common: list[str]) -> dict[str, torch.Tensor]:
+        # SVD merge algorithm:
+        # 1. Pour chaque paire (lora_down, lora_up), reconstruire la matrice
+        #    de delta pleine : W_delta = up @ down * (alpha / rank)
+        # 2. Accumuler la somme pondérée des W_delta de tous les LoRAs
+        # 3. Re-décomposer le résultat avec SVD tronquée au rang max trouvé :
+        #    U, S, Vh = svd(W_acc) ; new_up = U[:, :r] * sqrt(S[:r])
+        #    new_down = Vh[:r, :] * sqrt(S[:r])  (répartition équitable)
+        # Cette approche produit un LoRA "optimal" au sens des moindres carrés
+        # mais est plus coûteuse en mémoire (matrice pleine temporaire).
         """SVD-based merge: reconstruct full delta weights then re-decompose.
 
         For each lora_down/lora_up pair, reconstructs W_delta = up @ down,
@@ -391,7 +430,9 @@ class LoRAMixer:
         save_file(tensors_f16, path)
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Fonctions utilitaires internes
+# ============================================================
 
 
 def _kohya_path_to_dotted(path: str) -> str:
@@ -455,7 +496,9 @@ def _pad_to_shape(tensor: torch.Tensor, target: torch.Size) -> torch.Tensor:
     return result
 
 
-# ─── CLI ─────────────────────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Interface ligne de commande (CLI)
+# ============================================================
 
 
 def _parse_lora_arg(arg: str) -> tuple[str, float]:

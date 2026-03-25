@@ -1,22 +1,34 @@
-"""Training Dashboard — lightweight local web server for real-time training metrics.
+"""
+Module: training_dashboard.py
+========================
+Dashboard web local léger pour le monitoring temps réel de l'entraînement.
 
-Serves a dark-themed HTML page with Chart.js graphs (loss, learning rate),
-a progress bar, VRAM/speed/ETA readouts, and a sample image gallery.
+Rôle dans DataBuilder:
+    - Démarre un serveur HTTP stdlib dans un thread daemon (sans dépendances externes)
+    - Sert une page HTML dark-theme avec Chart.js (loss, learning rate) via CDN
+    - Expose une API JSON (/api/metrics, /api/samples, /api/history)
+    - Persiste l'historique des runs dans ~/.databuilder/dashboard_history/
+    - Permet la comparaison overlay entre le run actuel et un run historique
+
+Classes/Fonctions principales:
+    - TrainingDashboard   : Classe principale — start(), stop(), update(), add_sample()
+    - _DashboardHandler   : Handler HTTP minimal (BaseHTTPRequestHandler)
 
 Architecture:
-- TrainingDashboard: main class, starts an http.server.HTTPServer in a daemon thread.
-- _DashboardHandler: request handler, serves HTML + JSON API endpoints.
-- No external dependencies: stdlib only (http.server, json, threading, pathlib).
-- Chart.js loaded from CDN in the HTML page.
+    - Pas de dépendances externes : stdlib uniquement (http.server, json, threading, pathlib)
+    - Thread-safe : tous les accès aux métriques passent par self._lock (threading.Lock)
+    - Chart.js chargé depuis CDN dans le template HTML embarqué (_HTML)
+    - Auto-refresh toutes les 2 secondes côté client (setInterval JS)
 
-Typical usage in a training loop::
+Endpoints API:
+    GET /               → page HTML complète
+    GET /api/metrics    → snapshot JSON des métriques actuelles
+    GET /api/samples    → liste des images générées
+    GET /api/history    → liste des runs historiques (résumés)
+    GET /api/history/{id} → métriques complètes d'un run
+    GET /sample?path=   → sert le fichier image depuis le disque
 
-    dashboard = TrainingDashboard(port=8585)
-    dashboard.start()
-    for step, batch in enumerate(dataloader):
-        loss = train_step(batch)
-        dashboard.update(step=step, loss=loss.item(), lr=scheduler.get_last_lr()[0])
-    dashboard.stop()
+Dépendances: stdlib uniquement (http.server, json, threading, socket, pathlib)
 """
 
 from __future__ import annotations
@@ -33,9 +45,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# HTML template (dark theme, Chart.js via CDN, auto-refresh every 2 s)
-# ---------------------------------------------------------------------------
+# ============================================================
+# SECTION: Template HTML embarqué (dark theme, Chart.js CDN)
+# ============================================================
+# Le template HTML est une constante string car :
+# - Évite la gestion de fichiers statiques (pas de répertoire templates)
+# - Simplifie le déploiement (un seul fichier Python suffit)
+# - Chargé une seule fois en mémoire, servi à chaque requête GET /
 
 _HTML = """\
 <!DOCTYPE html>
@@ -282,9 +298,9 @@ setInterval(refresh, 2000);
 """
 
 
-# ---------------------------------------------------------------------------
-# HTTP request handler
-# ---------------------------------------------------------------------------
+# ============================================================
+# SECTION: Handler HTTP
+# ============================================================
 
 class _DashboardHandler(BaseHTTPRequestHandler):
     """Minimal HTTP handler serving the dashboard HTML and JSON API."""
@@ -356,9 +372,9 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"Not found")
 
 
-# ---------------------------------------------------------------------------
-# Main class
-# ---------------------------------------------------------------------------
+# ============================================================
+# SECTION: Classe principale TrainingDashboard
+# ============================================================
 
 class TrainingDashboard:
     """Lightweight local web dashboard for real-time training metrics.
@@ -382,6 +398,9 @@ class TrainingDashboard:
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        # Identifiant unique du run : timestamp + 3 octets aléatoires en hex
+        # (ex: "20260325_143022_a3f91c") — unicité garantie même si deux runs
+        # démarrent dans la même seconde.
         self._run_id: str = time.strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(3).hex()
         self._run_name: str = f"run_{self._run_id}"
 
@@ -520,6 +539,8 @@ class TrainingDashboard:
             lr,
         )
 
+        # Log au niveau INFO seulement tous les 5% de progression (total_steps // 20)
+        # pour ne pas saturer les logs. Fallback à 100 si total_steps est 0.
         if step % max(1, self.metrics["total_steps"] // 20 or 100) == 0:
             log.info(
                 "Training step %d/%d — loss=%.5f lr=%.2e",

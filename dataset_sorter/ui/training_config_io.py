@@ -1,7 +1,29 @@
-"""Config build/apply/save/load methods for TrainingTab.
+"""
+Module: training_config_io.py
+========================
+Sérialisation/désérialisation de la configuration d'entraînement pour l'UI.
 
-Extracted from training_tab.py to keep serialisation logic separate
-from the UI layout and training control code.
+Rôle dans DataBuilder:
+    - Extrait de training_tab.py pour séparer la logique de sérialisation
+      de la mise en page (layout) et du contrôle de l'entraînement
+    - build_config() lit les valeurs de tous les widgets Qt et retourne un
+      TrainingConfig cohérent prêt à être passé à trainer.py
+    - apply_config() fait l'opération inverse : peuple tous les widgets depuis
+      un TrainingConfig (utilisé pour charger un preset ou restaurer un état)
+    - _save/_load gèrent la persistance JSON via dialogues fichier Qt
+
+Classes/Fonctions principales:
+    - TrainingConfigIOMixin.build_config()          : Widgets → TrainingConfig
+    - TrainingConfigIOMixin.apply_config()          : TrainingConfig → Widgets
+    - TrainingConfigIOMixin._save_training_config() : Sauvegarde en JSON
+    - TrainingConfigIOMixin._load_training_config() : Chargement depuis JSON
+
+Note sur le chargement JSON:
+    Le chargement est tolérant aux valeurs nulles et aux types incompatibles.
+    Les valeurs None sont ignorées (garde le défaut du dataclass).
+    bool est vérifié avant int car bool est une sous-classe de int en Python.
+
+Dépendances: PyQt6, dataset_sorter.models.TrainingConfig, dataset_sorter.constants
 """
 
 import json
@@ -17,6 +39,10 @@ from dataset_sorter.ui.toast import show_toast
 
 class TrainingConfigIOMixin:
     """Mixin providing build_config / apply_config / save / load for TrainingTab."""
+
+    # ============================================================
+    # SECTION: Construction du config depuis les widgets
+    # ============================================================
 
     def build_config(self) -> TrainingConfig:
         """Collect values from every UI widget and return a populated TrainingConfig.
@@ -216,6 +242,10 @@ class TrainingConfigIOMixin:
         config.adversarial_feature_match = self.adv_feature_match_check.isChecked()
 
         return config
+
+    # ============================================================
+    # SECTION: Application du config sur les widgets
+    # ============================================================
 
     def apply_config(self, config: TrainingConfig):
         """Populate every UI widget from the given TrainingConfig.
@@ -450,6 +480,10 @@ class TrainingConfigIOMixin:
         self.adv_start_spin.setValue(config.adversarial_start_step)
         self.adv_feature_match_check.setChecked(config.adversarial_feature_match)
 
+    # ============================================================
+    # SECTION: Persistance JSON (save / load)
+    # ============================================================
+
     def _save_training_config(self):
         """Open a Save dialog and write the current training config to a JSON file.
 
@@ -505,8 +539,13 @@ class TrainingConfigIOMixin:
                     if isinstance(current, list) and isinstance(value, list):
                         setattr(config, key, value)
                     elif isinstance(current, bool):
-                        # bool must be checked before int (bool is subclass of int).
-                        # Prevent bool("false") = True corruption from JSON strings.
+                        # bool doit être vérifié AVANT int car bool est une
+                        # sous-classe de int en Python : isinstance(True, int) == True.
+                        # Sans ce check, type(current)(value) pour un champ bool
+                        # appelle int(value) au lieu de bool(value), donnant
+                        # des entiers 0/1 au lieu de True/False.
+                        # De plus, bool("false") = True (toute string non-vide
+                        # est truthy), donc on rejette les strings pour les bools.
                         if isinstance(value, bool):
                             setattr(config, key, value)
                         elif isinstance(value, (int, float)):

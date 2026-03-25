@@ -1,7 +1,30 @@
-"""Optimizer and LR scheduler factory for the training engine.
+"""
+Module: optimizer_factory.py
+========================
+Usine d'optimiseurs et de schedulers LR pour le moteur d'entraînement.
 
-Extracted from trainer.py to keep the factory logic separate from the
-training loop.
+Rôle dans DataBuilder:
+    - Instancie l'optimiseur approprié selon TrainingConfig.optimizer
+    - Gère les cas spéciaux : Muon (split paramètres 2D/1D), Adafactor
+      (relative_step incompatible avec scheduler externe), optimiseurs à LR
+      adaptatif (Prodigy, DAdaptAdam) qui gèrent leur propre LR
+    - Crée le scheduler LR correspondant (cosine, linear, rex, etc.)
+    - Extrait de trainer.py pour séparer la logique de configuration
+      de la boucle d'entraînement
+
+Classes/Fonctions principales:
+    - get_optimizer()        : Instancie et configure l'optimiseur
+    - get_scheduler()        : Crée le scheduler LR adapté à l'optimiseur
+    - _CombinedOptimizer     : Encapsule plusieurs optimiseurs comme un seul
+                               (Muon pour 2D+ params + AdamW pour 1D params)
+    - _RexScheduler          : Scheduler REX (decroissance réciproque 1/(1+t/T))
+
+Optimiseurs supportés:
+    Marmotte, Adafactor, Prodigy, AdamW8bit, Lion, CAME, DAdaptAdam,
+    AdamWScheduleFree, SOAP, Muon, GaLoreAdamW, GaLoreAdamW8bit, SGD, AdamW
+
+Dépendances: torch, transformers (Adafactor), dataset_sorter.optimizers,
+             prodigyopt/bitsandbytes/lion-pytorch/etc. (optionnels)
 """
 
 import logging
@@ -13,6 +36,10 @@ from dataset_sorter.models import TrainingConfig
 
 log = logging.getLogger(__name__)
 
+
+# ============================================================
+# SECTION: Wrapper multi-optimiseurs
+# ============================================================
 
 class _CombinedOptimizer:
     """Wraps multiple optimizers so they behave like a single optimizer.
@@ -55,6 +82,10 @@ class _CombinedOptimizer:
         for opt, sd in zip(self.optimizers, state_dicts):
             opt.load_state_dict(sd)
 
+
+# ============================================================
+# SECTION: Factory d'optimiseurs
+# ============================================================
 
 def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     """Create optimizer with proper parameter groups for different LR."""
@@ -157,7 +188,8 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     elif config.optimizer == "Muon":
         # Muon's Newton-Schulz orthogonalization only works on 2D+ matrices.
         # 1D params (biases, norms, embeddings) must use AdamW instead.
-        # Use create_muon_param_groups to split correctly.
+        # Raison: NS orthogonalise la matrice de gradient via itération de Newton,
+        # ce qui n'a pas de sens pour un vecteur 1D (pas de structure matricielle).
         from dataset_sorter.optimizers import Muon
         log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
         # Split each param group into 2D+ (Muon) and 1D (AdamW) while
@@ -173,6 +205,10 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                 muon_groups.append({"params": muon_p, "lr": muon_group_lr})
             if adamw_p:
                 adamw_groups.append({"params": adamw_p, "lr": group_lr})
+        # Muon recommande un LR plus élevé que AdamW (0.01-0.1 vs 1e-4).
+        # Si l'utilisateur passe un LR AdamW classique (ex: 1e-4), on le
+        # remplace par 0.02 (valeur par défaut Muon) pour éviter une
+        # convergence trop lente avec Muon.
         muon_lr = lr if lr > 0.001 else 0.02
         if muon_groups:
             # Create Muon for 2D+ params only
@@ -233,6 +269,8 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         )
     else:
         # Default: fused AdamW (fastest native option, PyTorch 2.0+)
+        # fused=True fusionne les opérations CUDA pour ~10-20% d'accélération.
+        # TypeError fallback: versions PyTorch < 2.0 ne supportent pas fused=True.
         try:
             return torch.optim.AdamW(
                 param_groups, lr=lr, weight_decay=config.weight_decay,
@@ -243,6 +281,10 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                 param_groups, lr=lr, weight_decay=config.weight_decay,
             )
 
+
+# ============================================================
+# SECTION: Factory de schedulers LR
+# ============================================================
 
 def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
     """Create LR scheduler.
@@ -306,6 +348,10 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
         num_training_steps=num_training_steps,
     )
 
+
+# ============================================================
+# SECTION: Scheduler REX personnalisé
+# ============================================================
 
 class _RexScheduler:
     """REX (Reciprocal EXponential) LR scheduler.
