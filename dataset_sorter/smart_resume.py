@@ -52,8 +52,8 @@ def save_loss_history(
         try:
             data = json.loads(history_path.read_text(encoding="utf-8"))
             existing = data.get("runs", [])
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning("Failed to read loss history from %s: %s", history_path, e)
 
     run = {
         "loss_points": [{"step": s, "loss": l} for s, l in loss_history],

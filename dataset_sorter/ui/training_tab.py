@@ -9,6 +9,7 @@ Tab builder methods live in training_tab_builders.py (mixin).
 Config build/apply/save/load live in training_config_io.py (mixin).
 """
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
@@ -30,6 +31,8 @@ from dataset_sorter.training_presets import (
 )
 from dataset_sorter.ui.training_tab_builders import TrainingTabBuildersMixin
 from dataset_sorter.ui.training_config_io import TrainingConfigIOMixin
+
+log = logging.getLogger(__name__)
 
 
 class LossChartWidget(QWidget):
@@ -604,8 +607,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             latest = TrainingStateManager.get_latest_resumable_checkpoint(Path(output_dir))
             if latest is not None:
                 self.resume_from_input.setText(str(latest))
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Could not detect latest checkpoint in %s: %s", output_dir, e)
 
     def _log(self, msg: str):
         """Append a message to the training log and auto-scroll to the bottom."""
@@ -1137,8 +1140,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             snap = get_vram_snapshot()
             if snap.total_bytes > 0:
                 self._log(f"Peak VRAM: {snap.peak_allocated_gb:.2f} / {snap.total_gb:.1f} GB")
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("VRAM stats unavailable: %s", e)
         self._disconnect_training_worker()
         self._training_worker = None
 

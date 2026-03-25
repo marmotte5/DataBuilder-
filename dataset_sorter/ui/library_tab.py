@@ -297,8 +297,8 @@ def _detect_lora_metadata(path: Path) -> tuple[int | None, str]:
                 if len(shape) >= 2:
                     rank = shape[0]
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("LoRA rank detection failed for %s: %s", path, e)
 
     return rank, base_hint
 

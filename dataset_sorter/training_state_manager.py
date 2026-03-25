@@ -60,8 +60,8 @@ def _hardware_info(device: str = "cpu") -> dict:
             info["gpu_name"] = torch.cuda.get_device_name(0)
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             info["gpu_name"] = "Apple Silicon (MPS)"
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("Hardware info query failed: %s", e)
     return info
 
 
@@ -135,8 +135,8 @@ def capture_random_states() -> dict:
         states["torch_cpu"] = torch.random.get_rng_state()
         if torch.cuda.is_available():
             states["torch_cuda"] = torch.cuda.get_rng_state_all()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("Failed to capture torch RNG state: %s", e)
     return states
 
 
