@@ -1,16 +1,27 @@
-"""SD 2.0 / 2.1 training backend.
+"""
+Module: train_backend_sd2.py
+==============================
+Backend for Stable Diffusion 2.0 / 2.1 training.
 
-Architecture: UNet2DConditionModel (same as SD 1.5).
-Prediction: v-prediction (default for SD 2.x).
-Resolution: 512 (SD 2.0 base), 768 (SD 2.0/2.1), 1024 (some finetunes).
-Text encoder: OpenCLIP ViT-H/14 (single encoder, larger than SD 1.5 CLIP).
+Architecture: UNet2DConditionModel (same physical structure as SD 1.5)
+Prediction type: v-prediction (velocity target, not direct noise)
+Noise scheduler: DDPMScheduler (1000 timesteps, cosine beta schedule for 2.1)
+Text encoder: OpenCLIP ViT-H/14 — single encoder, significantly larger than SD 1.5's CLIP
+VAE: AutoencoderKL (8x spatial compression)
+Native resolution: 768×768 (SD 2.0/2.1 non-base); 512×512 for SD 2.0-base
 
 Key differences from SD 1.5:
-- v-prediction instead of epsilon prediction
-- OpenCLIP ViT-H (larger CLIP model)
-- 768px native resolution (2.0/2.1 non-base)
-- Different noise schedule parameterization
-- Requires different loss computation for v-prediction
+    - v-prediction: target = alpha_t * noise - sigma_t * latent (not direct noise)
+    - OpenCLIP ViT-H/14 instead of CLIP ViT-L/14 (more parameters, better image-text alignment)
+    - Zero-terminal SNR schedule for SD 2.1 — requires careful loss parameterization
+    - Higher base resolution (768px) improves fine-grained detail generation
+    - clip_skip supported with same mechanism as SD 1.5
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour SD 2.0 et SD 2.1
+    - La perte v-prediction est calculée dans train_backend_base._compute_vpred_loss()
+    - Appelé par trainer.py via le backend registry (model_name="sd2")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

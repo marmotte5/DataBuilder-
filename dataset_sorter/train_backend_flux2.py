@@ -1,21 +1,37 @@
-"""Flux 2 training backend.
+"""
+Module: train_backend_flux2.py
+================================
+Backend for Flux 2 training (Black Forest Labs, next-generation Flux).
 
-Architecture: Flux2Transformer2DModel (evolved MMDiT).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoders: Depends on variant:
-  - Flux 2 Dev: PixtralProcessor + Mistral3ForConditionalGeneration
-  - Flux 2 Klein: Qwen2Tokenizer + Qwen3ForCausalLM
+Architecture: Flux2Transformer2DModel — evolved MMDiT with improved attention blocks
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps in [0, 1])
+Text encoders (variant-dependent):
+    - Flux 2 Dev:   PixtralProcessor + Mistral3ForConditionalGeneration (multimodal LLM)
+    - Flux 2 Klein: Qwen2Tokenizer + Qwen3ForCausalLM (efficient LLM)
+VAE: AutoencoderKLFlux2 (16-channel latent space)
+Native resolution: 1024×1024
 
-Flux 2 is the next generation of Flux with LLM-based text encoders
-replacing the CLIP+T5 setup of Flux 1.
+Multi-layer hidden state extraction:
+    - Instead of using the final LLM output, hidden states from several intermediate
+      layers are extracted (default: layers 10, 20, 30) and concatenated along the
+      sequence dimension. This provides a multi-scale text representation that
+      captures both local token semantics and global context.
+    - Requires careful VRAM management: all ~32 intermediate layers are held in
+      memory during forward pass; non-selected layers are freed immediately after.
 
 Key differences from Flux 1:
-- LLM text encoder (Mistral-3 or Qwen-3) instead of CLIP+T5
-- Uses hidden states from multiple intermediate layers
-- Flux2Transformer2DModel (evolved architecture)
-- AutoencoderKLFlux2 VAE
-- Flow matching with FlowMatchEulerDiscreteScheduler
+    - LLM text encoder (Mistral-3 or Qwen-3) completely replaces CLIP+T5
+    - No pooled text embedding — single encoder_hidden_states output
+    - Flux2Transformer2DModel has evolved attention patterns vs. Flux 1
+    - Requires trust_remote_code=True (custom diffusers pipeline class)
+    - No HF fallback repo: architectures are incompatible with Flux 1 repos
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Flux 2 (Dev et Klein)
+    - _HF_FALLBACK_REPO=None: évite de charger accidentellement des poids Flux 1
+    - Appelé par trainer.py via le backend registry (model_name="flux2")
+    - Supporte uniquement les répertoires diffusers (format single-file non standardisé)
 """
 
 import logging

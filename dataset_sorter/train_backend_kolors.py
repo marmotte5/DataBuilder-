@@ -1,19 +1,42 @@
-"""Kolors training backend.
+"""
+Module: train_backend_kolors.py
+=================================
+Backend for Kolors training (Kwai-Kolors / Kwai Inc.).
 
-Architecture: UNet2DConditionModel (SDXL-based architecture).
-Prediction: epsilon prediction.
-Resolution: 1024x1024 native.
-Text encoder: ChatGLM-6B (single, large language model encoder).
+Architecture: UNet2DConditionModel — same physical SDXL UNet structure
+Prediction type: epsilon (direct noise prediction, identical to SDXL)
+Noise scheduler: DDPMScheduler (1000 timesteps, same as SDXL)
+Text encoder: ChatGLM-6B — single large bilingual language model (Chinese + English)
+    - 256 tokens max (much shorter than T5-XXL, but ChatGLM is token-efficient)
+    - Outputs hidden states in sequence-first format [seq, batch, hidden]
+      (must be permuted to [batch, seq, hidden] for the SDXL UNet)
+    - No native pooled embedding — last token from last hidden layer used instead
+VAE: AutoencoderKL (8x spatial compression)
+Native resolution: 1024×1024
 
-Kolors by Kwai is based on SDXL architecture but replaces the
-dual CLIP text encoders with ChatGLM-6B for better Chinese/English
-understanding and prompt following.
+SDXL UNet compatibility:
+    - The UNet expects SDXL-style added_cond_kwargs with time_ids (6-element) and text_embeds
+    - text_embeds is approximated from ChatGLM's last-layer last-token (sequence-first [-1, :, :])
+      since ChatGLM lacks a native pooled output like CLIP
+    - time_ids follow the same [orig_H, orig_W, crop_top, crop_left, target_H, target_W] format
+    - Per-bucket time_ids cached to avoid per-step GPU allocations
+
+ChatGLM-6B sequence format:
+    - Hidden states: [seq_len, batch_size, hidden_dim] (NOT [batch, seq, hidden])
+    - Must be permuted with .permute(1, 0, 2) before passing to UNet cross-attention
+    - .clone() after permute breaks the tensor view so the full TE output can be freed
 
 Key differences from SDXL:
-- Single text encoder: ChatGLM-6B (6B params, much larger than CLIP)
-- No pooled text embeddings (ChatGLM doesn't produce them)
-- Same UNet architecture as SDXL
-- Epsilon prediction like SDXL
+    - ChatGLM-6B (~6 billion parameters) replaces dual CLIP (~400M params total)
+    - Native Chinese-English bilingual understanding without separate Chinese CLIP
+    - No CLIP skip logic (ChatGLM has a fundamentally different architecture)
+    - Higher VRAM footprint from the large language model text encoder
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Kolors
+    - Adapte le format sequence-first de ChatGLM au format batch-first attendu par le UNet
+    - Appelé par trainer.py via le backend registry (model_name="kolors")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

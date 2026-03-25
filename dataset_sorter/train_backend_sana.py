@@ -1,20 +1,53 @@
-"""Sana training backend.
+"""
+Module: train_backend_sana.py
+================================
+Backend for Sana training (NVIDIA Research).
 
-Architecture: SanaTransformer2DModel (Linear DiT with linear attention).
-Prediction: flow matching (rectified flow).
-Resolution: 512-4096 native (efficient at high res due to linear attention).
-Text encoder: Gemma-2B (small but effective LLM encoder).
+Architecture: SanaTransformer2DModel — Linear DiT with linear attention
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (raw integer timesteps, not normalized)
+Text encoder: Gemma-2B — compact but effective LLM, 300 tokens max
+VAE: DC-AE (Deep Compression AutoEncoder) — 32x spatial compression (vs. 8x for standard VAE)
+Native resolution: 512–4096×4096 (highly efficient at ultra-high resolutions)
 
-Sana by NVIDIA uses a linear DiT architecture that is much more
-efficient than standard DiT at high resolutions. Uses Gemma-2B
-as text encoder for better prompt understanding with low overhead.
+Linear attention (key innovation):
+    - Standard attention: O(n²) in sequence length (infeasible at 4K = 256K tokens)
+    - Linear attention: O(n) complexity — enables training and inference at 4K resolution
+    - Trade-off: slightly lower quality per step vs. standard quadratic attention
+    - Linear_1 / linear_2 are the specific projection layers in the linear attention blocks
+
+DC-AE (Deep Compression AutoEncoder):
+    - 32x spatial compression ratio (vs. 8x for SDXL/SD1.5)
+    - For 1024px image: latent size = 32×32 (vs. 128×128 for SDXL)
+    - Drastically reduces transformer sequence length → further speed gains
+    - vae_scale_factor=32 is stored on the backend for flow_training_step to compute image_hw
+
+Gemma-2B text encoder:
+    - ~2.7B parameters — smaller than T5-XXL (~11B) but uses a decoder-style LLM
+    - Returns decoder hidden states via last_hidden_state
+    - No pooled output (Gemma is a causal LM, not an encoder)
+    - 300-token max (shorter than T5-XXL's 512, sufficient for typical prompts)
+
+Timestep handling:
+    - flow_training_step called with normalize_timestep=False (raw integers, not [0,1])
+    - Sana's scheduler expects integer timesteps internally, unlike Flux/Chroma
+
+Added conditioning:
+    - Returns None — SanaTransformer does not accept added_cond_kwargs
+    - Resolution info is implicitly encoded via DC-AE positional embeddings
 
 Key differences from SDXL:
-- Linear DiT with linear attention (O(n) vs O(n^2))
-- Gemma-2B text encoder (smaller than T5-XXL)
-- Very efficient at high resolutions (up to 4K)
-- Flow matching loss
-- DC-AE (deep compression autoencoder) instead of standard VAE
+    - Linear DiT replaces UNet (O(n) attention, not O(n²))
+    - Gemma-2B replaces dual CLIP (LLM vs. contrastive encoders)
+    - DC-AE 32x compression replaces standard 8x VAE
+    - Flow matching loss (velocity target) instead of epsilon
+    - Scales to 4K resolution efficiently
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Sana 600M et 1600M
+    - Définit vae_scale_factor=32 pour que flow_training_step calcule correctement image_hw
+    - Appelé par trainer.py via le backend registry (model_name="sana")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

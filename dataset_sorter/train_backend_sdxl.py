@@ -1,11 +1,32 @@
-"""SDXL / Pony Diffusion training backend.
+"""
+Module: train_backend_sdxl.py
+================================
+Backend for Stable Diffusion XL (SDXL) and Pony Diffusion training.
 
-Architecture: UNet2DConditionModel with dual CLIP text encoders.
-Prediction: epsilon (noise prediction).
-Resolution: 1024x1024 native.
-Conditioning: encoder_hidden_states + added_cond_kwargs (time_ids + text_embeds).
+Architecture: UNet2DConditionModel with dual CLIP text encoders
+Prediction type: epsilon (direct noise prediction)
+Noise scheduler: DDPMScheduler (1000 timesteps)
+Text encoders:
+    - TE1: CLIP ViT-L/14 — 77 tokens max (penultimate layer, clip_skip applied)
+    - TE2: OpenCLIP ViT-bigG/14 — 77 tokens max (penultimate layer fixed) + pooled
+VAE: AutoencoderKL (8x spatial compression, 4 latent channels)
+Native resolution: 1024×1024
 
-Pony Diffusion uses the same SDXL architecture with clip_skip=2.
+Conditioning specifics (required by SDXL UNet):
+    - encoder_hidden_states: concatenation of TE1 and TE2 hidden states (dim 2048)
+    - added_cond_kwargs["text_embeds"]: pooled output from TE2 (dim 1280)
+    - added_cond_kwargs["time_ids"]: 6-element vector [orig_H, orig_W, crop_top,
+      crop_left, target_H, target_W] — tells the UNet actual vs. requested resolution
+
+Pony Diffusion:
+    - Same SDXL architecture and this backend
+    - Typically trained with clip_skip=2 (skip the last 2 CLIP layers)
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour SDXL et Pony Diffusion
+    - Cache les time_ids par bucket de résolution pour éviter les allocations GPU répétées
+    - Appelé par trainer.py via le backend registry (model_name="sdxl")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

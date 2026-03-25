@@ -1,17 +1,49 @@
-"""Stable Cascade (Wuerstchen v3) training backend.
+"""
+Module: train_backend_cascade.py
+===================================
+Backend for Stable Cascade (Wuerstchen v3) training (Stability AI).
 
-Architecture: Two-stage — Stage C (prior) + Stage B (decoder).
-Training targets Stage C (the prior) since that's the generative model.
-Prediction: epsilon prediction for Stage C.
-Resolution: 1024x1024 native.
-Text encoder: CLIP-G (OpenCLIP bigG).
+Architecture: Two-stage diffusion pipeline
+    - Stage A: EfficientNet-based encoder/decoder (fixed, never trained)
+    - Stage B: Decoder UNet — reconstructs images from Stage C embeddings
+    - Stage C (TRAINED): Prior UNet — generates compressed image embeddings from text
+    This backend exclusively targets Stage C (the prior), as it is the generative component.
+Prediction type: epsilon (direct noise prediction)
+Noise scheduler: DDPMScheduler with timestep_ratio ∈ [0, 1] (not integer timesteps)
+Text encoder: CLIP-G (OpenCLIP ViT-bigG/14 — same as SDXL's TE2)
+    - 77 tokens max (CLIP context length)
+    - Provides both penultimate hidden states and pooled embedding
+VAE: None — Cascade uses its own compressed latent space (Stage A), not a standard VAE
+Native resolution: 1024×1024
+
+Cascade's unique compression:
+    - Stage A compresses images at 42:1 (vs. 8:1 for SD/SDXL VAE)
+    - The prior (Stage C) operates in this highly compressed space
+    - Training requires pre-computed Stage B embeddings as latents
+    - Raw pixel values cannot be used directly: enable latent caching
+
+Forward pass signature (Stage C):
+    - Takes (sample, timestep_ratio, clip_text_pooled, clip_text=..., clip_img=...)
+    - timestep_ratio is in [0, 1]: integer timesteps are normalized by num_train_timesteps
+    - clip_text_pooled: CLIP-G pooled output (added_cond_kwargs in standard models)
+    - clip_text: CLIP-G hidden states (encoder_hidden_states equivalent)
+
+Limitations in DataBuilder:
+    - prepare_latents() raises RuntimeError — must use cached Stage B embeddings
+    - generate_sample() returns None — Stage B decoder not loaded, no pixel output
 
 Key differences from SDXL:
-- Two-stage architecture (only Stage C is trainable)
-- Uses Wuerstchen prior model (UNet-like with cross-attention)
-- Very high compression ratio (42:1 vs 8:1 for SD)
-- CLIP-G only text encoder
-- EfficientNet-based Stage A (fixed, not trained)
+    - Two-stage architecture; only Stage C (prior) is trained
+    - 42:1 compression ratio vs. 8:1 for SDXL
+    - Timestep ratio [0, 1] instead of integer timesteps [0, 999]
+    - Single CLIP-G encoder (no CLIP-L, no T5)
+    - No added_cond_kwargs dict — conditioning args passed as named kwargs directly
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Stable Cascade Stage C
+    - Nécessite le cache des latents Stage B (prepare_latents() n'est pas fonctionnel)
+    - Appelé par trainer.py via le backend registry (model_name="cascade")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging
@@ -59,6 +91,12 @@ class StableCascadeBackend(TrainBackendBase):
         ]
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
+        """Encode captions with CLIP-G, returning (hidden_states, pooled).
+
+        hidden_states: penultimate layer output, used as clip_text kwarg in training_step.
+        pooled: CLIP-G text_embeds, used as clip_text_pooled kwarg in training_step.
+        Both are required by the Stage C prior's forward signature.
+        """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=self.tokenizer.model_max_length,
@@ -74,6 +112,12 @@ class StableCascadeBackend(TrainBackendBase):
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
+        """Return the CLIP-G pooled embedding as text_embeds for the Stage C prior.
+
+        Unlike SDXL, Cascade's prior passes pooled conditioning via
+        clip_text_pooled (a named kwarg), not added_cond_kwargs. This dict
+        is unpacked directly into the prior.forward() call in training_step.
+        """
         if pooled is None:
             return None
         return {"text_embeds": pooled}

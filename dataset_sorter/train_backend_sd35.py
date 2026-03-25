@@ -1,19 +1,38 @@
-"""SD 3.5 training backend.
+"""
+Module: train_backend_sd35.py
+================================
+Backend for Stable Diffusion 3.5 training (Stability AI).
 
-Architecture: SD3Transformer2DModel (MMDiT with joint attention).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoders: CLIP-L + CLIP-G + T5-XXL (triple encoder, same as SD3).
+Architecture: SD3Transformer2DModel — same MMDiT structure as SD3
+              (inherits SD3Backend entirely, only changes defaults)
+Prediction type: flow matching (rectified flow — identical to SD3)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (same as SD3)
+Text encoders: same triple encoder setup as SD3
+    - TE1: CLIP ViT-L/14 (77 tokens, penultimate layer + pooled)
+    - TE2: OpenCLIP ViT-bigG/14 (77 tokens, penultimate layer + pooled)
+    - TE3: T5-XXL (512 tokens, sequence output)
+VAE: AutoencoderKL (16-channel latent space)
+Native resolution: 1024×1024
 
-SD 3.5 is an improved version of SD3 with the same architecture
-but better training and weights. OneTrainer treats it as a distinct
-model type from SD3.
+Relationship with SD3:
+    - SD 3.5 Large uses a larger transformer variant than SD3-medium
+      (more attention heads, deeper network)
+    - Using the SD3-medium fallback repo for SD 3.5 would silently load
+      mismatched weights — hence the separate _HF_FALLBACK_REPO
+    - All training logic (loss, encoding, conditioning) is inherited from SD3Backend
+    - Only overrides: model_name, _HF_FALLBACK_REPO, and a re-log message in load_model
 
 Key differences from SD3:
-- Improved weights / training procedure
-- May use different default guidance scale
-- Better quality at same architecture
-- Same triple text encoder setup
+    - Better quality at the same architecture through improved training procedure
+    - Different transformer scale (Large vs. medium)
+    - Slightly different guidance scale defaults recommended by Stability AI
+    - Same triple text encoder setup — training code is 100% shared with SD3
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour SD3.5-Large et SD3.5-Medium
+    - Hérite de SD3Backend: aucune logique dupliquée
+    - Appelé par trainer.py via le backend registry (model_name="sd35")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

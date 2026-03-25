@@ -1,19 +1,47 @@
-"""AuraFlow training backend.
+"""
+Module: train_backend_auraflow.py
+====================================
+Backend for AuraFlow training (fal.ai).
 
-Architecture: AuraFlowTransformer2DModel (MMDiT variant).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoder: Large T5 variant (Pile-T5-XL).
+Architecture: AuraFlowTransformer2DModel — MMDiT variant with simplified design
+Prediction type: flow matching (rectified flow / raw velocity field prediction)
+Noise scheduler: FlowMatchEulerDiscreteScheduler (continuous timesteps)
+Text encoder: Pile-T5-XL — 256 tokens max (T5 variant trained on the Pile dataset)
+VAE: AutoencoderKL (standard SD/SDXL-compatible VAE)
+Native resolution: 1024×1024
 
-AuraFlow is an open-source flow-matching model similar to SD3/Flux
-but with a simpler architecture. Uses single T5 text encoder.
+T5-only conditioning:
+    - Single T5 text encoder (no CLIP, no pooled output)
+    - attention_mask passed to encoder to handle padding tokens correctly
+    - 256-token max length (shorter than Flux's T5-XXL at 512)
+
+AuraFlowTransformer2DModel:
+    - Simplified MMDiT with fewer design complexities than SD3/Flux
+    - Fully open-source weights (Apache 2.0) from fal.ai
+    - LoRA targets: standard attention Q/K/V/out + feed-forward projections
+      (ff.net.0.proj / ff.net.2 — AuraFlow uses standard MLP, not Flux's proj_mlp)
+
+Timestep normalization:
+    - Uses standard flow_training_step() with default normalize_timestep=True
+    - The official AuraFlowPipeline divides by 1000 internally; this is handled by
+      FlowMatchEulerDiscreteScheduler, not manually in this backend
 
 Key differences from SDXL:
-- Uses transformer instead of UNet
-- Flow matching loss (rectified flow)
-- Single T5 text encoder (no CLIP)
-- No pooled embeddings
-- Simpler architecture than SD3/Flux
+    - AuraFlowTransformer2DModel replaces UNet
+    - Single T5 text encoder (no dual CLIP, no time_ids)
+    - Flow matching loss (velocity target) instead of epsilon
+    - Open-source weights with permissive license
+
+Key differences from SD3/Flux:
+    - Single T5 only (vs. triple encoder for SD3, CLIP+T5 for Flux)
+    - Simpler architecture: straightforward MMDiT without dual-stream blocks
+    - Shorter T5 token length (256 vs. 512)
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour AuraFlow v0.1–v0.3
+    - Utilise flow_training_step() standard (timesteps normalisés)
+    - Appelé par trainer.py via le backend registry (model_name="auraflow")
+    - Supporte les checkpoints .safetensors et les répertoires diffusers
 """
 
 import logging

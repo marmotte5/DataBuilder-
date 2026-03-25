@@ -1,21 +1,43 @@
-"""Z-Image training backend.
+"""
+Module: train_backend_zimage.py
+=================================
+Backend for Z-Image training (Alibaba Tongyi Lab).
 
-Architecture: ZImageTransformer2DModel (MMDiT variant).
-Prediction: flow matching (rectified flow).
-Resolution: 1024x1024 native.
-Text encoder: Qwen3ForCausalLM (via Qwen2Tokenizer with chat template).
+Architecture: ZImageTransformer2DModel — custom MMDiT variant
+Prediction type: flow matching (rectified flow with dynamic timestep shifting)
+Noise scheduler: FlowMatchEulerDiscreteScheduler with resolution-dependent shift
+Text encoder: Qwen3ForCausalLM — LLM encoder via Qwen2Tokenizer with chat template
+    - 512 tokens max
+    - "Thinking" mode enabled via apply_chat_template (Qwen3's chain-of-thought feature)
+    - INT8 / INT4 (NF4) quantization supported via bitsandbytes to save TE VRAM
+VAE: AutoencoderKL with shift_factor (custom latent normalization)
+Native resolution: 1024×1024
 
-Z-Image uses a custom transformer architecture with Qwen3 as
-the text encoder. This is fundamentally different from SD3 despite
-both using flow matching.
+Qwen3 chat-template tokenization:
+    - Raw captions are wrapped as {"role": "user", "content": caption} messages
+    - apply_chat_template with enable_thinking=True adds the Qwen3 reasoning preamble
+    - This template MUST be applied identically in both live encoding and the TE
+      caching path — a mismatch would produce wrong embeddings silently
+
+Single-file loading (special handling):
+    - Z-Image checkpoints may store transformer weights WITHOUT the "transformer."
+      prefix (i.e., bare tensor names). _load_single_file_manual handles this by
+      detecting dominant prefixes and stripping them before loading.
+    - Falls back through three methods: DiffusionPipeline.from_single_file →
+      StableDiffusion3Pipeline.from_single_file → manual key-splitting loader
 
 Key differences from SD3:
-- Qwen3 LLM text encoder (not CLIP/T5)
-- Chat-template tokenization with thinking enabled
-- ZImageTransformer2DModel (not SD3Transformer2DModel)
-- Custom latent scaling with shift_factor
-- Dynamic timestep shifting based on image dimensions
-- Only transformer is trained; VAE and TE are always frozen
+    - Qwen3 LLM replaces CLIP/T5 triple encoder — single large language model
+    - Chat-template tokenization (chat message format, not plain text)
+    - ZImageTransformer2DModel has a different block structure than SD3Transformer
+    - Dynamic timestep shifting: shift amount scales with image resolution
+    - Only transformer is trainable; VAE and TE are always frozen
+
+Rôle dans DataBuilder:
+    - Gère le training loop LoRA/full finetune pour Z-Image Base et Z-Image Turbo
+    - Supporte la quantification INT8/INT4 du TE Qwen3 pour économiser la VRAM
+    - Appelé par trainer.py via le backend registry (model_name="zimage")
+    - Supporte les checkpoints .safetensors (avec un loader manuel en dernier recours)
 """
 
 import logging
