@@ -30,12 +30,12 @@ from PyQt6.QtGui import QPixmap, QImage, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QTextEdit, QFileDialog, QGroupBox, QCheckBox, QFrame,
-    QScrollArea, QSplitter, QProgressBar,
+    QTextEdit, QFileDialog, QGroupBox, QFrame,
+    QProgressBar,
 )
 
 from dataset_sorter.ui.theme import (
-    COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
+    COLORS, SUCCESS_BUTTON_STYLE,
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
 )
 from dataset_sorter.ui.toast import show_toast

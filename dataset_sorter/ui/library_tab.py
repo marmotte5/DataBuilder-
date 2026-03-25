@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize, QMimeData,
+    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize,
 )
 from PyQt6.QtGui import QCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (

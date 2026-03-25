@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
-    QStackedWidget, QFrame, QScrollArea,
+    QStackedWidget, QFrame,
 )
 
 from dataset_sorter.constants import (

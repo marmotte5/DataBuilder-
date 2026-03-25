@@ -15,7 +15,6 @@ Typical usage::
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Callable
 
@@ -91,7 +90,6 @@ def _get_wd14_model(model_id: str = "SmilingWolf/wd-vit-large-tagger-v3"):
         return _wd14_state
 
     try:
-        import timm
         import torch
         from huggingface_hub import hf_hub_download
         import pandas as pd

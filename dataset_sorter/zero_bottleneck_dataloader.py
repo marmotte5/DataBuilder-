@@ -24,7 +24,6 @@ Performance:
 """
 
 import logging
-import mmap
 import threading
 from pathlib import Path
 from typing import Optional

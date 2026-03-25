@@ -10,8 +10,6 @@ Simplest and fastest backend — single text encoder, no time_ids.
 
 import logging
 
-import torch
-
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)

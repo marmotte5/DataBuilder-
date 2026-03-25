@@ -158,7 +158,7 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # Muon's Newton-Schulz orthogonalization only works on 2D+ matrices.
         # 1D params (biases, norms, embeddings) must use AdamW instead.
         # Use create_muon_param_groups to split correctly.
-        from dataset_sorter.optimizers import Muon, create_muon_param_groups
+        from dataset_sorter.optimizers import Muon
         log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
         # Split each param group into 2D+ (Muon) and 1D (AdamW) while
         # preserving per-group learning rates (e.g., text encoder LR).

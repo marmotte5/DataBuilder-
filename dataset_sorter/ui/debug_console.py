@@ -30,9 +30,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QMetaMethod
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import (
-    QFont, QTextCharFormat, QColor, QKeySequence, QShortcut, QAction,
+    QFont, QTextCharFormat, QColor, QKeySequence, QShortcut,
     QTextDocument,
 )
 from PyQt6.QtWidgets import (

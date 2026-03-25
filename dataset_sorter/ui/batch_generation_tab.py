@@ -24,19 +24,18 @@ import csv
 import json
 import logging
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QTextEdit, QFileDialog, QGroupBox, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QProgressBar, QFrame,
-    QScrollArea, QAbstractItemView, QMessageBox, QSplitter,
+    QFileDialog, QGroupBox, QCheckBox, QTableWidget,
+    QTableWidgetItem, QHeaderView, QProgressBar,
+    QAbstractItemView, QMessageBox, QSplitter,
 )
 
 from dataset_sorter.ui.theme import (

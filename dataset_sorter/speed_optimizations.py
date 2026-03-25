@@ -932,9 +932,8 @@ def apply_liger_kernels(model: nn.Module) -> bool:
 
     Returns True if any kernels were applied, False otherwise.
     """
-    try:
-        import liger_kernel  # noqa: F401
-    except ImportError:
+    import importlib.util
+    if importlib.util.find_spec("liger_kernel") is None:
         log.warning("liger-kernel not installed. Install with: pip install liger-kernel")
         return False
 

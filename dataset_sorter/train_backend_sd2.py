@@ -15,8 +15,6 @@ Key differences from SD 1.5:
 
 import logging
 
-import torch
-
 from dataset_sorter.train_backend_base import TrainBackendBase
 
 log = logging.getLogger(__name__)

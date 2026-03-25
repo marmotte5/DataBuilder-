@@ -623,7 +623,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         """Validate and start training."""
         # Pre-check: verify torch can be imported
         try:
-            import torch  # noqa: F401
+            import torch as _torch_check
+            del _torch_check
         except OSError:
             self._log(
                 "ERROR: PyTorch DLL failed to load. Run update.bat to fix, "

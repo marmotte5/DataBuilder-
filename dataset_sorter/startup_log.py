@@ -10,7 +10,6 @@ import os
 import platform
 import sys
 from datetime import datetime
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 

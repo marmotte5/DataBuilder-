@@ -65,17 +65,15 @@ class ZImageBackend(TrainBackendBase):
         'int8' or 'int4'. Saves 50-75% TE VRAM for the frozen Qwen3 encoder
         with zero quality impact (no gradients flow through it).
         """
+        import importlib.util
         quant = self.config.quantize_text_encoder
         if quant == "int8":
-            try:
-                import bitsandbytes  # noqa: F401
+            if importlib.util.find_spec("bitsandbytes") is not None:
                 log.info("Z-Image TE: loading Qwen3 in INT8 (saves ~50%% TE VRAM)")
                 return {"load_in_8bit": True, "device_map": "auto"}
-            except ImportError:
-                log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
+            log.warning("bitsandbytes not installed; skipping INT8 TE quantization")
         elif quant == "int4":
             try:
-                import bitsandbytes  # noqa: F401
                 from transformers import BitsAndBytesConfig
                 bnb_config = BitsAndBytesConfig(
                     load_in_4bit=True,
@@ -152,8 +150,7 @@ class ZImageBackend(TrainBackendBase):
         loads each component individually. This avoids needing diffusers'
         from_single_file to understand Z-Image's custom architecture.
         """
-        import os
-        from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+        from transformers import AutoTokenizer
         from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
 
         # Load the raw state dict

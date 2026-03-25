@@ -15,11 +15,14 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from PIL import Image as PILImage
 
 log = logging.getLogger(__name__)
 
@@ -344,8 +347,6 @@ class AttentionMapDebugger:
         Returns:
             List of saved file paths.
         """
-        from PIL import Image as PILImage
-
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         saved = []
