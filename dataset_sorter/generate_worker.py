@@ -1,10 +1,24 @@
-"""QThread worker for image generation / model testing.
+"""
+Module: generate_worker.py
+========================
+QThread worker pour la génération d'images et le test de modèles.
 
-Loads a base model (or checkpoint), optionally applies one or more LoRA/DoRA
-adapters, then generates images with full control over prompts, sampler,
-CFG, steps, seed, and resolution.
+Rôle dans DataBuilder:
+    - Charge les pipelines diffusers en arrière-plan (sans bloquer l'UI Qt)
+    - Applique un ou plusieurs adaptateurs LoRA/DoRA avec pondération par
+      adapter via pipe.set_adapters()
+    - Génère des images avec contrôle complet : sampler, CFG scale, seed,
+      résolution, img2img et inpainting
+    - Supporte les 16+ architectures via PIPELINE_MAP et détection automatique
+      à partir du chemin fichier ou des clés safetensors
 
-Supports all 16+ model architectures via diffusers pipelines.
+Classes/Fonctions principales:
+    - GenerateWorker             : QThread principal, expose load_model() / generate()
+    - _detect_model_type()       : Détecte l'architecture depuis le chemin ou les clés
+    - _detect_model_type_from_keys() : Inspection des clés safetensors (header only)
+    - _load_scheduler()          : Remplace le scheduler diffusers dans le pipeline
+
+Dépendances: torch, diffusers, Pillow, PyQt6, safetensors
 """
 
 import gc
@@ -27,7 +41,14 @@ from dataset_sorter.constants import (
 log = logging.getLogger(__name__)
 
 
+# ============================================================
+# SECTION: Constantes de configuration des modèles et schedulers
+# ============================================================
+
 # ── Scheduler mapping (name → diffusers class path) ────────────────────────
+# Associe les noms conviviaux aux noms de classes diffusers correspondants.
+# Les noms Karras (ex: dpm++_2m_karras) appliquent use_karras_sigmas=True
+# en plus du scheduler de base.
 SCHEDULER_MAP = {
     "euler_a":     "EulerAncestralDiscreteScheduler",
     "euler":       "EulerDiscreteScheduler",
@@ -43,10 +64,15 @@ SCHEDULER_MAP = {
 # Flow-matching models must keep their native scheduler (FlowMatchEulerDiscrete
 # or similar) because standard schedulers lack the `mu`/`shift` parameters
 # required by the flow-matching timestep schedule.
+# Tenter de changer le scheduler sur ces modèles produira des artefacts ou
+# des erreurs car les paramètres de timestep sont incompatibles.
 FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
                         "auraflow", "hidream", "sana", "pixart"}
 
 # ── Model type → pipeline class ────────────────────────────────────────────
+# Associe chaque type de modèle à son module diffusers et sa classe pipeline.
+# Les modèles génériques (zimage, chroma, hidream) utilisent DiffusionPipeline
+# car diffusers n'a pas encore de classe dédiée pour ces architectures.
 PIPELINE_MAP = {
     "sd15":     ("diffusers", "StableDiffusionPipeline"),
     "sd2":      ("diffusers", "StableDiffusionPipeline"),
@@ -68,6 +94,8 @@ PIPELINE_MAP = {
 }
 
 # Models that need trust_remote_code
+# Ces modèles chargent du code Python personnalisé depuis le dépôt HuggingFace
+# (tokenizers, attention mechanisms, etc.) nécessitant la confiance explicite.
 TRUST_REMOTE_CODE_MODELS = {"zimage", "flux2", "chroma", "hidream"}
 
 # Models that use negative prompts (classifier-free guidance)
@@ -82,16 +110,23 @@ CLIP_SKIP_MODELS = {"sd15", "sd2", "sdxl", "pony", "cascade", "kolors", "hunyuan
 
 # DiT-based models compatible with TaylorSeer inference caching.
 # UNet models (sd15, sd2, sdxl, pony, kolors, cascade) are NOT supported.
+# TaylorSeer prédit les features intermédiaires via développement de Taylor,
+# offrant 3-5x d'accélération avec une perte de qualité négligeable.
 TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
                      "hunyuan", "auraflow", "zimage", "chroma", "hidream"}
 
 # Maximum safetensors header size (bytes) for sanity checks during inspection.
+# Les headers > 50 MB sont pathologiques (checkpoint corrompu ou non-safetensors).
 _MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
 
 # Threshold: if more than this fraction of state dict keys share a prefix,
 # we strip it (e.g. "transformer." → "").
 _PREFIX_DOMINANT_THRESHOLD = 0.5
 
+
+# ============================================================
+# SECTION: Détection automatique du type de modèle
+# ============================================================
 
 def _detect_model_type_from_keys(model_path: str) -> str:
     """Detect model architecture by reading safetensors file header keys.
@@ -217,6 +252,10 @@ def _detect_model_type(model_path: str) -> str:
     return "sdxl"  # Reasonable default
 
 
+# ============================================================
+# SECTION: Configuration du scheduler
+# ============================================================
+
 def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):
     """Replace the pipeline's scheduler using SCHEDULER_MAP lookup.
 
@@ -253,6 +292,10 @@ def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):
     except Exception as e:
         log.warning(f"Could not set scheduler {cls_name}: {e}")
 
+
+# ============================================================
+# SECTION: Worker principal (QThread)
+# ============================================================
 
 class GenerateWorker(QThread):
     """Background QThread worker that loads diffusers pipelines and generates images.

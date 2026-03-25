@@ -1,23 +1,31 @@
-"""Hardware detection and capability reporting for DataBuilder.
+"""
+Module: hardware_detect.py
+========================
+Détection du matériel et rapport des capacités pour DataBuilder.
 
-Detection priority (highest to lowest):
+Rôle dans DataBuilder:
+    - Fournit un dict de capacités unifié utilisé par trainer.py,
+      generate_worker.py et training_worker.py pour choisir device/dtype
+    - Évite que le reste du code n'ait à tester individuellement chaque
+      backend (CUDA, ROCm, MPS, XPU, NPU, CPU)
+    - Émet des avertissements sur les workarounds nécessaires (ex: AMD ROCm
+      consumer GPUs)
+
+Classes/Fonctions principales:
+    - detect_hardware()            : Fonction principale, retourne le dict de capacités
+    - get_device_from_hardware()   : Convertit le dict en torch.device
+    - apply_ipex_optimize()        : Applique ipex.optimize() sur Intel XPU
+    - log_hardware_summary()       : Log une ligne résumé + notes
+
+Ordre de détection (priorité décroissante):
   1. NVIDIA CUDA
-  2. AMD ROCm  (torch built with HIP — reports as "cuda" device but backend="rocm")
+  2. AMD ROCm  (torch compilé avec HIP — reporté comme device "cuda" mais backend="rocm")
   3. Apple Silicon MPS
   4. Intel GPU via XPU / IPEX
   5. NPU fallbacks (Huawei Ascend, Qualcomm via DirectML, Intel NPU via OpenVINO)
   6. CPU
 
-The central ``detect_hardware()`` function returns a unified capability dict
-so the rest of the codebase never needs to special-case individual backends.
-
-Usage::
-
-    from dataset_sorter.hardware_detect import detect_hardware
-    hw = detect_hardware()
-    print(hw["device"])          # "cuda" / "mps" / "xpu" / "npu" / "cpu"
-    print(hw["backend"])         # "cuda" / "rocm" / "mps" / "ipex" / "npu" / "cpu"
-    print(hw["supports_bf16"])   # True / False
+Dépendances: torch (lazy), intel_extension_for_pytorch (optionnel), torch_npu (optionnel)
 
 AMD ROCm consumer GPU workaround
 ---------------------------------
@@ -39,6 +47,13 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+# ============================================================
+# SECTION: Détection principale du matériel
+# ============================================================
+
+# @lru_cache(maxsize=1) : La détection est coûteuse (imports torch, test CUDA).
+# On mémoïse le résultat pour que les appels répétés depuis différents modules
+# (trainer.py, generate_worker.py, etc.) ne re-détectent pas à chaque fois.
 @lru_cache(maxsize=1)
 def detect_hardware() -> dict[str, Any]:
     """Detect available accelerator hardware and return capability info.
@@ -91,7 +106,9 @@ def detect_hardware() -> dict[str, Any]:
     return _cpu_fallback("no GPU or NPU available")
 
 
-# ── Backend-specific info builders ────────────────────────────────────────
+# ============================================================
+# SECTION: Constructeurs de dicts par backend
+# ============================================================
 
 
 def _cuda_info(torch, notes: list[str]) -> dict[str, Any]:
@@ -310,7 +327,9 @@ def _cpu_fallback(reason: str) -> dict[str, Any]:
     }
 
 
-# ── ROCm helpers ──────────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Helpers ROCm (AMD)
+# ============================================================
 
 
 def _is_rocm(torch) -> bool:
@@ -382,7 +401,9 @@ def _add_rocm_notes(torch, gpu_name: str, props, notes: list[str]) -> None:
         )
 
 
-# ── Generic helpers ───────────────────────────────────────────────────────
+# ============================================================
+# SECTION: Utilitaires génériques
+# ============================================================
 
 
 def _check_flash_attn(torch, backend: str) -> bool:
@@ -407,7 +428,9 @@ def _cuda_optimal_workers() -> int:
     return min(8, max(2, cores - 1))
 
 
-# ── Public utilities ──────────────────────────────────────────────────────
+# ============================================================
+# SECTION: API publique
+# ============================================================
 
 
 def get_device_from_hardware(hw: dict[str, Any] | None = None):
