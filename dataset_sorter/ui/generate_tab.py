@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QToolButton,
 )
 
+from dataset_sorter.constants import RESOLUTION_PRESETS, RESOLUTION_LABELS, MODEL_RESOLUTION_FAMILY
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
@@ -34,6 +35,22 @@ from dataset_sorter.ui.toast import show_toast
 
 
 # ── Constants ───────────────────────────────────────────────────────────────
+
+def _flat_resolutions() -> list[tuple[int, int]]:
+    seen: set[tuple[int, int]] = set()
+    result = []
+    for arch_presets in RESOLUTION_PRESETS.values():
+        for wh in arch_presets.values():
+            if wh not in seen:
+                seen.add(wh)
+                result.append(wh)
+    return result
+
+
+# Flat list of all unique (width, height) presets — kept for backwards compatibility
+RESOLUTIONS: list[tuple[int, int]] = _flat_resolutions()
+del _flat_resolutions
+
 
 GEN_MODEL_TYPES = {
     "auto":     "Auto-detect",
@@ -74,13 +91,6 @@ GEN_PRECISIONS = {
     "fp32": "Float32 (full precision)",
 }
 
-RESOLUTIONS = [
-    (512, 512), (512, 768), (768, 512),
-    (768, 768), (768, 1024), (1024, 768),
-    (1024, 1024), (1024, 1280), (1280, 1024),
-    (1024, 1536), (1536, 1024),
-    (1280, 1280),
-]
 
 
 def _pil_to_qpixmap(pil_image, max_w=512, max_h=512) -> QPixmap:
@@ -338,10 +348,10 @@ class GenerateTab(QWidget):
         # Resolution
         params.addWidget(QLabel("Resolution:"), 2, 0)
         self.resolution_combo = QComboBox()
-        self.resolution_combo.setToolTip("Output image resolution preset")
-        for w, h in RESOLUTIONS:
-            self.resolution_combo.addItem(f"{w} x {h}", (w, h))
-        self.resolution_combo.setCurrentIndex(6)  # 1024x1024
+        self.resolution_combo.setToolTip(
+            "Output image resolution preset — updates when model type changes"
+        )
+        self._populate_resolution_combo("auto")
         params.addWidget(self.resolution_combo, 2, 1)
 
         # Clip skip
@@ -602,6 +612,24 @@ class GenerateTab(QWidget):
         self.btn_unload.clicked.connect(self._on_unload_model)
         self.btn_generate.clicked.connect(self._on_generate)
         self.btn_stop.clicked.connect(self._on_stop)
+        self.model_type_combo.currentIndexChanged.connect(self._on_model_type_changed)
+
+    def _populate_resolution_combo(self, arch: str) -> None:
+        """Populate the resolution combo with architecture-appropriate presets."""
+        family = MODEL_RESOLUTION_FAMILY.get(arch, "sdxl")
+        presets = RESOLUTION_PRESETS.get(family, RESOLUTION_PRESETS["sdxl"])
+        self.resolution_combo.blockSignals(True)
+        self.resolution_combo.clear()
+        for key, (w, h) in presets.items():
+            label = RESOLUTION_LABELS.get(key, key)
+            self.resolution_combo.addItem(f"{w}×{h}  ({label})", (w, h))
+        self.resolution_combo.blockSignals(False)
+        self.resolution_combo.setCurrentIndex(0)
+
+    def _on_model_type_changed(self, index: int) -> None:
+        """Refresh resolution presets when the user changes the model type."""
+        arch = self.model_type_combo.itemData(index) or "auto"
+        self._populate_resolution_combo(arch)
 
     # ── LoRA management ─────────────────────────────────────────────────
 

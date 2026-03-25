@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QMessageBox, QSplitter,
 )
 
+from dataset_sorter.constants import RESOLUTION_PRESETS, RESOLUTION_LABELS
 from dataset_sorter.ui.theme import (
     COLORS, ACCENT_BUTTON_STYLE, SUCCESS_BUTTON_STYLE,
     DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
@@ -347,9 +348,18 @@ class BatchGenerationTab(QWidget):
 
         dg.addWidget(QLabel("Resolution:"), 1, 4)
         self._default_res = QComboBox()
-        for w, h in [(512, 512), (768, 768), (1024, 1024), (1280, 1280), (768, 1024), (1024, 768)]:
-            self._default_res.addItem(f"{w}x{h}", (w, h))
-        self._default_res.setCurrentIndex(2)  # 1024x1024
+        _seen_res: set[tuple[int, int]] = set()
+        for _arch_presets in RESOLUTION_PRESETS.values():
+            for _key, (_w, _h) in _arch_presets.items():
+                if (_w, _h) not in _seen_res:
+                    _seen_res.add((_w, _h))
+                    _lbl = RESOLUTION_LABELS.get(_key, _key)
+                    self._default_res.addItem(f"{_w}×{_h}  ({_lbl})", (_w, _h))
+        _default_idx = next(
+            (i for i in range(self._default_res.count())
+             if self._default_res.itemData(i) == (1024, 1024)), 0
+        )
+        self._default_res.setCurrentIndex(_default_idx)
         dg.addWidget(self._default_res, 1, 5)
 
         bottom_layout.addWidget(defaults_grp)
