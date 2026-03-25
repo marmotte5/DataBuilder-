@@ -1,17 +1,31 @@
-"""Auto-tagging — generate captions for images using BLIP or WD14.
+"""
+Module: auto_tagger.py
+=======================
+Auto-tagging — génération automatique de captions/tags pour les datasets non annotés.
 
-Provides automated caption/tag generation for unlabelled datasets:
-- BLIP: natural-language captions via Salesforce/blip-image-captioning-large
-- WD14: Danbooru-style tags via SmilingWolf/wd-vit-large-tagger-v3
+Rôle dans DataBuilder:
+    - Permet d'annoter un dossier d'images en un seul appel (tag_folder)
+    - Deux backends au choix selon le style d'annotation souhaité :
+        * BLIP : captions en langue naturelle ("a woman walking in a park")
+        * WD14 : tags Danbooru séparés par virgules ("1girl, solo, outdoors")
+    - Écrit les annotations dans des fichiers .txt côte à côte avec les images,
+      format directement compatible avec le pipeline d'entraînement DataBuilder
 
-Heavy deps (torch, transformers) are lazy-imported inside functions so the
-module can be imported without GPU or large packages installed.
+Classes/Fonctions principales:
+    - tag_folder(): API publique principale — parcourt un dossier et génère les .txt
+    - caption_image_blip(): Caption d'une image via BLIP (transformers + torch)
+    - caption_image_wd14(): Tags d'une image via WD14 ONNX (onnxruntime + PIL)
+    - unload_models(): Libère la VRAM/RAM après le tagging
 
-Typical usage::
+Dépendances: torch, transformers (BLIP), onnxruntime, pandas, huggingface_hub (WD14),
+             Pillow, numpy — toutes importées en lazy pour ne pas alourdir le démarrage
 
-    from dataset_sorter.auto_tagger import tag_folder
-    stats = tag_folder("/path/to/images", model="blip", overwrite=False)
-    print(f"Tagged {stats['tagged']} images, skipped {stats['skipped']}")
+Notes techniques:
+    - Les modèles sont mis en cache en mémoire après le premier chargement
+      (_blip_pipeline, _wd14_state) pour éviter de recharger entre les images
+    - WD14 utilise le format ONNX (pas PyTorch) — pas de GPU PyTorch requis pour WD14
+    - Le threshold WD14 (défaut 0.35) filtre les tags de faible confiance ;
+      seules les catégories général (9) et personnage (4) sont retenues (pas les ratings)
 """
 
 import logging
@@ -106,7 +120,8 @@ def _get_wd14_model(model_id: str = "SmilingWolf/wd-vit-large-tagger-v3"):
     model_path = hf_hub_download(model_id, filename="model.onnx", repo_type="model")
     tags_path = hf_hub_download(model_id, filename="selected_tags.csv", repo_type="model")
 
-    # Load tags
+    # Charge le CSV des tags Danbooru. La colonne "category" indique le type :
+    # 0=rating (sfw/nsfw), 4=personnage (noms propres), 9=général (description visuelle)
     tags_df = pd.read_csv(tags_path)
     tags_list = tags_df["name"].tolist()
     category_list = tags_df["category"].tolist()  # 0=rating, 4=char, 9=general
@@ -135,7 +150,8 @@ def caption_image_wd14(
 
     session, tags_list, category_list = _get_wd14_model(model_id)
 
-    # Preprocess: resize to 448×448 with padding, BGR, uint8
+    # Prétraitement WD14 : redimensionnement en 448×448 avec padding blanc centré.
+    # WD14 attend du BGR (pas RGB) en float32 — l'inversion de canal est faite via [::-1].
     img = Image.open(image_path).convert("RGB")
     target = 448
     img.thumbnail((target, target), Image.LANCZOS)
@@ -143,13 +159,14 @@ def caption_image_wd14(
     offset = ((target - img.width) // 2, (target - img.height) // 2)
     canvas.paste(img, offset)
 
-    arr = np.array(canvas, dtype=np.float32)[..., ::-1]  # RGB → BGR
-    arr = arr[np.newaxis]  # BHWC
+    arr = np.array(canvas, dtype=np.float32)[..., ::-1]  # RGB → BGR (format WD14)
+    arr = arr[np.newaxis]  # Ajout de la dimension batch : (H, W, C) → (1, H, W, C)
 
     input_name = session.get_inputs()[0].name
     preds = session.run(None, {input_name: arr})[0][0]
 
-    # Filter by threshold, exclude rating tags (category 9 = general/char only)
+    # Filtre par threshold de confiance et par catégorie :
+    # on exclut les tags de rating (0) pour ne garder que général (9) et personnage (4)
     tags = [
         tags_list[i]
         for i, (score, cat) in enumerate(zip(preds, category_list))

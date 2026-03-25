@@ -1,26 +1,37 @@
-"""Project management for DataBuilder.
+"""
+Module: project_manager.py
+===========================
+Gestion des projets DataBuilder — création, chargement, listage et suppression.
 
-A *project* is a self-contained directory that groups dataset, training
-configuration, output checkpoints, generated samples, and run history for a
-single LoRA / finetune experiment.
+Rôle dans DataBuilder:
+    - Représente l'unité de travail principale : un projet regroupe dataset,
+      config d'entraînement, checkpoints, samples générés et historique des runs
+    - Le répertoire de projet est compatible avec TrainingWorker (output_dir)
+    - Persiste les métadonnées dans project.json (schéma versionné)
+    - Gère les presets de configuration et l'historique JSON par run
 
-Default layout::
+Classes/Fonctions principales:
+    - Project: Dataclass représentant un projet sur disque, avec helpers pour
+      checkpoints, samples, presets et historique
+    - ProjectManager: CRUD complet sur la collection de projets sous projects_root
+
+Structure de répertoire::
 
     ~/DataBuilder-Projects/
     └── my_lora/
-        ├── project.json     # rich project metadata (extends workers.py minimal version)
-        ├── dataset/         # images + captions (compatible with existing export worker)
-        ├── models/          # final trained weights
-        ├── samples/         # samples generated during training
-        ├── checkpoints/     # step/epoch checkpoints
-        ├── backups/         # full project backups
-        ├── logs/            # TensorBoard logs
-        ├── .cache/          # latent / text-encoder caches
-        ├── presets/         # saved TrainingConfig JSON files
-        └── history/         # per-run JSON records
+        ├── project.json     # métadonnées du projet (schéma v2+)
+        ├── dataset/         # images + captions (compatible export worker)
+        ├── models/          # poids entraînés finaux
+        ├── samples/         # samples générés pendant l'entraînement
+        ├── checkpoints/     # checkpoints par step/epoch
+        ├── backups/         # sauvegardes complètes du projet
+        ├── logs/            # logs TensorBoard
+        ├── .cache/          # caches latents / text-encoder
+        ├── presets/         # fichiers JSON TrainingConfig sauvegardés
+        └── history/         # enregistrements JSON par run
 
-The project directory is intentionally compatible with the existing trainer:
-``project.path`` can be passed directly as ``output_dir`` to ``TrainingWorker``.
+Dépendances: json, pathlib, re, datetime, dataset_sorter.app_settings,
+             dataset_sorter.workers
 
 Usage::
 

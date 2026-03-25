@@ -1,8 +1,19 @@
-"""Global application settings for DataBuilder.
+"""
+Module: app_settings.py
+========================
+Paramètres globaux de l'application — préférences persistantes de l'utilisateur.
 
-Persists user preferences across sessions in ~/.config/databuilder/settings.json.
-All fields have sensible defaults so the app works on first launch without any
-configuration.
+Rôle dans DataBuilder:
+    - Point d'entrée unique pour la configuration persistante de l'application
+    - Sauvegarde les préférences (répertoires, projets récents, UI) entre les sessions
+    - Utilisé par ProjectManager, TrainingWorker et tous les onglets UI pour lire les
+      chemins de fichiers et les réglages par défaut
+
+Classes/Fonctions principales:
+    - AppSettings: Dataclass de configuration avec load()/save() automatique
+      vers ~/.config/databuilder/settings.json (ou DATABUILDER_CONFIG_DIR)
+
+Dépendances: stdlib uniquement (json, pathlib, dataclasses, os)
 
 Usage::
 
@@ -64,7 +75,7 @@ class AppSettings:
 
     @classmethod
     def get_config_dir(cls) -> Path:
-        """Return the config directory, honouring the env override."""
+        """Return the config directory, en respectant la variable d'environnement DATABUILDER_CONFIG_DIR."""
         env = os.environ.get(_CONFIG_DIR_ENV)
         return Path(env) if env else _DEFAULT_CONFIG_DIR
 
@@ -125,7 +136,7 @@ class AppSettings:
 
     def _to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        # Convert Path objects to strings
+        # Les Path ne sont pas sérialisables en JSON natif — on les convertit en str
         for key in ("projects_root", "models_cache", "default_output_dir", "huggingface_cache"):
             if key in d and d[key] is not None:
                 d[key] = str(d[key])
