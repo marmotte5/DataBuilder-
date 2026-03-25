@@ -2,6 +2,12 @@
 
 Extracted from trainer.py to keep the factory logic separate from the
 training loop.
+
+Public API:
+    get_optimizer()          -- instantiate optimizer from TrainingConfig
+    get_scheduler()          -- instantiate LR scheduler from TrainingConfig
+    get_optimizer_defaults() -- recommended defaults for a given optimizer name
+    should_lock_field()      -- whether a UI field should be forced/locked
 """
 
 import logging
@@ -12,6 +18,191 @@ import torch
 from dataset_sorter.models import TrainingConfig
 
 log = logging.getLogger(__name__)
+
+
+# ============================================================
+# SECTION: Per-optimizer recommended defaults
+# ============================================================
+# Keys match exactly the optimizer names used in TrainingConfig.optimizer
+# and in constants.OPTIMIZERS.
+#
+# Optional keys:
+#   force_lr        -- UI should set this LR and lock the field
+#   force_scheduler -- UI should set this scheduler and lock the field
+
+OPTIMIZER_DEFAULTS: dict[str, dict] = {
+    "AdamW": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "betas": (0.9, 0.999),
+        "eps": 1e-8,
+        "description": "Standard optimizer. Good default for most training.",
+        "notes": "",
+    },
+    "AdamW8bit": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "betas": (0.9, 0.999),
+        "eps": 1e-8,
+        "description": "8-bit AdamW. Uses ~50% less VRAM than AdamW.",
+        "notes": "Requires bitsandbytes. NVIDIA only.",
+    },
+    "Prodigy": {
+        "learning_rate": 1.0,
+        "lr_scheduler": "constant",
+        "weight_decay": 0.01,
+        "betas": (0.9, 0.99),
+        "eps": 1e-8,
+        "description": "Adaptive LR optimizer. Always set LR=1.0.",
+        "notes": (
+            "Prodigy manages its own learning rate internally. "
+            "LR must be 1.0. Scheduler must be constant."
+        ),
+        "force_lr": 1.0,
+        "force_scheduler": "constant",
+    },
+    "DAdaptAdam": {
+        "learning_rate": 1.0,
+        "lr_scheduler": "constant",
+        "weight_decay": 0.0,
+        "description": "D-Adaptation Adam. Self-tuning LR.",
+        "notes": (
+            "LR must be 1.0. Scheduler must be constant. "
+            "No weight decay recommended."
+        ),
+        "force_lr": 1.0,
+        "force_scheduler": "constant",
+    },
+    "Adafactor": {
+        "learning_rate": 2e-5,
+        "lr_scheduler": "constant",
+        "weight_decay": 0.0,
+        "description": "Memory-efficient optimizer. Good for low VRAM.",
+        "notes": (
+            "With relative_step=True, LR is auto-managed and scheduler "
+            "is forced to constant. Uses much less VRAM than AdamW."
+        ),
+    },
+    "Lion": {
+        "learning_rate": 1e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.1,
+        "betas": (0.9, 0.99),
+        "description": "Evolved optimizer by Google Brain. Uses 3-10x less LR than AdamW.",
+        "notes": "Use 3-10x lower LR than AdamW. Higher weight decay (0.1-0.3).",
+    },
+    "AdamWScheduleFree": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "constant",
+        "weight_decay": 0.01,
+        "description": "Schedule-free AdamW. No LR scheduler needed.",
+        "notes": (
+            "Scheduler must be constant. The optimizer handles LR scheduling "
+            "internally via weight averaging."
+        ),
+        "force_scheduler": "constant",
+    },
+    "CAME": {
+        "learning_rate": 2e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": "Confidence-Aware Memory Efficient optimizer.",
+        "notes": "Good for fine-tuning. Memory efficient like Adafactor but with momentum.",
+    },
+    "SOAP": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": "Shampoo-Adam 2nd-order optimizer. 40% fewer iterations (ICLR 2025).",
+        "notes": "Slightly higher memory than AdamW due to preconditioner matrices.",
+    },
+    "Muon": {
+        "learning_rate": 0.02,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": "Orthogonal-update optimizer. ~2x efficiency vs AdamW.",
+        "notes": (
+            "Requires higher LR than AdamW (0.01-0.05 typical). "
+            "1D params (biases, norms) use AdamW internally."
+        ),
+    },
+    "GaLoreAdamW": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": "Gradient Low-Rank Projection AdamW. Full-rank quality at low memory.",
+        "notes": "Use rank 64-128. Re-projection adds some overhead per update_proj_gap steps.",
+    },
+    "GaLoreAdamW8bit": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": "GaLore + 8-bit AdamW. Maximum memory savings.",
+        "notes": "Requires bitsandbytes. NVIDIA only. Combines GaLore and 8-bit quantization.",
+    },
+    "SGD": {
+        "learning_rate": 1e-3,
+        "lr_scheduler": "cosine",
+        "weight_decay": 1e-4,
+        "description": "Classic SGD with momentum. Simple and stable.",
+        "notes": "Requires careful LR tuning. Momentum is fixed at 0.9.",
+    },
+    # Marmotte: custom DataBuilder ultra-low memory optimizer.
+    # Defaults match the Marmotte.__init__ signature in optimizers.py.
+    "Marmotte": {
+        "learning_rate": 1e-4,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "description": (
+            "DataBuilder custom optimizer. 10-20x less optimizer memory than AdamW, "
+            "per-channel adaptive LR, 1-bit momentum with rank-k error feedback."
+        ),
+        "notes": (
+            "Use higher LR than AdamW (1e-4 typical). "
+            "momentum=0.9, agreement_boost=1.5, error_rank=4."
+        ),
+    },
+}
+
+# Fallback entry for unknown optimizers (points to AdamW-style safe defaults)
+_FALLBACK_DEFAULTS = OPTIMIZER_DEFAULTS["AdamW"]
+
+
+def get_optimizer_defaults(optimizer_name: str) -> dict:
+    """Return recommended defaults for the given optimizer.
+
+    Used by the UI to update fields when the optimizer selection changes.
+    Falls back to AdamW defaults for unknown optimizer names.
+
+    Args:
+        optimizer_name: Optimizer name as used in TrainingConfig.optimizer
+                        (e.g. "Marmotte", "AdamW", "Prodigy").
+
+    Returns:
+        Dict with keys: learning_rate, lr_scheduler, weight_decay, description,
+        notes, and optionally force_lr / force_scheduler.
+    """
+    return OPTIMIZER_DEFAULTS.get(optimizer_name, _FALLBACK_DEFAULTS)
+
+
+def should_lock_field(optimizer_name: str, field: str) -> bool:
+    """Return True if a UI field should be forced/locked for this optimizer.
+
+    Locking prevents the user from changing a value that the optimizer
+    requires to be a specific setting (e.g. Prodigy requires lr=1.0 and
+    scheduler=constant).
+
+    Args:
+        optimizer_name: Optimizer name as used in TrainingConfig.optimizer.
+        field: Field name to check — currently "lr" or "scheduler".
+
+    Returns:
+        True if the field has a ``force_<field>`` key in its defaults dict.
+    """
+    defaults = get_optimizer_defaults(optimizer_name)
+    return f"force_{field}" in defaults
 
 
 class _CombinedOptimizer:
