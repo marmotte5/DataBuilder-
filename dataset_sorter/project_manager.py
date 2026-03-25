@@ -1,36 +1,36 @@
 """
 Module: project_manager.py
 ===========================
-Gestion des projets DataBuilder — création, chargement, listage et suppression.
+DataBuilder project management — creation, loading, listing and deletion.
 
-Rôle dans DataBuilder:
-    - Représente l'unité de travail principale : un projet regroupe dataset,
-      config d'entraînement, checkpoints, samples générés et historique des runs
-    - Le répertoire de projet est compatible avec TrainingWorker (output_dir)
-    - Persiste les métadonnées dans project.json (schéma versionné)
-    - Gère les presets de configuration et l'historique JSON par run
+Role in DataBuilder:
+    - Represents the main unit of work: a project groups together dataset,
+      training config, checkpoints, generated samples and run history
+    - The project directory is compatible with TrainingWorker (output_dir)
+    - Persists metadata in project.json (versioned schema)
+    - Manages configuration presets and per-run JSON history
 
 Classes/Fonctions principales:
-    - Project: Dataclass représentant un projet sur disque, avec helpers pour
+    - Project: Dataclass representing a project on disk, with helpers for
       checkpoints, samples, presets et historique
     - ProjectManager: CRUD complet sur la collection de projets sous projects_root
 
-Structure de répertoire::
+Directory structure::
 
     ~/DataBuilder-Projects/
     └── my_lora/
-        ├── project.json     # métadonnées du projet (schéma v2+)
+        ├── project.json     # project metadata (schema v2+)
         ├── dataset/         # images + captions (compatible export worker)
-        ├── models/          # poids entraînés finaux
-        ├── samples/         # samples générés pendant l'entraînement
+        ├── models/          # final trained weights
+        ├── samples/         # samples generated during training
         ├── checkpoints/     # checkpoints par step/epoch
-        ├── backups/         # sauvegardes complètes du projet
+        ├── backups/         # full project backups
         ├── logs/            # logs TensorBoard
         ├── .cache/          # caches latents / text-encoder
-        ├── presets/         # fichiers JSON TrainingConfig sauvegardés
+        ├── presets/         # saved TrainingConfig JSON files
         └── history/         # enregistrements JSON par run
 
-Dépendances: json, pathlib, re, datetime, dataset_sorter.app_settings,
+Dependencies: json, pathlib, re, datetime, dataset_sorter.app_settings,
              dataset_sorter.workers
 
 Usage::

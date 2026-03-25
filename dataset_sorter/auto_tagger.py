@@ -1,31 +1,31 @@
 """
 Module: auto_tagger.py
 =======================
-Auto-tagging — génération automatique de captions/tags pour les datasets non annotés.
+Auto-tagging — automatic caption/tag generation for unannotated datasets.
 
-Rôle dans DataBuilder:
-    - Permet d'annoter un dossier d'images en un seul appel (tag_folder)
-    - Deux backends au choix selon le style d'annotation souhaité :
-        * BLIP : captions en langue naturelle ("a woman walking in a park")
-        * WD14 : tags Danbooru séparés par virgules ("1girl, solo, outdoors")
-    - Écrit les annotations dans des fichiers .txt côte à côte avec les images,
-      format directement compatible avec le pipeline d'entraînement DataBuilder
+Role in DataBuilder:
+    - Allows annotating an image folder in a single call (tag_folder)
+    - Two backends to choose from depending on the desired annotation style:
+        * BLIP : natural language captions ("a woman walking in a park")
+        * WD14 : comma-separated Danbooru tags ("1girl, solo, outdoors")
+    - Writes annotations into .txt files alongside the images,
+      format directly compatible with the DataBuilder training pipeline
 
 Classes/Fonctions principales:
-    - tag_folder(): API publique principale — parcourt un dossier et génère les .txt
+    - tag_folder(): main public API — walks a folder and generates .txt files
     - caption_image_blip(): Caption d'une image via BLIP (transformers + torch)
     - caption_image_wd14(): Tags d'une image via WD14 ONNX (onnxruntime + PIL)
-    - unload_models(): Libère la VRAM/RAM après le tagging
+    - unload_models(): Releases VRAM/RAM after tagging
 
-Dépendances: torch, transformers (BLIP), onnxruntime, pandas, huggingface_hub (WD14),
-             Pillow, numpy — toutes importées en lazy pour ne pas alourdir le démarrage
+Dependencies: torch, transformers (BLIP), onnxruntime, pandas, huggingface_hub (WD14),
+             Pillow, numpy — all lazily imported to keep startup fast
 
 Notes techniques:
-    - Les modèles sont mis en cache en mémoire après le premier chargement
-      (_blip_pipeline, _wd14_state) pour éviter de recharger entre les images
+    - Models are cached in memory after first load
+      (_blip_pipeline, _wd14_state) to avoid reloading between images
     - WD14 utilise le format ONNX (pas PyTorch) — pas de GPU PyTorch requis pour WD14
-    - Le threshold WD14 (défaut 0.35) filtre les tags de faible confiance ;
-      seules les catégories général (9) et personnage (4) sont retenues (pas les ratings)
+    - WD14 threshold (default 0.35) filters low-confidence tags;
+      only general (9) and character (4) categories are kept (not ratings)
 """
 
 import logging
@@ -120,8 +120,8 @@ def _get_wd14_model(model_id: str = "SmilingWolf/wd-vit-large-tagger-v3"):
     model_path = hf_hub_download(model_id, filename="model.onnx", repo_type="model")
     tags_path = hf_hub_download(model_id, filename="selected_tags.csv", repo_type="model")
 
-    # Charge le CSV des tags Danbooru. La colonne "category" indique le type :
-    # 0=rating (sfw/nsfw), 4=personnage (noms propres), 9=général (description visuelle)
+    # Load the Danbooru tag CSV. The "category" column indicates the type:
+    # 0=rating (sfw/nsfw), 4=character (proper nouns), 9=general (visual description)
     tags_df = pd.read_csv(tags_path)
     tags_list = tags_df["name"].tolist()
     category_list = tags_df["category"].tolist()  # 0=rating, 4=char, 9=general
@@ -150,8 +150,8 @@ def caption_image_wd14(
 
     session, tags_list, category_list = _get_wd14_model(model_id)
 
-    # Prétraitement WD14 : redimensionnement en 448×448 avec padding blanc centré.
-    # WD14 attend du BGR (pas RGB) en float32 — l'inversion de canal est faite via [::-1].
+    # WD14 preprocessing: resize to 448×448 with centered white padding.
+    # WD14 expects BGR (not RGB) in float32 — channel inversion is done via [::-1].
     img = Image.open(image_path).convert("RGB")
     target = 448
     img.thumbnail((target, target), Image.LANCZOS)
@@ -165,8 +165,8 @@ def caption_image_wd14(
     input_name = session.get_inputs()[0].name
     preds = session.run(None, {input_name: arr})[0][0]
 
-    # Filtre par threshold de confiance et par catégorie :
-    # on exclut les tags de rating (0) pour ne garder que général (9) et personnage (4)
+    # Filter by confidence threshold and category:
+    # exclude rating tags (0) to keep only general (9) and character (4)
     tags = [
         tags_list[i]
         for i, (score, cat) in enumerate(zip(preds, category_list))

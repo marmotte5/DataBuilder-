@@ -1,28 +1,28 @@
 """
 Module: training_state.py
 ==========================
-Gestion de l'état d'entraînement — sauvegarde et restauration pour pause/reprise.
+Training state management — save and restore for pause/resume.
 
-Rôle dans DataBuilder:
-    - Permet d'interrompre et de reprendre un entraînement sans perdre la progression
-    - Sauvegarde l'état complet : métriques, états RNG (torch/numpy/python), et
-      état de l'accélérateur (optimizer, scheduler, poids)
-    - Gère la rotation automatique des anciens checkpoints pour limiter l'utilisation disque
+Role in DataBuilder:
+    - Allows interrupting and resuming training without losing progress
+    - Saves the complete state: metrics, RNG states (torch/numpy/python), and
+      accelerator state (optimizer, scheduler, weights)
+    - Manages automatic rotation of old checkpoints to limit disk usage
 
 Classes/Fonctions principales:
-    - TrainingState: Dataclass contenant toutes les métriques d'un point de reprise
-      (epoch, step, loss history, LR, config complète, timestamp)
+    - TrainingState: Dataclass containing all metrics of a resume point
+      (epoch, step, loss history, LR, complete config, timestamp)
     - TrainingStateManager: Sauvegarde/chargement/rotation des checkpoints.
-      Utilisé par training_worker.py à chaque intervalle de sauvegarde.
+      Used by training_worker.py at each save interval.
 
-Dépendances: torch, numpy, json, shutil, pathlib
+Dependencies: torch, numpy, json, shutil, pathlib
 
 Notes techniques:
-    - Les états RNG (random number generators) sont sauvegardés pour que la reprise
-      produise exactement la même séquence de batches qu'une exécution continue
-    - L'état de l'accélérateur (Hugging Face Accelerate) inclut optimizer et scheduler,
-      ce qui préserve le momentum des optimiseurs adaptatifs (Adam, SOAP, etc.)
-    - Seuls les N derniers checkpoints resumables sont conservés (max_checkpoints)
+    - RNG states (random number generators) are saved so that resuming
+      produces exactly the same batch sequence as a continuous run
+    - The accelerator state (Hugging Face Accelerate) includes optimizer and scheduler,
+      which preserves the momentum of adaptive optimizers (Adam, SOAP, etc.)
+    - Only the N most recent resumable checkpoints are kept (max_checkpoints)
 """
 
 import json
@@ -39,24 +39,24 @@ import torch
 
 @dataclass
 class TrainingState:
-    """État complet d'un entraînement pour la reprise (pause/resume).
+    """Complete training state for pause/resume.
 
-    Sérialisé en JSON dans training_state.json à côté de chaque checkpoint.
-    Tous les champs ont des valeurs par défaut pour permettre la désérialisation
-    partielle depuis des versions antérieures du schéma.
+    Serialized as JSON in training_state.json alongside each checkpoint.
+    All fields have default values to allow partial deserialization
+    from older schema versions.
 
     Attributes:
-        epoch: Numéro d'époque courant (base 0).
-        global_step: Nombre total de steps de gradient effectués.
-        total_steps: Nombre total de steps prévus pour l'entraînement complet.
-        best_loss: Meilleure loss observée depuis le début de l'entraînement.
-        loss_history: Les 1000 dernières valeurs de loss (pour les courbes).
-        learning_rate: LR courant au moment de la sauvegarde.
-        elapsed_time_seconds: Temps d'entraînement cumulé en secondes.
-        training_config: Snapshot de la configuration complète (TrainingConfig).
-        timestamp: ISO-8601 du moment de sauvegarde.
-        resumable: False si le checkpoint est corrompu ou incomplet.
-        version: Version du schéma de sérialisation (pour migrations futures).
+        epoch: Current epoch number (0-based).
+        global_step: Total number of gradient steps performed.
+        total_steps: Total steps planned for the full training run.
+        best_loss: Best loss observed since the start of training.
+        loss_history: Last 1000 loss values (for curves).
+        learning_rate: Current LR at save time.
+        elapsed_time_seconds: Cumulative training time in seconds.
+        training_config: Snapshot of the full configuration (TrainingConfig).
+        timestamp: ISO-8601 of the save moment.
+        resumable: False if the checkpoint is corrupted or incomplete.
+        version: Serialization schema version (for future migrations).
     """
     epoch: int = 0
     global_step: int = 0
@@ -72,15 +72,15 @@ class TrainingState:
 
 
 class TrainingStateManager:
-    """Gère la sauvegarde et le chargement de l'état d'entraînement pour pause/reprise.
+    """Manages saving and loading training state for pause/resume.
 
-    Chaque checkpoint consiste en :
-      - training_state.json  : métriques et config (TrainingState)
-      - random_states.pt     : états RNG torch/numpy/python pour la reproductibilité
-      - accelerator_state/   : poids optimizer + scheduler (Accelerate)
+    Each checkpoint consists of:
+      - training_state.json  : metrics and config (TrainingState)
+      - random_states.pt     : torch/numpy/python RNG states for reproducibility
+      - accelerator_state/   : optimizer + scheduler weights (Accelerate)
 
-    La rotation automatique supprime les anciens checkpoints au-delà de max_checkpoints,
-    en préservant toujours les N plus récents checkpoints resumables.
+    Automatic rotation deletes old checkpoints beyond max_checkpoints,
+    always preserving the N most recent resumable checkpoints.
     """
 
     STATE_FILENAME = "training_state.json"
@@ -124,8 +124,8 @@ class TrainingStateManager:
         with open(state_path, 'w') as f:
             json.dump(asdict(state), f, indent=2, default=str)
 
-        # Sauvegarde des états RNG pour garantir la reproductibilité exacte lors de la reprise :
-        # sans ça, la séquence de batches/augmentations serait différente après reprise.
+        # Save RNG states to guarantee exact reproducibility on resume:
+        # without this, the batch/augmentation sequence would differ after resume.
         random_states = {
             'torch': torch.random.get_rng_state(),
             'torch_cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
@@ -134,8 +134,8 @@ class TrainingStateManager:
         }
         torch.save(random_states, checkpoint_dir / self.RANDOM_STATE_FILENAME)
 
-        # L'accélérateur sauvegarde optimizer + scheduler, ce qui préserve le momentum
-        # des optimiseurs adaptatifs (Adam, SOAP, Marmotte).
+        # The accelerator saves optimizer + scheduler, preserving the momentum
+        # of adaptive optimizers (Adam, SOAP, Marmotte).
         if accelerator is not None:
             accelerator.save_state(str(checkpoint_dir / "accelerator_state"))
 
@@ -145,7 +145,7 @@ class TrainingStateManager:
         return state
 
     def load_training_state(self, checkpoint_dir: Path) -> Optional[TrainingState]:
-        """Charge l'état d'entraînement depuis un checkpoint. Retourne None si absent/corrompu."""
+        """Load training state from a checkpoint. Returns None if missing or corrupted."""
         checkpoint_dir = Path(checkpoint_dir)
         state_path = checkpoint_dir / self.STATE_FILENAME
 
@@ -155,7 +155,7 @@ class TrainingStateManager:
         try:
             with open(state_path, 'r') as f:
                 data = json.load(f)
-            # Filtre les clés inconnues pour la compatibilité ascendante avec les anciens schémas
+            # Filter unknown keys for forward compatibility with older schemas
             return TrainingState(**{k: v for k, v in data.items() if k in TrainingState.__dataclass_fields__})
         except (json.JSONDecodeError, TypeError, KeyError):
             return None

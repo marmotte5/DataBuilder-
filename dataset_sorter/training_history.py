@@ -1,28 +1,28 @@
 """
 Module: training_history.py
 ============================
-Base de données d'historique d'entraînement — apprentissage par l'expérience.
+Training history database — learning from experience.
 
-Rôle dans DataBuilder:
-    - Enregistre les métriques de chaque run d'entraînement dans une base SQLite locale
-    - Utilise l'historique pour suggérer des hyperparamètres optimaux (LR, batch size)
-      en fonction du type de modèle, de la taille du dataset et de la VRAM disponible
+Role in DataBuilder:
+    - Records metrics from each training run in a local SQLite database
+    - Uses history to suggest optimal hyperparameters (LR, batch size)
+      based on model type, dataset size and available VRAM
     - Permet d'exporter l'historique en CSV pour analyse externe (Pandas, Excel)
 
 Classes/Fonctions principales:
-    - TrainingRunRecord: Dataclass décrivant les paramètres et métriques d'un run
-      (config, loss finale, divergence, OOM, courbe de loss, temps d'entraînement)
+    - TrainingRunRecord: Dataclass describing the parameters and metrics of a run
+      (config, final loss, divergence, OOM, loss curve, training time)
     - TrainingHistory: Interface SQLite avec log_run(), get_best_config(),
       get_lr_suggestion(), export_csv() et export_loss_curves_csv()
 
-Dépendances: sqlite3, json, logging, pathlib, dataset_sorter.constants
+Dependencies: sqlite3, json, logging, pathlib, dataset_sorter.constants
 
 Notes techniques:
-    - La base SQLite est stockée dans ~/.local/share/dataset_sorter/training_history.db
-      (ou DATASET_SORTER_DATA / XDG_DATA_HOME si défini)
-    - Les courbes de loss sont tronquées à 200 points pour limiter la taille de la DB
-    - get_lr_suggestion() utilise une moyenne pondérée par l'inverse de la loss finale :
-      les runs avec une meilleure loss ont plus de poids dans la recommandation
+    - The SQLite database is stored in ~/.local/share/dataset_sorter/training_history.db
+      (or DATASET_SORTER_DATA / XDG_DATA_HOME if set)
+    - Loss curves are truncated to 200 points to limit database size
+    - get_lr_suggestion() uses a weighted average by inverse final loss:
+      runs with a better loss have more weight in the recommendation
 """
 
 import json
@@ -83,17 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_optimizer ON training_runs(optimizer);
 
 @dataclass
 class TrainingRunRecord:
-    """Paramètres et métriques d'un run d'entraînement complet.
+    """Parameters and metrics of a complete training run.
 
-    Rempli par training_worker.py à la fin de chaque run et persisté via
-    TrainingHistory.log_run(). Les champs de configuration (model_type, optimizer,
-    lora_rank, etc.) servent à retrouver les runs similaires lors des suggestions.
+    Filled by training_worker.py at the end of each run and persisted via
+    TrainingHistory.log_run(). Configuration fields (model_type, optimizer,
+    lora_rank, etc.) are used to find similar runs when making suggestions.
 
     Attributes:
-        diverged: True si la loss a divergé (NaN/Inf ou explosion > 10x).
-        oom_occurred: True si une erreur CUDA OOM a été catchée pendant le run.
-        loss_curve: Valeurs de loss par step (échantillonnées, pas toutes les steps).
-        convergence_step: Step auquel la loss a atteint son minimum pour la 1ère fois.
+        diverged: True if the loss diverged (NaN/Inf or explosion > 10x).
+        oom_occurred: True if a CUDA OOM error was caught during the run.
+        loss_curve: Loss values per step (sampled, not every step).
+        convergence_step: Step at which the loss reached its minimum for the first time.
     """
     model_type: str = ""
     optimizer: str = ""
@@ -118,11 +118,11 @@ class TrainingRunRecord:
 
 
 class TrainingHistory:
-    """Historique d'entraînement persisté en SQLite pour l'apprentissage par l'expérience.
+    """Training history persisted in SQLite for learning from experience.
 
-    Fournit des recommandations basées sur les runs précédents réussis, en filtrant
-    les configurations ayant divergé ou causé des OOM. Les suggestions de LR utilisent
-    une moyenne pondérée par l'inverse de la loss finale (meilleurs runs = plus de poids).
+    Provides recommendations based on previous successful runs, filtering out
+    configurations that diverged or caused OOM. LR suggestions use
+    a weighted average by inverse final loss (better runs = more weight).
     """
 
     def __init__(self, db_path: Path = _DB_PATH):
@@ -148,7 +148,7 @@ class TrainingHistory:
                 record.batch_size, record.resolution, record.epochs,
                 record.total_steps, record.dataset_size, record.vram_gb,
                 record.final_loss, record.min_loss, record.convergence_step,
-                json.dumps(record.loss_curve[-200:]),  # Limite à 200 points pour éviter les blobs trop lourds
+                json.dumps(record.loss_curve[-200:]),  # Limit to 200 points to avoid oversized blobs
                 int(record.diverged), int(record.oom_occurred),
                 record.peak_vram_gb, record.training_time_s, record.notes,
             ),
@@ -199,8 +199,8 @@ class TrainingHistory:
         if len(rows) < 2:
             return None
 
-        # Moyenne pondérée par l'inverse de la loss : 1/loss donne plus de poids
-        # aux runs avec une meilleure (plus basse) loss finale. 1e-6 évite la division par zéro.
+        # Weighted average by inverse loss: 1/loss gives more weight
+        # to runs with a better (lower) final loss. 1e-6 avoids division by zero.
         total_weight = 0.0
         weighted_lr = 0.0
         for row in rows:

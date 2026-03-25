@@ -17,11 +17,11 @@ Key differences from SD 1.5:
     - Higher base resolution (768px) improves fine-grained detail generation
     - clip_skip supported with same mechanism as SD 1.5
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour SD 2.0 et SD 2.1
-    - La perte v-prediction est calculée dans train_backend_base._compute_vpred_loss()
-    - Appelé par trainer.py via le backend registry (model_name="sd2")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for SD 2.0 and SD 2.1
+    - The v-prediction loss is computed in train_backend_base._compute_vpred_loss()
+    - Called by trainer.py via the backend registry (model_name="sd2")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

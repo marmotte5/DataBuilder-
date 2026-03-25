@@ -28,11 +28,11 @@ Key differences from SD3:
     - Slightly different guidance scale defaults recommended by Stability AI
     - Same triple text encoder setup — training code is 100% shared with SD3
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour SD3.5-Large et SD3.5-Medium
-    - Hérite de SD3Backend: aucune logique dupliquée
-    - Appelé par trainer.py via le backend registry (model_name="sd35")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for SD3.5-Large and SD3.5-Medium
+    - Inherits from SD3Backend: no duplicated logic
+    - Called by trainer.py via the backend registry (model_name="sd35")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

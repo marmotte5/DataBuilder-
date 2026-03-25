@@ -1,10 +1,10 @@
 """
 Module: training_dashboard.py
 ========================
-Dashboard web local léger pour le monitoring temps réel de l'entraînement.
+Lightweight local web dashboard for real-time training monitoring.
 
-Rôle dans DataBuilder:
-    - Démarre un serveur HTTP stdlib dans un thread daemon (sans dépendances externes)
+Role in DataBuilder:
+    - Starts a stdlib HTTP server in a daemon thread (no external dependencies)
     - Sert une page HTML dark-theme avec Chart.js (loss, learning rate) via CDN
     - Expose une API JSON (/api/metrics, /api/samples, /api/history)
     - Persiste l'historique des runs dans ~/.databuilder/dashboard_history/
@@ -15,20 +15,20 @@ Classes/Fonctions principales:
     - _DashboardHandler   : Handler HTTP minimal (BaseHTTPRequestHandler)
 
 Architecture:
-    - Pas de dépendances externes : stdlib uniquement (http.server, json, threading, pathlib)
-    - Thread-safe : tous les accès aux métriques passent par self._lock (threading.Lock)
-    - Chart.js chargé depuis CDN dans le template HTML embarqué (_HTML)
-    - Auto-refresh toutes les 2 secondes côté client (setInterval JS)
+    - No external dependencies: stdlib only (http.server, json, threading, pathlib)
+    - Thread-safe: all metrics accesses go through self._lock (threading.Lock)
+    - Chart.js loaded from CDN in the embedded HTML template (_HTML)
+    - Auto-refresh every 2 seconds on the client side (setInterval JS)
 
 Endpoints API:
-    GET /               → page HTML complète
-    GET /api/metrics    → snapshot JSON des métriques actuelles
-    GET /api/samples    → liste des images générées
-    GET /api/history    → liste des runs historiques (résumés)
-    GET /api/history/{id} → métriques complètes d'un run
-    GET /sample?path=   → sert le fichier image depuis le disque
+    GET /               → full HTML page
+    GET /api/metrics    → JSON snapshot of current metrics
+    GET /api/samples    → list of generated images
+    GET /api/history    → list of historical runs (summaries)
+    GET /api/history/{id} → full metrics for a run
+    GET /sample?path=   → serve image file from disk
 
-Dépendances: stdlib uniquement (http.server, json, threading, socket, pathlib)
+Dependencies: stdlib only (http.server, json, threading, socket, pathlib)
 """
 
 from __future__ import annotations
@@ -46,12 +46,12 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # ============================================================
-# SECTION: Template HTML embarqué (dark theme, Chart.js CDN)
+# SECTION: Embedded HTML template (dark theme, Chart.js CDN)
 # ============================================================
-# Le template HTML est une constante string car :
-# - Évite la gestion de fichiers statiques (pas de répertoire templates)
-# - Simplifie le déploiement (un seul fichier Python suffit)
-# - Chargé une seule fois en mémoire, servi à chaque requête GET /
+# The HTML template is a string constant because:
+# - Avoids managing static files (no templates directory needed)
+# - Simplifies deployment (a single Python file is sufficient)
+# - Loaded once into memory, served on every GET / request
 
 _HTML = """\
 <!DOCTYPE html>
@@ -398,9 +398,9 @@ class TrainingDashboard:
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        # Identifiant unique du run : timestamp + 3 octets aléatoires en hex
-        # (ex: "20260325_143022_a3f91c") — unicité garantie même si deux runs
-        # démarrent dans la même seconde.
+        # Unique run identifier: timestamp + 3 random bytes as hex
+        # (e.g. "20260325_143022_a3f91c") — uniqueness guaranteed even if two runs
+        # start in the same second.
         self._run_id: str = time.strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(3).hex()
         self._run_name: str = f"run_{self._run_id}"
 
@@ -539,8 +539,8 @@ class TrainingDashboard:
             lr,
         )
 
-        # Log au niveau INFO seulement tous les 5% de progression (total_steps // 20)
-        # pour ne pas saturer les logs. Fallback à 100 si total_steps est 0.
+        # Log at INFO level only every 5% of progress (total_steps // 20)
+        # to avoid flooding the logs. Fallback to 100 if total_steps is 0.
         if step % max(1, self.metrics["total_steps"] // 20 or 100) == 0:
             log.info(
                 "Training step %d/%d — loss=%.5f lr=%.2e",

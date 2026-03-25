@@ -1,59 +1,59 @@
 """
 Module: io_speed.py
 ====================
-Optimisations I/O — 20 techniques pour réduire les temps de cache, de scan et d'entraînement.
+I/O optimizations — 20 techniques to reduce cache, scan, and training times.
 
-Rôle dans DataBuilder:
-    - Fournit des remplaçants drop-in qui accélèrent les trois principaux goulots
-      d'étranglement : décodage image, sérialisation des caches, et débit du pipeline
-    - Utilisé par train_dataset.py (caches latents), bucket_sampler.py (dimensions),
+Role in DataBuilder:
+    - Provides drop-in replacements that speed up the three main bottlenecks:
+      image decoding, cache serialization, and pipeline throughput
+    - Used by train_dataset.py (latent caches), bucket_sampler.py (dimensions),
       et zero_bottleneck_dataloader.py (workers adaptatifs)
-    - Toutes les classes et fonctions sont optionnelles — les fonctions sans dépendances
-      tierces (turbojpeg, lz4, lmdb) se rabattent silencieusement sur des alternatives
+    - All classes and functions are optional — functions without dependencies
+      on third-party libs (turbojpeg, lz4, lmdb) fall back silently to alternatives
 
 Classes/Fonctions principales:
-    - fast_decode_image(): Décodeur image avec fallback chain turbojpeg→cv2→PIL
+    - fast_decode_image(): Image decoder with fallback chain turbojpeg→cv2→PIL
     - save_tensor_fast() / load_tensor_fast(): Cache safetensors (2-5x plus rapide que torch.save)
     - save_tensor_compressed() / load_tensor_compressed(): Cache LZ4 (40-60% plus petit)
     - MmapLatentCache: Cache latent memory-mapped (zero-copy, gestion OS automatique)
     - get_tmpfs_cache_dir(): Cache en RAM via /dev/shm (Linux uniquement)
-    - LMDBCache: Cache fichier unique LMDB (élimine la surcharge inode sur gros datasets)
-    - read_image_dimensions_fast(): Lecture parallèle des dimensions (header struct, sans PIL)
-    - assign_buckets_vectorized(): Affectation de buckets vectorisée NumPy O(N) sans boucle
-    - scandir_recursive(): Scan de répertoire 2-3x plus rapide qu'os.walk
+    - LMDBCache: Single-file LMDB cache (eliminates inode overhead on large datasets)
+    - read_image_dimensions_fast(): Parallel dimension reading (header struct, no PIL)
+    - assign_buckets_vectorized(): Vectorized NumPy O(N) bucket assignment without Python loop
+    - scandir_recursive(): Directory scan 2-3x faster than os.walk
     - batched_vae_encode(): Encodage VAE par batch (amortit le kernel launch overhead)
-    - SharedMemoryLatentPool: Pool de latents en mémoire partagée cross-process
-    - PinnedTransferBuffer: Buffer pinned pré-alloué pour transferts CPU→GPU DMA async
-    - read_captions_parallel(): Lecture parallèle des .txt de captions
-    - ImageSizeCache: Cache JSON persistant des dimensions (évite les relectures de headers)
+    - SharedMemoryLatentPool: Cross-process shared memory latent pool
+    - PinnedTransferBuffer: Pre-allocated pinned buffer for async CPU→GPU DMA transfers
+    - read_captions_parallel(): Parallel reading of caption .txt files
+    - ImageSizeCache: Persistent JSON cache of dimensions (avoids re-reading headers)
     - compress_latent_fp16() / decompress_latent_fp16(): Stockage fp16 (50% moins de RAM)
-    - compute_file_hashes(): Déduplication par hash MD5 (évite les encodages VAE redondants)
-    - save_tensors_parallel(): Sauvegarde parallèle de tenseurs via ThreadPool
+    - compute_file_hashes(): MD5-hash deduplication (avoids redundant VAE encodings)
+    - save_tensors_parallel(): Parallel tensor saving via ThreadPool
     - compute_optimal_workers(): Calcul adaptatif de num_workers selon la configuration cache
 
-Dépendances: numpy (requis), torch (lazy), safetensors (optionnel), lz4 (optionnel),
+Dependencies: numpy (required), torch (lazy), safetensors (optional), lz4 (optional),
              lmdb (optionnel), turbojpeg (optionnel), cv2 (optionnel), Pillow
 
-Résumé des optimisations:
- 1. Décodeur image rapide (turbojpeg → cv2 → PIL)
+Optimization summary:
+ 1. Fast image decoder (turbojpeg → cv2 → PIL)
  2. Format cache safetensors (2-5x plus rapide que torch.save/.pt)
- 3. Cache LZ4 compressé (40-60% plus petit, overhead CPU quasi nul)
+ 3. LZ4 compressed cache (40-60% smaller, near-zero CPU overhead)
  4. Cache memory-mapped (mmap) pour chargement latent zero-copy
  5. Cache RAM disk tmpfs pour machines sans SSD
- 6. Cache LMDB fichier unique (élimine la surcharge inode)
- 7. Affectation de buckets parallèle avec ThreadPool
- 8. Matching de buckets vectorisé NumPy (pas de boucle Python)
+ 6. Single-file LMDB cache (eliminates inode overhead)
+ 7. Parallel bucket assignment with ThreadPool
+ 8. Vectorized NumPy bucket matching (no Python loop)
  9. Lecture de headers image par struct (10x plus rapide que PIL)
-10. os.scandir() pour un parcours de répertoire 2-3x plus rapide
+10. os.scandir() for 2-3x faster directory traversal
 11. Encodage VAE par batch (multi-image par forward pass)
-12. Pool de latents en mémoire partagée (multiprocessing.shared_memory)
-13. Buffer tensor pinned pré-alloué pour transferts CPU→GPU
-14. Lecture parallèle des fichiers texte de captions
-15. Cache JSON des dimensions image (évite les relectures de headers)
-16. Chargement de tags streamé avec readlines()
-17. Cache latent demi-précision (fp16, 50% de RAM en moins)
-18. Cache déduplication-aware (ignore les images identiques par hash)
-19. Sauvegarde parallèle torch.save/safetensors avec ThreadPool
+12. Shared memory latent pool (multiprocessing.shared_memory)
+13. Pre-allocated pinned tensor buffer for CPU→GPU transfers
+14. Parallel reading of caption text files
+15. JSON cache of image dimensions (avoids re-reading headers)
+16. Streamed tag loading with readlines()
+17. Half-precision latent cache (fp16, 50% less RAM)
+18. Deduplication-aware cache (skips identical images by hash)
+19. Parallel torch.save/safetensors saving with ThreadPool
 20. num_workers adaptatif DataLoader selon ratio I/O vs compute
 """
 
@@ -82,8 +82,8 @@ def _get_fast_decoder():
     Priority: turbojpeg (3-5x faster) > cv2 (2-3x faster) > PIL (baseline).
     Returns a callable: decoder(path) -> PIL.Image.Image
     """
-    # Premier essai : turbojpeg — 3-5x plus rapide que PIL pour les JPEG grâce au
-    # décodage Huffman matériel via libjpeg-turbo.
+    # First try: turbojpeg — 3-5x faster than PIL for JPEG thanks to
+    # hardware Huffman decoding via libjpeg-turbo.
     try:
         from turbojpeg import TurboJPEG
         from PIL import Image
@@ -94,9 +94,9 @@ def _get_fast_decoder():
             if suffix in ('.jpg', '.jpeg'):
                 with open(path, 'rb') as f:
                     bgr = _tjpeg.decode(f.read())
-                # TurboJPEG retourne un array numpy BGR avec stride négatif sur l'axe canal.
-                # .copy() est obligatoire : certaines versions PIL/numpy crashent sur les
-                # vues à stride négatif (negative-stride arrays non-contiguous).
+                # TurboJPEG returns a numpy BGR array with negative stride on the channel axis.
+                # .copy() is mandatory: some PIL/numpy versions crash on
+                # negative-stride views (negative-stride arrays are non-contiguous).
                 return Image.fromarray(bgr[:, :, ::-1].copy())
             # Pour les formats non-JPEG (PNG, WebP, etc.) : fallback PIL
             with Image.open(path) as img:
@@ -269,12 +269,12 @@ class MmapLatentCache:
         self._file = None
 
     def create(self):
-        """Crée le fichier backing du mmap en pré-allouant l'espace disque nécessaire."""
+        """Creates the mmap backing file by pre-allocating the required disk space."""
         if self._total_size == 0:
             return
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         # seek() + write() d'un octet en fin de fichier est la technique standard
-        # pour pré-allouer un fichier sparse sans écrire tous les zéros (O(1) sur ext4/NTFS)
+        # to pre-allocate a sparse file without writing all zeros (O(1) on ext4/NTFS)
         with open(self.cache_path, 'wb') as f:
             f.seek(self._total_size - 1)
             f.write(b'\0')
@@ -573,8 +573,8 @@ def assign_buckets_vectorized(
     bucket_arr = np.array(buckets, dtype=np.float32)
     bucket_aspects = bucket_arr[:, 0] / np.maximum(bucket_arr[:, 1], 1.0)
 
-    # Broadcast NumPy : (N,1) - (1,B) → matrice (N,B) des différences absolues.
-    # C'est l'équivalent vectorisé d'une double boucle for i in images: for j in buckets:
+    # NumPy broadcast: (N,1) - (1,B) → (N,B) matrix of absolute differences.
+    # This is the vectorized equivalent of a double loop for i in images: for j in buckets:
     diffs = np.abs(img_aspects[:, None] - bucket_aspects[None, :])
 
     # argmin sur l'axe buckets → index du bucket le plus proche pour chaque image
@@ -664,17 +664,16 @@ def batched_vae_encode(
         )
         with torch.no_grad():
             encoded = vae.encode(batch_tensor).latent_dist.sample()
-            # Normalisation du latent : doit correspondre exactement à ce que font
-            # train_dataset.py et train_backend_base.prepare_latents().
-            # Certains VAE (Z-Image, SD3) ont un shift_factor à soustraire avant scaling.
+            # Latent normalization: must exactly match what the VAE decoder does in reverse.
+            # Some VAEs (Z-Image, SD3) have a shift_factor to subtract before scaling.
             shift = getattr(vae.config, 'shift_factor', 0.0)
             if shift:
                 encoded = (encoded - shift) * vae.config.scaling_factor
             else:
                 encoded = encoded * vae.config.scaling_factor
 
-        # Libère le tensor GPU d'entrée avant d'extraire les latents pour
-        # réduire le pic de VRAM (le batch d'entrée + latents seraient simultanément en mémoire)
+        # Release the input GPU tensor before extracting latents to
+        # reduce peak VRAM (input batch + latents would both be in memory)
         del batch_tensor
 
         for j in range(encoded.shape[0]):
@@ -719,8 +718,8 @@ class SharedMemoryLatentPool:
             self._shm = SharedMemory(name=self.name, create=True, size=self._total_bytes)
             log.info(f"Shared memory latent pool: {self._total_bytes / 1e6:.1f} MB")
         except FileExistsError:
-            # La mémoire partagée existe déjà (run précédent non nettoyé ou worker existant).
-            # On se réattache, mais on valide la taille pour éviter un buffer overflow silencieux.
+            # Shared memory already exists (previous run not cleaned up or existing worker).
+            # Re-attach, but validate the size to avoid a silent buffer overflow.
             self._shm = SharedMemory(name=self.name, create=False)
             if self._shm.size < self._total_bytes:
                 log.warning(
@@ -1017,7 +1016,7 @@ def compute_optimal_workers(
     if sys.platform == "darwin":
         # Sur macOS, MPS (Metal Performance Shaders) a des limitations avec le
         # multiprocessing de PyTorch DataLoader (fork + CUDA context = crash).
-        # ROCm et XPU n'étant disponibles que sur Linux/Windows, darwin → 0 pour MPS.
+        # ROCm and XPU are only available on Linux/Windows, darwin → 0 for MPS.
         try:
             from dataset_sorter.hardware_detect import detect_hardware
             _hw = detect_hardware()
@@ -1025,14 +1024,14 @@ def compute_optimal_workers(
                 return 0
             # Fallback CPU sur darwin : les workers sont acceptables
         except Exception:
-            return 0  # Défaut sûr si la détection matérielle échoue
+            return 0  # Safe default if hardware detection fails
         else:
             if _hw["backend"] not in ("cuda", "rocm", "ipex"):
                 return 0
     if num_cpu_cores is None:
         try:
-            # sched_getaffinity(0) retourne les CPUs réellement disponibles pour ce processus —
-            # plus précis que cpu_count() dans les conteneurs Docker avec CPU pinning.
+            # sched_getaffinity(0) returns CPUs actually available to this process —
+            # more accurate than cpu_count() in Docker containers with CPU pinning.
             num_cpu_cores = len(os.sched_getaffinity(0))
         except AttributeError:
             # sched_getaffinity n'existe pas sur Windows/macOS

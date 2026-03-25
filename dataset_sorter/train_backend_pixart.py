@@ -34,11 +34,11 @@ Key differences from SDXL:
     - Resolution + aspect ratio conditioning instead of SDXL's time_ids
     - Flow matching loss (Sigma) vs. epsilon (Alpha vs. SDXL)
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour PixArt-Alpha et PixArt-Sigma
-    - Applique le conditioning résolution/AR dans get_added_cond()
-    - Appelé par trainer.py via le backend registry (model_name="pixart")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for PixArt-Alpha and PixArt-Sigma
+    - Applies resolution/AR conditioning in get_added_cond()
+    - Called by trainer.py via the backend registry (model_name="pixart")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

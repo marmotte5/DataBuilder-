@@ -32,11 +32,11 @@ Key differences from SD3:
     - No pooled text embedding concatenation
     - Chroma architecture vs. SD3Transformer
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Chroma
-    - Utilise flow_training_step() standard avec normalisation des timesteps
-    - Appelé par trainer.py via le backend registry (model_name="chroma")
-    - Nécessite trust_remote_code=True (classe pipeline personnalisée)
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Chroma
+    - Uses flow_training_step() standard with timestep normalization
+    - Called by trainer.py via the backend registry (model_name="chroma")
+    - Requires trust_remote_code=True (custom pipeline class)
 """
 
 import logging

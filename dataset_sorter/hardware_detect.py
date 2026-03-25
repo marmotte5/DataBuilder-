@@ -1,31 +1,31 @@
 """
 Module: hardware_detect.py
 ========================
-Détection du matériel et rapport des capacités pour DataBuilder.
+Hardware detection and capability reporting for DataBuilder.
 
-Rôle dans DataBuilder:
-    - Fournit un dict de capacités unifié utilisé par trainer.py,
-      generate_worker.py et training_worker.py pour choisir device/dtype
-    - Évite que le reste du code n'ait à tester individuellement chaque
+Role in DataBuilder:
+    - Provides a unified capability dict used by trainer.py,
+      generate_worker.py and training_worker.py to select device/dtype
+    - Avoids the rest of the code having to individually test each
       backend (CUDA, ROCm, MPS, XPU, NPU, CPU)
-    - Émet des avertissements sur les workarounds nécessaires (ex: AMD ROCm
+    - Emits warnings about required workarounds (e.g. AMD ROCm
       consumer GPUs)
 
-Classes/Fonctions principales:
-    - detect_hardware()            : Fonction principale, retourne le dict de capacités
-    - get_device_from_hardware()   : Convertit le dict en torch.device
-    - apply_ipex_optimize()        : Applique ipex.optimize() sur Intel XPU
-    - log_hardware_summary()       : Log une ligne résumé + notes
+Main classes/functions:
+    - detect_hardware()            : Main function, returns the capability dict
+    - get_device_from_hardware()   : Converts the dict to a torch.device
+    - apply_ipex_optimize()        : Applies ipex.optimize() on Intel XPU
+    - log_hardware_summary()       : Logs a one-line summary + notes
 
-Ordre de détection (priorité décroissante):
+Detection order (decreasing priority):
   1. NVIDIA CUDA
-  2. AMD ROCm  (torch compilé avec HIP — reporté comme device "cuda" mais backend="rocm")
+  2. AMD ROCm  (torch built with HIP — reported as device "cuda" but backend="rocm")
   3. Apple Silicon MPS
   4. Intel GPU via XPU / IPEX
   5. NPU fallbacks (Huawei Ascend, Qualcomm via DirectML, Intel NPU via OpenVINO)
   6. CPU
 
-Dépendances: torch (lazy), intel_extension_for_pytorch (optionnel), torch_npu (optionnel)
+Dependencies: torch (lazy), intel_extension_for_pytorch (optional), torch_npu (optional)
 
 AMD ROCm consumer GPU workaround
 ---------------------------------
@@ -48,12 +48,12 @@ log = logging.getLogger(__name__)
 
 
 # ============================================================
-# SECTION: Détection principale du matériel
+# SECTION: Main hardware detection
 # ============================================================
 
-# @lru_cache(maxsize=1) : La détection est coûteuse (imports torch, test CUDA).
-# On mémoïse le résultat pour que les appels répétés depuis différents modules
-# (trainer.py, generate_worker.py, etc.) ne re-détectent pas à chaque fois.
+# @lru_cache(maxsize=1) : Detection is expensive (torch imports, CUDA test).
+# We memoize the result so repeated calls from different modules
+# (trainer.py, generate_worker.py, etc.) do not re-detect each time.
 @lru_cache(maxsize=1)
 def detect_hardware() -> dict[str, Any]:
     """Detect available accelerator hardware and return capability info.
@@ -107,7 +107,7 @@ def detect_hardware() -> dict[str, Any]:
 
 
 # ============================================================
-# SECTION: Constructeurs de dicts par backend
+# SECTION: Per-backend dict constructors
 # ============================================================
 
 
@@ -402,7 +402,7 @@ def _add_rocm_notes(torch, gpu_name: str, props, notes: list[str]) -> None:
 
 
 # ============================================================
-# SECTION: Utilitaires génériques
+# SECTION: Generic utilities
 # ============================================================
 
 

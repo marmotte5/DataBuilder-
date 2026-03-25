@@ -1,16 +1,16 @@
 """
 Module: training_config_io.py
 ========================
-Sérialisation/désérialisation de la configuration d'entraînement pour l'UI.
+Serialization/deserialization of training configuration for the UI.
 
-Rôle dans DataBuilder:
-    - Extrait de training_tab.py pour séparer la logique de sérialisation
-      de la mise en page (layout) et du contrôle de l'entraînement
-    - build_config() lit les valeurs de tous les widgets Qt et retourne un
-      TrainingConfig cohérent prêt à être passé à trainer.py
-    - apply_config() fait l'opération inverse : peuple tous les widgets depuis
-      un TrainingConfig (utilisé pour charger un preset ou restaurer un état)
-    - _save/_load gèrent la persistance JSON via dialogues fichier Qt
+Role in DataBuilder:
+    - Extracted from training_tab.py to separate serialization logic
+      from layout and training control
+    - build_config() reads values from all Qt widgets and returns a
+      consistent TrainingConfig ready to be passed to trainer.py
+    - apply_config() does the reverse: populates all widgets from
+      a TrainingConfig (used to load a preset or restore state)
+    - _save/_load handle JSON persistence via Qt file dialogs
 
 Classes/Fonctions principales:
     - TrainingConfigIOMixin.build_config()          : Widgets → TrainingConfig
@@ -18,12 +18,12 @@ Classes/Fonctions principales:
     - TrainingConfigIOMixin._save_training_config() : Sauvegarde en JSON
     - TrainingConfigIOMixin._load_training_config() : Chargement depuis JSON
 
-Note sur le chargement JSON:
-    Le chargement est tolérant aux valeurs nulles et aux types incompatibles.
-    Les valeurs None sont ignorées (garde le défaut du dataclass).
-    bool est vérifié avant int car bool est une sous-classe de int en Python.
+Note on JSON loading:
+    Loading is tolerant of null values and incompatible types.
+    None values are ignored (keeps the dataclass default).
+    bool is checked before int because bool is a subclass of int in Python.
 
-Dépendances: PyQt6, dataset_sorter.models.TrainingConfig, dataset_sorter.constants
+Dependencies: PyQt6, dataset_sorter.models.TrainingConfig, dataset_sorter.constants
 """
 
 import json
@@ -545,13 +545,13 @@ class TrainingConfigIOMixin:
                     if isinstance(current, list) and isinstance(value, list):
                         setattr(config, key, value)
                     elif isinstance(current, bool):
-                        # bool doit être vérifié AVANT int car bool est une
-                        # sous-classe de int en Python : isinstance(True, int) == True.
-                        # Sans ce check, type(current)(value) pour un champ bool
-                        # appelle int(value) au lieu de bool(value), donnant
-                        # des entiers 0/1 au lieu de True/False.
-                        # De plus, bool("false") = True (toute string non-vide
-                        # est truthy), donc on rejette les strings pour les bools.
+                        # bool must be checked BEFORE int because bool is a
+                        # subclass of int in Python: isinstance(True, int) == True.
+                        # Without this check, type(current)(value) for a bool field
+                        # calls int(value) instead of bool(value), giving
+                        # integers 0/1 instead of True/False.
+                        # Also, bool("false") = True (any non-empty string
+                        # is truthy), so we reject strings for bool fields.
                         if isinstance(value, bool):
                             setattr(config, key, value)
                         elif isinstance(value, (int, float)):

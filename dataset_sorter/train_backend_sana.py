@@ -43,11 +43,11 @@ Key differences from SDXL:
     - Flow matching loss (velocity target) instead of epsilon
     - Scales to 4K resolution efficiently
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Sana 600M et 1600M
-    - Définit vae_scale_factor=32 pour que flow_training_step calcule correctement image_hw
-    - Appelé par trainer.py via le backend registry (model_name="sana")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Sana 600M and 1600M
+    - Sets vae_scale_factor=32 so flow_training_step correctly computes image_hw
+    - Called by trainer.py via the backend registry (model_name="sana")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

@@ -37,11 +37,11 @@ Key differences from SD3/Flux:
     - Simpler architecture: straightforward MMDiT without dual-stream blocks
     - Shorter T5 token length (256 vs. 512)
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour AuraFlow v0.1–v0.3
-    - Utilise flow_training_step() standard (timesteps normalisés)
-    - Appelé par trainer.py via le backend registry (model_name="auraflow")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for AuraFlow v0.1–v0.3
+    - Uses flow_training_step() standard (normalized timesteps)
+    - Called by trainer.py via the backend registry (model_name="auraflow")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

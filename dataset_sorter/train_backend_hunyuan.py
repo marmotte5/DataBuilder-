@@ -38,11 +38,11 @@ Key differences from SDXL:
     - epsilon prediction retained despite DiT architecture (vs. flow matching)
     - image_meta_size conditioning instead of SDXL time_ids
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Hunyuan DiT v1.x
-    - encode_text_batch retourne également les masques d'attention pour get_added_cond()
-    - Appelé par trainer.py via le backend registry (model_name="hunyuan")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Hunyuan DiT v1.x
+    - encode_text_batch also returns attention masks for get_added_cond()
+    - Called by trainer.py via the backend registry (model_name="hunyuan")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

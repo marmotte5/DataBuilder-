@@ -15,11 +15,11 @@ Key properties:
     - No added_cond_kwargs — UNet only receives encoder_hidden_states
     - clip_skip supported: penultimate layer by default (skip=1)
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour SD 1.5
-    - Utilisé pour les modèles dérivés (Realistic Vision, DreamShaper, etc.)
-    - Appelé par trainer.py via le backend registry (model_name="sd15")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for SD 1.5
+    - Used for derivative models (Realistic Vision, DreamShaper, etc.)
+    - Called by trainer.py via the backend registry (model_name="sd15")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

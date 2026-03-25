@@ -32,11 +32,11 @@ Key differences from SDXL:
     - No CLIP skip logic (ChatGLM has a fundamentally different architecture)
     - Higher VRAM footprint from the large language model text encoder
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Kolors
-    - Adapte le format sequence-first de ChatGLM au format batch-first attendu par le UNet
-    - Appelé par trainer.py via le backend registry (model_name="kolors")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Kolors
+    - Adapts ChatGLM's sequence-first format to the batch-first format expected by the UNet
+    - Called by trainer.py via the backend registry (model_name="kolors")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

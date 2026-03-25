@@ -1,19 +1,19 @@
 """
 Module: app_settings.py
 ========================
-Paramètres globaux de l'application — préférences persistantes de l'utilisateur.
+Global application settings — persistent user preferences.
 
-Rôle dans DataBuilder:
-    - Point d'entrée unique pour la configuration persistante de l'application
-    - Sauvegarde les préférences (répertoires, projets récents, UI) entre les sessions
-    - Utilisé par ProjectManager, TrainingWorker et tous les onglets UI pour lire les
-      chemins de fichiers et les réglages par défaut
+Role in DataBuilder:
+    - Single entry point for persistent application configuration
+    - Saves preferences (directories, recent projects, UI) across sessions
+    - Used by ProjectManager, TrainingWorker and all UI tabs to read
+      file paths and default settings
 
 Classes/Fonctions principales:
     - AppSettings: Dataclass de configuration avec load()/save() automatique
       vers ~/.config/databuilder/settings.json (ou DATABUILDER_CONFIG_DIR)
 
-Dépendances: stdlib uniquement (json, pathlib, dataclasses, os)
+Dependencies: stdlib only (json, pathlib, dataclasses, os)
 
 Usage::
 
@@ -136,7 +136,7 @@ class AppSettings:
 
     def _to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        # Les Path ne sont pas sérialisables en JSON natif — on les convertit en str
+        # Path objects are not natively JSON-serializable — convert them to str
         for key in ("projects_root", "models_cache", "default_output_dir", "huggingface_cache"):
             if key in d and d[key] is not None:
                 d[key] = str(d[key])

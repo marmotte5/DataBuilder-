@@ -33,11 +33,11 @@ Key differences from SD3:
     - Dynamic timestep shifting: shift amount scales with image resolution
     - Only transformer is trainable; VAE and TE are always frozen
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Z-Image Base et Z-Image Turbo
-    - Supporte la quantification INT8/INT4 du TE Qwen3 pour économiser la VRAM
-    - Appelé par trainer.py via le backend registry (model_name="zimage")
-    - Supporte les checkpoints .safetensors (avec un loader manuel en dernier recours)
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Z-Image Base and Z-Image Turbo
+    - Supports INT8/INT4 quantization of the Qwen3 TE to save VRAM
+    - Called by trainer.py via the backend registry (model_name="zimage")
+    - Supports .safetensors checkpoints (with a manual loader as last resort)
 """
 
 import logging

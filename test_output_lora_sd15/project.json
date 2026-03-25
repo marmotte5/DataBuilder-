@@ -1,0 +1,8 @@
+{
+  "created": "2026-03-24T19:30:34.560292",
+  "version": 1,
+  "model_type": "sd15_lora",
+  "resolution": 256,
+  "optimizer": "Adafactor",
+  "lora_rank": 4
+}

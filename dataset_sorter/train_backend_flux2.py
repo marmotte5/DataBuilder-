@@ -27,11 +27,11 @@ Key differences from Flux 1:
     - Requires trust_remote_code=True (custom diffusers pipeline class)
     - No HF fallback repo: architectures are incompatible with Flux 1 repos
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Flux 2 (Dev et Klein)
-    - _HF_FALLBACK_REPO=None: évite de charger accidentellement des poids Flux 1
-    - Appelé par trainer.py via le backend registry (model_name="flux2")
-    - Supporte uniquement les répertoires diffusers (format single-file non standardisé)
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Flux 2 (Dev and Klein)
+    - _HF_FALLBACK_REPO=None: avoids accidentally loading Flux 1 weights
+    - Called by trainer.py via the backend registry (model_name="flux2")
+    - Supports only diffusers directories (single-file format not standardized)
 """
 
 import logging

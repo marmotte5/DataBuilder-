@@ -26,11 +26,11 @@ Key differences from SDXL:
     - No time_ids conditioning — uses pooled_projections from CLIP-L instead
     - Guidance embedding instead of traditional CFG at training time
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Flux.1-dev et Flux.1-schnell
-    - La perte flow matching est calculée dans train_backend_base.flow_training_step()
-    - Appelé par trainer.py via le backend registry (model_name="flux")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Flux.1-dev and Flux.1-schnell
+    - The flow matching loss is computed in train_backend_base.flow_training_step()
+    - Called by trainer.py via the backend registry (model_name="flux")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

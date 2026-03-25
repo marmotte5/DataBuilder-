@@ -1,7 +1,7 @@
 """
 Module: optimizer_factory.py
 ========================
-Usine d'optimiseurs et de schedulers LR pour le moteur d'entraînement.
+Optimizer and LR scheduler factory for the training engine.
 
 Extracted from trainer.py to keep the factory logic separate from the
 training loop.
@@ -208,6 +208,18 @@ def should_lock_field(optimizer_name: str, field: str) -> bool:
     return f"force_{field}" in defaults
 
 
+def get_locked_fields(optimizer_name: str) -> dict:
+    """Return fields that should be locked/readonly with their forced values for this optimizer."""
+    name = optimizer_name.lower()
+    if name in ("prodigy", "dadaptadam"):
+        return {"learning_rate": 1.0, "lr_scheduler": "constant"}
+    if name == "adamw_schedulefree":
+        return {"lr_scheduler": "constant"}
+    if name == "adafactor":
+        return {"learning_rate": None}
+    return {}
+
+
 class _CombinedOptimizer:
     """Wraps multiple optimizers so they behave like a single optimizer.
 
@@ -251,7 +263,7 @@ class _CombinedOptimizer:
 
 
 # ============================================================
-# SECTION: Factory d'optimiseurs
+# SECTION: Optimizer factory
 # ============================================================
 
 def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
@@ -355,7 +367,7 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     elif config.optimizer == "Muon":
         # Muon's Newton-Schulz orthogonalization only works on 2D+ matrices.
         # 1D params (biases, norms, embeddings) must use AdamW instead.
-        # Raison: NS orthogonalise la matrice de gradient via itération de Newton,
+        # Reason: NS orthogonalizes the gradient matrix via Newton iteration,
         # ce qui n'a pas de sens pour un vecteur 1D (pas de structure matricielle).
         from dataset_sorter.optimizers import Muon
         log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
@@ -372,10 +384,10 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                 muon_groups.append({"params": muon_p, "lr": muon_group_lr})
             if adamw_p:
                 adamw_groups.append({"params": adamw_p, "lr": group_lr})
-        # Muon recommande un LR plus élevé que AdamW (0.01-0.1 vs 1e-4).
-        # Si l'utilisateur passe un LR AdamW classique (ex: 1e-4), on le
-        # remplace par 0.02 (valeur par défaut Muon) pour éviter une
-        # convergence trop lente avec Muon.
+        # Muon recommends a higher LR than AdamW (0.01-0.1 vs 1e-4).
+        # If the user passes a classic AdamW LR (e.g. 1e-4), we
+        # replace with 0.02 (Muon default) to avoid a
+        # too-slow convergence with Muon.
         muon_lr = lr if lr > 0.001 else 0.02
         if muon_groups:
             # Create Muon for 2D+ params only
@@ -436,8 +448,8 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         )
     else:
         # Default: fused AdamW (fastest native option, PyTorch 2.0+)
-        # fused=True fusionne les opérations CUDA pour ~10-20% d'accélération.
-        # TypeError fallback: versions PyTorch < 2.0 ne supportent pas fused=True.
+        # fused=True fuses CUDA operations for ~10-20% speedup.
+        # TypeError fallback: PyTorch versions < 2.0 do not support fused=True.
         try:
             return torch.optim.AdamW(
                 param_groups, lr=lr, weight_decay=config.weight_decay,
@@ -517,7 +529,7 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
 
 
 # ============================================================
-# SECTION: Scheduler REX personnalisé
+# SECTION: Custom REX scheduler
 # ============================================================
 
 class _RexScheduler:

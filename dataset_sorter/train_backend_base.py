@@ -49,11 +49,11 @@ VAE dtype policy:
     - When training dtype is fp16, VAE automatically uses bf16 instead
     - VAE is always frozen (requires_grad=False) and on-device for latent encoding
 
-Rôle dans DataBuilder:
-    - Sert de contrat d'interface pour tous les backends (ABC avec méthodes abstraites)
-    - Centralise toutes les optimisations de vitesse pour éviter la duplication
-    - Instancié via backend_registry.py qui auto-découvre les sous-classes
-    - Appelé par trainer.py pour load_model(), encode_text_batch(), training_step()
+Role in DataBuilder:
+    - Serves as interface contract for all backends (ABC with abstract methods)
+    - Centralizes all speed optimizations to avoid duplication
+    - Instantiated via backend_registry.py which auto-discovers subclasses
+    - Called by trainer.py for load_model(), encode_text_batch(), training_step()
 """
 
 import gc

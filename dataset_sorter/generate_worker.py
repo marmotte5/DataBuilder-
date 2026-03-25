@@ -1,24 +1,24 @@
 """
 Module: generate_worker.py
 ========================
-QThread worker pour la génération d'images et le test de modèles.
+QThread worker for image generation and model testing.
 
-Rôle dans DataBuilder:
-    - Charge les pipelines diffusers en arrière-plan (sans bloquer l'UI Qt)
-    - Applique un ou plusieurs adaptateurs LoRA/DoRA avec pondération par
-      adapter via pipe.set_adapters()
-    - Génère des images avec contrôle complet : sampler, CFG scale, seed,
-      résolution, img2img et inpainting
-    - Supporte les 16+ architectures via PIPELINE_MAP et détection automatique
-      à partir du chemin fichier ou des clés safetensors
+Role in DataBuilder:
+    - Loads diffusers pipelines in the background (without blocking the Qt UI)
+    - Applies one or more LoRA/DoRA adapters with per-adapter weighting
+      via pipe.set_adapters()
+    - Generates images with full control: sampler, CFG scale, seed,
+      resolution, img2img and inpainting
+    - Supports 16+ architectures via PIPELINE_MAP and automatic detection
+      from file path or safetensors keys
 
 Classes/Fonctions principales:
     - GenerateWorker             : QThread principal, expose load_model() / generate()
-    - _detect_model_type()       : Détecte l'architecture depuis le chemin ou les clés
-    - _detect_model_type_from_keys() : Inspection des clés safetensors (header only)
+    - _detect_model_type()       : Detects architecture from path or safetensors keys
+    - _detect_model_type_from_keys() : Inspect safetensors keys (header only)
     - _load_scheduler()          : Remplace le scheduler diffusers dans le pipeline
 
-Dépendances: torch, diffusers, Pillow, PyQt6, safetensors
+Dependencies: torch, diffusers, Pillow, PyQt6, safetensors
 """
 
 import gc
@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 
 # ============================================================
-# SECTION: Constantes de configuration des modèles et schedulers
+# SECTION: Model and scheduler configuration constants
 # ============================================================
 
 # ── Scheduler mapping (name → diffusers class path) ────────────────────────
@@ -64,15 +64,15 @@ SCHEDULER_MAP = {
 # Flow-matching models must keep their native scheduler (FlowMatchEulerDiscrete
 # or similar) because standard schedulers lack the `mu`/`shift` parameters
 # required by the flow-matching timestep schedule.
-# Tenter de changer le scheduler sur ces modèles produira des artefacts ou
-# des erreurs car les paramètres de timestep sont incompatibles.
+# Attempting to change the scheduler on these models will produce artifacts or
+# errors because the timestep parameters are incompatible.
 FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
                         "auraflow", "hidream", "sana", "pixart"}
 
 # ── Model type → pipeline class ────────────────────────────────────────────
-# Associe chaque type de modèle à son module diffusers et sa classe pipeline.
-# Les modèles génériques (zimage, chroma, hidream) utilisent DiffusionPipeline
-# car diffusers n'a pas encore de classe dédiée pour ces architectures.
+# Maps each model type to its diffusers module and pipeline class.
+# Generic models (zimage, chroma, hidream) use DiffusionPipeline
+# because diffusers does not yet have a dedicated class for these architectures.
 PIPELINE_MAP = {
     "sd15":     ("diffusers", "StableDiffusionPipeline"),
     "sd2":      ("diffusers", "StableDiffusionPipeline"),
@@ -94,8 +94,8 @@ PIPELINE_MAP = {
 }
 
 # Models that need trust_remote_code
-# Ces modèles chargent du code Python personnalisé depuis le dépôt HuggingFace
-# (tokenizers, attention mechanisms, etc.) nécessitant la confiance explicite.
+# These models load custom Python code from HuggingFace repositories
+# (tokenizers, attention mechanisms, etc.) requiring explicit trust.
 TRUST_REMOTE_CODE_MODELS = {"zimage", "flux2", "chroma", "hidream"}
 
 # Models that use negative prompts (classifier-free guidance)
@@ -110,8 +110,8 @@ CLIP_SKIP_MODELS = {"sd15", "sd2", "sdxl", "pony", "cascade", "kolors", "hunyuan
 
 # DiT-based models compatible with TaylorSeer inference caching.
 # UNet models (sd15, sd2, sdxl, pony, kolors, cascade) are NOT supported.
-# TaylorSeer prédit les features intermédiaires via développement de Taylor,
-# offrant 3-5x d'accélération avec une perte de qualité négligeable.
+# TaylorSeer predicts intermediate features via Taylor expansion,
+# offering 3-5x speedup with negligible quality loss.
 TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
                      "hunyuan", "auraflow", "zimage", "chroma", "hidream"}
 
@@ -125,7 +125,7 @@ _PREFIX_DOMINANT_THRESHOLD = 0.5
 
 
 # ============================================================
-# SECTION: Détection automatique du type de modèle
+# SECTION: Automatic model type detection
 # ============================================================
 
 def _detect_model_type_from_keys(model_path: str) -> str:

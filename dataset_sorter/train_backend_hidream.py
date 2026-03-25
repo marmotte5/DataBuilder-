@@ -46,11 +46,11 @@ Key differences from SD3:
     - HiDreamImageTransformer2DModel vs. SD3Transformer2DModel
     - Requires trust_remote_code=True
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour HiDream-I1 (Full, Fast, Dev)
-    - Étend la classe de base avec un 4ème encodeur (Llama) et ses méthodes associées
-    - Appelé par trainer.py via le backend registry (model_name="hidream")
-    - Nécessite trust_remote_code=True (classes pipeline personnalisées HiDream-ai)
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for HiDream-I1 (Full, Fast, Dev)
+    - Extends the base class with a 4th encoder (Llama) and its associated methods
+    - Called by trainer.py via the backend registry (model_name="hidream")
+    - Requires trust_remote_code=True (custom HiDream-ai pipeline classes)
 """
 
 import logging

@@ -3,27 +3,27 @@ Module: lora_mixer.py
 ========================
 Fusion de plusieurs adaptateurs LoRA en un seul fichier merged.
 
-Rôle dans DataBuilder:
-    - Combine des LoRAs de styles/concepts différents avec pondération par
-      fichier (ex: style.safetensors:0.7 + concept.safetensors:0.3)
+Role in DataBuilder:
+    - Combines LoRAs of different styles/concepts with per-LoRA weighting
+      (e.g. style.safetensors:0.7 + concept.safetensors:0.3)
     - Supporte trois modes de fusion : weighted_average, add, svd_merge
-    - Détecte et normalise automatiquement les formats de clés divergents
-      (PEFT, diffusers, kohya) vers un format canonique interne avant fusion
+    - Automatically detects and normalizes divergent key formats
+      (PEFT, diffusers, kohya) to a canonical internal format before merging
     - Expose une API Python (LoRAMixer) et une interface CLI
 
 Classes/Fonctions principales:
     - LoRAMixer            : API principale — add_lora(), validate(), mix()
-    - _detect_format()     : Détecte le format des clés (kohya/peft/diffusers)
-    - _normalize_key()     : Convertit les clés vers un format canonique interne
+    - _detect_format()     : Detects the key format (kohya/peft/diffusers)
+    - _normalize_key()     : Converts keys to a canonical internal format
     - _kohya_path_to_dotted(): Reconvertit les chemins kohya underscore en points
 
 Modes de fusion:
-    - weighted_average : tensor = sum(t_i * w_i) / sum(w_i)  — recommandé
+    - weighted_average : tensor = sum(t_i * w_i) / sum(w_i)  — recommended
     - add              : tensor = sum(t_i * w_i)  — pour combinaison additive
-    - svd_merge        : reconstruit W_delta = up @ down, puis re-décompose
-                         par SVD tronquée — meilleure qualité, plus lent
+    - svd_merge        : reconstructs W_delta = up @ down, then re-decomposes
+                         via truncated SVD — better quality, slower
 
-Dépendances: torch, safetensors
+Dependencies: torch, safetensors
 
 Usage CLI:
     python -m dataset_sorter.lora_mixer lora1.safetensors:0.7 lora2.safetensors:0.3 -o mixed.safetensors
@@ -43,12 +43,12 @@ log = logging.getLogger(__name__)
 MergeMode = Literal["weighted_average", "add", "svd_merge"]
 
 # ============================================================
-# SECTION: Patterns regex pour les formats de clés LoRA
+# SECTION: Regex patterns for LoRA key formats
 # ============================================================
 
-# Les trois outils majeurs (kohya-ss, PEFT, diffusers) utilisent des
-# conventions de nommage incompatibles. On normalise vers un format
-# canonique <component>.<path>.<suffix> avant toute opération.
+# The three major tools (kohya-ss, PEFT, diffusers) use incompatible
+# naming conventions. We normalize to a
+# canonical <component>.<path>.<suffix> format before any operation.
 
 # kohya: lora_unet_down_blocks_0_attentions_0_proj_in.lora_down.weight
 _KOHYA_RE = re.compile(r"^lora_(unet|te|te1|te2)_(.+)\.(lora_down|lora_up|alpha)(?:\.weight)?$")
@@ -312,14 +312,14 @@ class LoRAMixer:
 
     def _merge_svd(self, common: list[str]) -> dict[str, torch.Tensor]:
         # SVD merge algorithm:
-        # 1. Pour chaque paire (lora_down, lora_up), reconstruire la matrice
-        #    de delta pleine : W_delta = up @ down * (alpha / rank)
-        # 2. Accumuler la somme pondérée des W_delta de tous les LoRAs
-        # 3. Re-décomposer le résultat avec SVD tronquée au rang max trouvé :
+        # 1. For each (lora_down, lora_up) pair, reconstruct the full delta
+        #    matrix: W_delta = up @ down * (alpha / rank)
+        # 2. Accumulate the weighted sum of W_delta across all LoRAs
+        # 3. Re-decompose the result with truncated SVD at the max rank found:
         #    U, S, Vh = svd(W_acc) ; new_up = U[:, :r] * sqrt(S[:r])
-        #    new_down = Vh[:r, :] * sqrt(S[:r])  (répartition équitable)
-        # Cette approche produit un LoRA "optimal" au sens des moindres carrés
-        # mais est plus coûteuse en mémoire (matrice pleine temporaire).
+        #    new_down = Vh[:r, :] * sqrt(S[:r])  (equal split)
+        # This approach produces a least-squares "optimal" LoRA
+        # but is more memory-intensive (temporary full matrix).
         """SVD-based merge: reconstruct full delta weights then re-decompose.
 
         For each lora_down/lora_up pair, reconstructs W_delta = up @ down,

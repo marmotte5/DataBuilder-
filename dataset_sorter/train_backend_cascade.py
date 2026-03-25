@@ -39,11 +39,11 @@ Key differences from SDXL:
     - Single CLIP-G encoder (no CLIP-L, no T5)
     - No added_cond_kwargs dict — conditioning args passed as named kwargs directly
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour Stable Cascade Stage C
-    - Nécessite le cache des latents Stage B (prepare_latents() n'est pas fonctionnel)
-    - Appelé par trainer.py via le backend registry (model_name="cascade")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for Stable Cascade Stage C
+    - Requires Stage B latent cache (prepare_latents() is not functional)
+    - Called by trainer.py via the backend registry (model_name="cascade")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

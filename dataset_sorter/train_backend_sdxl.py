@@ -22,11 +22,11 @@ Pony Diffusion:
     - Same SDXL architecture and this backend
     - Typically trained with clip_skip=2 (skip the last 2 CLIP layers)
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour SDXL et Pony Diffusion
-    - Cache les time_ids par bucket de résolution pour éviter les allocations GPU répétées
-    - Appelé par trainer.py via le backend registry (model_name="sdxl")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for SDXL and Pony Diffusion
+    - Caches time_ids per resolution bucket to avoid repeated GPU allocations
+    - Called by trainer.py via the backend registry (model_name="sdxl")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

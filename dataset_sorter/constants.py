@@ -349,6 +349,147 @@ MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"
 DEFAULT_LR_LORA: float = 1e-4           # LoRA / network default learning rate
 DEFAULT_LR_TEXT_ENCODER: float = 5e-5   # Text encoder default learning rate
 
+# ── Per-optimizer default settings ────────────────────────────────────
+# When the user selects an optimizer, these defaults should auto-fill in the UI.
+# Keys match the OPTIMIZERS dict above (case-sensitive).
+# learning_rate=None means the optimizer manages its own LR (no UI default).
+OPTIMIZER_DEFAULTS: dict[str, dict] = {
+    "AdamW": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "Standard optimizer for most training tasks",
+        "notes": "",
+    },
+    "AdamW8bit": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "Memory-efficient 8-bit AdamW (requires bitsandbytes)",
+        "notes": "Same quality as AdamW with ~30% less memory.",
+    },
+    "Adafactor": {
+        "learning_rate": None,  # Auto-managed by relative_step
+        "lr_scheduler": "constant",
+        "weight_decay": 0.0,
+        "warmup_steps": 0,
+        "description": "Memory-efficient optimizer with auto LR scaling",
+        "notes": "No need to tune learning rate. Good default choice.",
+    },
+    "Prodigy": {
+        "learning_rate": 1.0,  # Must always be 1.0 for Prodigy
+        "lr_scheduler": "constant",
+        "weight_decay": 0.01,
+        "warmup_steps": 0,
+        "description": "Adaptive optimizer that auto-tunes learning rate",
+        "notes": "LR must be 1.0 — Prodigy manages its own learning rate internally.",
+    },
+    "DAdaptAdam": {
+        "learning_rate": 1.0,  # Must always be 1.0 for D-Adaptation
+        "lr_scheduler": "constant",
+        "weight_decay": 0.0,
+        "warmup_steps": 0,
+        "description": "D-Adaptation variant of Adam, auto-tunes LR",
+        "notes": "LR must be 1.0 — D-Adaptation manages LR internally.",
+    },
+    "Lion": {
+        "learning_rate": 1e-5,  # 3-10x lower than AdamW
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.1,    # Higher than AdamW
+        "warmup_steps": 100,
+        "description": "Google Brain optimizer, simpler and faster than AdamW",
+        "notes": "Use 3-10x lower LR than AdamW. Higher weight decay recommended.",
+    },
+    "AdamWScheduleFree": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "constant",  # ScheduleFree manages its own schedule
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "Schedule-free AdamW — no LR scheduler needed",
+        "notes": "Built-in schedule. External LR schedulers are ignored.",
+    },
+    "CAME": {
+        "learning_rate": 2e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 50,
+        "description": "Confidence-guided Adaptive Memory Efficient optimizer",
+        "notes": "Good balance of memory efficiency and quality.",
+    },
+    "SGD": {
+        "learning_rate": 1e-3,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.0,
+        "warmup_steps": 0,
+        "description": "Classic SGD with momentum",
+        "notes": "Rarely used for diffusion training. Use AdamW instead.",
+    },
+    "SOAP": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "2nd-order optimizer, ~40% fewer iterations (ICLR 2025)",
+        "notes": "Higher memory usage. Best for large models with enough VRAM.",
+    },
+    "Muon": {
+        "learning_rate": 0.02,  # Muon requires much higher LR than AdamW
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.0,    # Muon uses decoupled WD internally
+        "warmup_steps": 0,
+        "description": "Orthogonal gradient updates, 2x efficiency",
+        "notes": "Use 100-200x higher LR than AdamW. Only for 2D+ params.",
+    },
+    "GaLoreAdamW": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "Low-rank gradient projection, full-rank quality",
+        "notes": "Full-finetune quality at LoRA memory cost.",
+    },
+    "GaLoreAdamW8bit": {
+        "learning_rate": 5e-5,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 100,
+        "description": "GaLore with 8-bit quantization for extra memory savings",
+        "notes": "GaLore + bitsandbytes 8-bit. Best memory/quality trade-off.",
+    },
+    "Marmotte": {
+        "learning_rate": 1e-4,
+        "lr_scheduler": "cosine",
+        "weight_decay": 0.01,
+        "warmup_steps": 50,
+        "description": "Ultra-low memory, per-channel adaptive (~10-20x less than Adam)",
+        "notes": "DataBuilder's custom optimizer. Recommended for VRAM-constrained setups.",
+    },
+}
+
+
+def get_optimizer_defaults(optimizer_name: str) -> dict:
+    """Return recommended default settings for the given optimizer.
+
+    Falls back to AdamW defaults if the optimizer name is not recognized.
+    Lookup is case-insensitive.
+    """
+    # Try exact match first, then case-insensitive search
+    if optimizer_name in OPTIMIZER_DEFAULTS:
+        return OPTIMIZER_DEFAULTS[optimizer_name]
+    lower = optimizer_name.lower()
+    for key in OPTIMIZER_DEFAULTS:
+        if key.lower() == lower:
+            return OPTIMIZER_DEFAULTS[key]
+    return OPTIMIZER_DEFAULTS["AdamW"]
+
+
+def get_available_optimizers() -> list[str]:
+    """Return list of available optimizer names (matching OPTIMIZERS keys)."""
+    return list(OPTIMIZER_DEFAULTS.keys())
+
+
 # ── Optimizer Defaults ────────────────────────────────────────────────
 OPTIMIZER_EPSILON: float = 1e-8         # Numerical stability epsilon (Adam-family optimizers)
 DEFAULT_EMA_DECAY: float = 0.9999       # EMA model weight averaging decay

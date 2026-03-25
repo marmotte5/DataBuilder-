@@ -32,12 +32,12 @@ Key differences from SDXL:
     - No time_ids conditioning — uses pooled_projections instead
     - Shifted sigmoid timestep schedule biases training toward mid-denoising steps
 
-Rôle dans DataBuilder:
-    - Gère le training loop LoRA/full finetune pour SD3-medium
-    - Sert de classe de base pour SD35Backend (même architecture, poids différents)
-    - La perte flow matching est calculée dans train_backend_base.flow_training_step()
-    - Appelé par trainer.py via le backend registry (model_name="sd3")
-    - Supporte les checkpoints .safetensors et les répertoires diffusers
+Role in DataBuilder:
+    - Handles the LoRA/full finetune training loop for SD3-medium
+    - Serves as base class for SD35Backend (same architecture, different weights)
+    - The flow matching loss is computed in train_backend_base.flow_training_step()
+    - Called by trainer.py via the backend registry (model_name="sd3")
+    - Supports .safetensors checkpoints and diffusers directories
 """
 
 import logging

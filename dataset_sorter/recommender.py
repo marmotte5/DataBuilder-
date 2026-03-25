@@ -18,6 +18,7 @@ from dataset_sorter.constants import (
     MODEL_PREDICTION_TYPE,
     MODEL_RESOLUTIONS,
     MODEL_TIMESTEP_SAMPLING,
+    get_optimizer_defaults,
 )
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.recommender_profiles import (
@@ -94,9 +95,19 @@ def _apply_optimizer_settings(
     model_type: str,
     vram_gb: int,
 ):
-    """Applies optimizer-specific parameters."""
+    """Applies optimizer-specific parameters.
+
+    Seeds config from OPTIMIZER_DEFAULTS first, then applies model/hardware
+    overrides on top so the recommender can still fine-tune values.
+    """
     config.optimizer = optimizer
-    config.weight_decay = 0.01
+
+    # Seed from per-optimizer defaults (lr_scheduler, weight_decay, warmup_steps).
+    # learning_rate is computed by the caller based on dataset/model; skip it here.
+    defaults = get_optimizer_defaults(optimizer)
+    config.weight_decay = defaults.get("weight_decay", 0.01)
+    if defaults.get("lr_scheduler"):
+        config.lr_scheduler = defaults["lr_scheduler"]
 
     if optimizer == "Adafactor":
         config.adafactor_relative_step = False
