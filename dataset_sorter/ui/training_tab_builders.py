@@ -22,6 +22,7 @@ from dataset_sorter.training_presets import (
     CONTROLNET_TYPES, DPO_LOSS_TYPES,
     CHECKPOINT_GRANULARITY, CUSTOM_SCHEDULES,
 )
+from dataset_sorter.optimizer_factory import get_optimizer_defaults, get_locked_fields
 
 
 class TrainingTabBuildersMixin:
@@ -788,7 +789,8 @@ class TrainingTabBuildersMixin:
         )
         layout.addWidget(self.optimizer_advice_label)
 
-        # Wire signals for dynamic optimizer advice
+        # Wire signals: apply defaults + advice when optimizer changes
+        self.train_optimizer_combo.currentIndexChanged.connect(self._apply_optimizer_defaults)
         self.train_optimizer_combo.currentIndexChanged.connect(self._update_optimizer_advice)
         self.train_model_combo.currentIndexChanged.connect(self._update_optimizer_advice)
         self.train_vram_combo.currentIndexChanged.connect(self._update_optimizer_advice)
@@ -797,8 +799,59 @@ class TrainingTabBuildersMixin:
 
         layout.addStretch()
         scroll.setWidget(w)
+        self._apply_optimizer_defaults()
         self._update_optimizer_advice()
         return scroll
+
+    def _apply_optimizer_defaults(self):
+        """Auto-fill LR, scheduler, weight_decay, warmup from optimizer defaults.
+
+        Called when the user changes the optimizer combo. Applies recommended
+        defaults from get_optimizer_defaults() and locks/unlocks fields based
+        on get_locked_fields() (e.g. Prodigy forces LR=1.0 and scheduler=constant).
+        """
+        optimizer_key = self.train_optimizer_combo.currentData() or ""
+        defaults = get_optimizer_defaults(optimizer_key)
+        locked = get_locked_fields(optimizer_key)
+
+        # Apply defaults to editable fields (only when not locked to a fixed value)
+        lr = defaults.get("learning_rate")
+        if lr is not None and "learning_rate" not in locked:
+            self.lr_spin.setValue(lr)
+
+        wd = defaults.get("weight_decay")
+        if wd is not None and "weight_decay" not in locked:
+            self.wd_spin.setValue(wd)
+
+        sched = defaults.get("lr_scheduler")
+        if sched and "lr_scheduler" not in locked:
+            idx = self.scheduler_combo.findData(sched)
+            if idx >= 0:
+                self.scheduler_combo.setCurrentIndex(idx)
+
+        # Apply locked field values and grey out the widgets
+        # -- Learning Rate --
+        lr_locked = "learning_rate" in locked
+        forced_lr = locked.get("learning_rate")
+        if lr_locked and forced_lr is not None:
+            self.lr_spin.setValue(forced_lr)
+        self.lr_spin.setEnabled(not lr_locked)
+
+        # -- Scheduler --
+        sched_locked = "lr_scheduler" in locked
+        forced_sched = locked.get("lr_scheduler")
+        if sched_locked and forced_sched:
+            idx = self.scheduler_combo.findData(forced_sched)
+            if idx >= 0:
+                self.scheduler_combo.setCurrentIndex(idx)
+        self.scheduler_combo.setEnabled(not sched_locked)
+
+        # -- Weight Decay --
+        wd_locked = "weight_decay" in locked
+        forced_wd = locked.get("weight_decay")
+        if wd_locked and forced_wd is not None:
+            self.wd_spin.setValue(forced_wd)
+        self.wd_spin.setEnabled(not wd_locked)
 
     def _build_dataset_tab(self):
         """Build the Dataset tab with VAE latent caching, text encoder caching,
