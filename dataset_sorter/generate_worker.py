@@ -46,9 +46,9 @@ log = logging.getLogger(__name__)
 # ============================================================
 
 # ── Scheduler mapping (name → diffusers class path) ────────────────────────
-# Associe les noms conviviaux aux noms de classes diffusers correspondants.
-# Les noms Karras (ex: dpm++_2m_karras) appliquent use_karras_sigmas=True
-# en plus du scheduler de base.
+# Maps friendly names to the corresponding diffusers class names.
+# Karras names (e.g. dpm++_2m_karras) also apply use_karras_sigmas=True
+# on top of the base scheduler.
 SCHEDULER_MAP = {
     "euler_a":     "EulerAncestralDiscreteScheduler",
     "euler":       "EulerDiscreteScheduler",
@@ -116,7 +116,7 @@ TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
                      "hunyuan", "auraflow", "zimage", "chroma", "hidream"}
 
 # Maximum safetensors header size (bytes) for sanity checks during inspection.
-# Les headers > 50 MB sont pathologiques (checkpoint corrompu ou non-safetensors).
+# Headers > 50 MB are pathological (corrupted checkpoint or non-safetensors file).
 _MAX_SAFETENSORS_HEADER_SIZE = 50_000_000
 
 # Threshold: if more than this fraction of state dict keys share a prefix,
@@ -253,7 +253,7 @@ def _detect_model_type(model_path: str) -> str:
 
 
 # ============================================================
-# SECTION: Configuration du scheduler
+# SECTION: Scheduler configuration
 # ============================================================
 
 def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):

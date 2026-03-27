@@ -75,8 +75,9 @@ class TrainingTabBuildersMixin:
         g1.setLayout(g1l)
         layout.addWidget(g1)
 
-        # Network
+        # Network (hidden when Full Finetune is selected)
         g2 = self._group("Network (LoRA)")
+        self.network_group = g2
         g2l = QGridLayout()
         g2l.addWidget(QLabel("Network Type"), 0, 0)
         self.train_network_combo = QComboBox()
@@ -132,9 +133,10 @@ class TrainingTabBuildersMixin:
         )
         layout.addWidget(self.network_advice_label)
 
-        # Wire signals for dynamic network advice
+        # Wire signals for dynamic network advice and LoRA visibility
         self.train_network_combo.currentIndexChanged.connect(self._update_network_advice)
         self.train_model_combo.currentIndexChanged.connect(self._update_network_advice)
+        self.train_model_combo.currentIndexChanged.connect(self._update_lora_visibility)
         self.rank_spin.valueChanged.connect(self._update_network_advice)
         self.dora_check.stateChanged.connect(self._update_network_advice)
 
@@ -227,6 +229,7 @@ class TrainingTabBuildersMixin:
         scroll.setWidget(w)
         self._update_ema_advice()
         self._update_network_advice()
+        self._update_lora_visibility()
         return scroll
 
     def _update_ema_advice(self):
@@ -478,6 +481,126 @@ class TrainingTabBuildersMixin:
             )
 
         self.network_advice_label.setText(" ".join(parts))
+
+    def _update_lora_visibility(self):
+        """Show/hide the Network (LoRA) group and advice label based on training type."""
+        idx = self.train_model_combo.currentIndex()
+        model_key = MODEL_TYPE_KEYS[idx] if 0 <= idx < len(MODEL_TYPE_KEYS) else "sdxl_lora"
+        is_lora = model_key.endswith("_lora")
+        self.network_group.setVisible(is_lora)
+        self.network_advice_label.setVisible(is_lora)
+
+    def _update_precision_advice(self):
+        """Update precision advice based on detected hardware and selected options."""
+        from dataset_sorter.hardware_detect import detect_hardware
+
+        hw = detect_hardware()
+        device = hw["device"]
+        prec = self.precision_combo.currentData() or "no"
+        tf32 = self.tf32_check.isChecked()
+        fp8_training = self.fp8_training_check.isChecked()
+
+        parts = []
+
+        # ── MPS-specific warnings ──
+        if device == "mps":
+            if prec == "fp16":
+                parts.append(
+                    "WARNING: fp16 is not supported on Apple Silicon (MPS). "
+                    "The trainer will automatically use bf16 instead. "
+                    "Select BF16 to remove this warning."
+                )
+            elif prec == "fp8":
+                parts.append(
+                    "WARNING: fp8 is not supported on Apple Silicon. "
+                    "The trainer will fall back to bf16."
+                )
+            if tf32:
+                parts.append(
+                    "TF32 has no effect on Apple Silicon — it is an NVIDIA Ampere+ feature."
+                )
+            if fp8_training:
+                parts.append(
+                    "FP8 Training requires NVIDIA Ada Lovelace (RTX 40xx) or Hopper (H100). "
+                    "This option will be ignored on Apple Silicon."
+                )
+
+        # ── CPU-only ──
+        elif device == "cpu":
+            if prec != "no":
+                parts.append(
+                    f"WARNING: {prec.upper()} mixed precision is not available on CPU. "
+                    "Full fp32 will be used."
+                )
+            if tf32:
+                parts.append("TF32 has no effect on CPU.")
+            if fp8_training:
+                parts.append("FP8 Training requires a CUDA GPU.")
+
+        # ── CUDA ──
+        elif device == "cuda":
+            if prec == "bf16" and not hw["supports_bf16"]:
+                parts.append(
+                    "WARNING: bf16 is not supported on this GPU. "
+                    "Use fp16 instead, or upgrade to NVIDIA Ampere+ (RTX 3000+)."
+                )
+            if prec == "fp8":
+                try:
+                    import torch
+                    major, minor = torch.cuda.get_device_capability()
+                    if major * 10 + minor < 89:
+                        parts.append(
+                            f"WARNING: fp8 requires Ada Lovelace (SM 8.9+), but this GPU is "
+                            f"SM {major}.{minor}. The trainer will fall back to bf16."
+                        )
+                except Exception:
+                    pass
+            if tf32:
+                try:
+                    import torch
+                    cc_major = torch.cuda.get_device_properties(0).major
+                    if cc_major < 8:
+                        parts.append(
+                            f"TF32 requires Ampere+ (SM 8.0+), but this GPU is SM {cc_major}.x. "
+                            "The option will be ignored."
+                        )
+                    else:
+                        parts.append(
+                            "TF32 enabled: fp32 matmul ops will run ~3× faster with "
+                            "negligible quality impact."
+                        )
+                except Exception:
+                    pass
+            if fp8_training and prec != "fp8":
+                parts.append(
+                    "FP8 Training checkbox is enabled but Mixed Precision is not set to FP8. "
+                    "Set Mixed Precision to FP8 for full FP8 forward/backward acceleration."
+                )
+
+        # ── XPU ──
+        elif device == "xpu":
+            if prec == "fp16":
+                parts.append(
+                    "Intel XPU: fp16 is available but bf16 is preferred for stability."
+                )
+            if prec == "fp8":
+                parts.append(
+                    "WARNING: fp8 is not supported on Intel XPU. "
+                    "The trainer will fall back to bf16."
+                )
+
+        # General good-state advice when nothing is wrong
+        if not parts:
+            if prec == "bf16":
+                parts.append("BF16 — recommended default for most training.")
+            elif prec == "fp16":
+                parts.append("FP16 — good for older NVIDIA GPUs without bf16 support.")
+            elif prec == "fp8":
+                parts.append("FP8 — 2× throughput on RTX 40xx / H100. Requires torchao or transformer-engine.")
+            elif prec == "no":
+                parts.append("FP32 — full precision. 2× more VRAM than bf16/fp16.")
+
+        self.precision_advice_label.setText(" ".join(parts))
 
     def _update_optimizer_advice(self):
         """Update optimizer advice based on current optimizer, model type, scheduler, and LR."""
@@ -1351,6 +1474,20 @@ class TrainingTabBuildersMixin:
         )
         g3l.addWidget(self.tf32_check)
 
+        # Dynamic precision advice
+        self.precision_advice_label = QLabel("")
+        self.precision_advice_label.setWordWrap(True)
+        self.precision_advice_label.setStyleSheet(
+            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
+            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+        )
+        g3l.addWidget(self.precision_advice_label)
+
+        # Wire precision advice signals
+        self.precision_combo.currentIndexChanged.connect(self._update_precision_advice)
+        self.tf32_check.stateChanged.connect(self._update_precision_advice)
+        self.fp8_training_check.stateChanged.connect(self._update_precision_advice)
+
         g3.setLayout(g3l)
         layout.addWidget(g3)
 
@@ -1392,6 +1529,7 @@ class TrainingTabBuildersMixin:
 
         layout.addStretch()
         scroll.setWidget(w)
+        self._update_precision_advice()
         return scroll
 
     def _build_sampling_tab(self):

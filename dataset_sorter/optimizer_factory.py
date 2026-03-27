@@ -368,7 +368,7 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # Muon's Newton-Schulz orthogonalization only works on 2D+ matrices.
         # 1D params (biases, norms, embeddings) must use AdamW instead.
         # Reason: NS orthogonalizes the gradient matrix via Newton iteration,
-        # ce qui n'a pas de sens pour un vecteur 1D (pas de structure matricielle).
+        # which makes no sense for a 1D vector (no matrix structure).
         from dataset_sorter.optimizers import Muon
         log.info("Muon optimizer: splitting params into 2D+ (Muon) and 1D/embed (AdamW)")
         # Split each param group into 2D+ (Muon) and 1D (AdamW) while
@@ -462,7 +462,7 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
 
 
 # ============================================================
-# SECTION: Factory de schedulers LR
+# SECTION: LR scheduler factory
 # ============================================================
 
 def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):

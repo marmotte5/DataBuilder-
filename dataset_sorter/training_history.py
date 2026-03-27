@@ -298,8 +298,8 @@ class TrainingHistory:
             log.info("No runs to export (model_type=%r)", model_type)
             return 0
 
-        # Remplace loss_curve_json (blob illisible) par loss_curve_len (nombre de points)
-        # pour produire un CSV exploitable directement dans un tableur.
+        # Replace loss_curve_json (unreadable blob) with loss_curve_len (point count)
+        # to produce a CSV that can be opened directly in a spreadsheet.
         columns = [desc[0] for desc in self._conn.execute(
             "SELECT * FROM training_runs LIMIT 0"
         ).description]

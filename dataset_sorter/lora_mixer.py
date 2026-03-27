@@ -497,7 +497,7 @@ def _pad_to_shape(tensor: torch.Tensor, target: torch.Size) -> torch.Tensor:
 
 
 # ============================================================
-# SECTION: Interface ligne de commande (CLI)
+# SECTION: Command-line interface (CLI)
 # ============================================================
 
 

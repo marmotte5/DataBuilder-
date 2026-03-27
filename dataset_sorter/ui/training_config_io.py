@@ -41,7 +41,7 @@ class TrainingConfigIOMixin:
     """Mixin providing build_config / apply_config / save / load for TrainingTab."""
 
     # ============================================================
-    # SECTION: Construction du config depuis les widgets
+    # SECTION: Build config from widgets
     # ============================================================
 
     def build_config(self) -> TrainingConfig:
@@ -245,7 +245,7 @@ class TrainingConfigIOMixin:
         return config
 
     # ============================================================
-    # SECTION: Application du config sur les widgets
+    # SECTION: Apply config to widgets
     # ============================================================
 
     def apply_config(self, config: TrainingConfig):

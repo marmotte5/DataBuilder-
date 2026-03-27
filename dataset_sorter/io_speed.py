@@ -98,7 +98,7 @@ def _get_fast_decoder():
                 # .copy() is mandatory: some PIL/numpy versions crash on
                 # negative-stride views (negative-stride arrays are non-contiguous).
                 return Image.fromarray(bgr[:, :, ::-1].copy())
-            # Pour les formats non-JPEG (PNG, WebP, etc.) : fallback PIL
+            # For non-JPEG formats (PNG, WebP, etc.): fallback to PIL
             with Image.open(path) as img:
                 return img.convert("RGB")
 
@@ -273,7 +273,7 @@ class MmapLatentCache:
         if self._total_size == 0:
             return
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        # seek() + write() d'un octet en fin de fichier est la technique standard
+        # seek() + write() of one byte at end-of-file is the standard technique
         # to pre-allocate a sparse file without writing all zeros (O(1) on ext4/NTFS)
         with open(self.cache_path, 'wb') as f:
             f.seek(self._total_size - 1)
@@ -565,11 +565,11 @@ def assign_buckets_vectorized(
     if not dimensions or not buckets:
         return [(1024, 1024)] * len(dimensions)
 
-    # Ratios d'aspect des images : tableau de forme (N,)
+    # Image aspect ratios: array of shape (N,)
     dims = np.array(dimensions, dtype=np.float32)
     img_aspects = dims[:, 0] / np.maximum(dims[:, 1], 1.0)
 
-    # Ratios d'aspect des buckets : tableau de forme (B,)
+    # Bucket aspect ratios: array of shape (B,)
     bucket_arr = np.array(buckets, dtype=np.float32)
     bucket_aspects = bucket_arr[:, 0] / np.maximum(bucket_arr[:, 1], 1.0)
 
@@ -577,7 +577,7 @@ def assign_buckets_vectorized(
     # This is the vectorized equivalent of a double loop for i in images: for j in buckets:
     diffs = np.abs(img_aspects[:, None] - bucket_aspects[None, :])
 
-    # argmin sur l'axe buckets → index du bucket le plus proche pour chaque image
+    # argmin along bucket axis → index of closest bucket for each image
     best_indices = diffs.argmin(axis=1)
 
     return [buckets[i] for i in best_indices]
@@ -1014,15 +1014,15 @@ def compute_optimal_workers(
     """
     import sys
     if sys.platform == "darwin":
-        # Sur macOS, MPS (Metal Performance Shaders) a des limitations avec le
-        # multiprocessing de PyTorch DataLoader (fork + CUDA context = crash).
+        # On macOS, MPS (Metal Performance Shaders) has limitations with
+        # PyTorch DataLoader multiprocessing (fork + CUDA context = crash).
         # ROCm and XPU are only available on Linux/Windows, darwin → 0 for MPS.
         try:
             from dataset_sorter.hardware_detect import detect_hardware
             _hw = detect_hardware()
             if _hw["backend"] == "mps":
                 return 0
-            # Fallback CPU sur darwin : les workers sont acceptables
+            # CPU fallback on darwin: workers are acceptable
         except Exception:
             return 0  # Safe default if hardware detection fails
         else:
@@ -1034,7 +1034,7 @@ def compute_optimal_workers(
             # more accurate than cpu_count() in Docker containers with CPU pinning.
             num_cpu_cores = len(os.sched_getaffinity(0))
         except AttributeError:
-            # sched_getaffinity n'existe pas sur Windows/macOS
+            # sched_getaffinity does not exist on Windows/macOS
             num_cpu_cores = os.cpu_count() or 4
 
     if latents_cached and te_cached:
