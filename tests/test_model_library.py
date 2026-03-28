@@ -387,3 +387,265 @@ class TestSearch:
         entries = populated_lib.all_entries()
         names = [e.filename for e in entries]
         assert names == sorted(names, key=str.lower)
+
+
+# ── Extended architecture detection ──────────────────────────────────────────
+
+class TestExtendedArchitectureDetection:
+    """Tests for all supported architectures and metadata-first detection."""
+
+    @pytest.fixture
+    def lib(self, tmp_path):
+        return ModelLibrary(str(tmp_path))
+
+    # ── Metadata-first detection ──────────────────────────────────────────────
+
+    def test_metadata_modelspec_sdxl(self, lib):
+        meta = {"modelspec.architecture": "stable-diffusion-xl-v1-base"}
+        assert lib._detect_architecture([], meta) == "sdxl"
+
+    def test_metadata_modelspec_flux(self, lib):
+        meta = {"modelspec.architecture": "flux-1-dev"}
+        assert lib._detect_architecture([], meta) == "flux"
+
+    def test_metadata_ss_base_sd3(self, lib):
+        meta = {"ss_base_model_version": "sd3_medium"}
+        assert lib._detect_architecture([], meta) == "sd3"
+
+    def test_metadata_ss_base_pony(self, lib):
+        meta = {"ss_base_model_version": "pony_v6"}
+        assert lib._detect_architecture([], meta) == "pony"
+
+    def test_metadata_sdxl_turbo(self, lib):
+        meta = {"ss_base_model_version": "sdxl_turbo"}
+        assert lib._detect_architecture([], meta) == "sdxl_turbo"
+
+    def test_metadata_playground(self, lib):
+        meta = {"modelspec.architecture": "playground-v2.5-1024px-aesthetic"}
+        assert lib._detect_architecture([], meta) == "playground"
+
+    def test_metadata_lcm(self, lib):
+        meta = {"ss_base_model_version": "lcm_sdxl"}
+        assert lib._detect_architecture([], meta) == "lcm"
+
+    def test_metadata_lightning(self, lib):
+        meta = {"ss_base_model_version": "sdxl_lightning_4step"}
+        assert lib._detect_architecture([], meta) == "lightning"
+
+    def test_metadata_animatediff(self, lib):
+        meta = {"modelspec.architecture": "animatediff-sdxl-1.0"}
+        assert lib._detect_architecture([], meta) == "animatediff"
+
+    def test_metadata_cascade(self, lib):
+        meta = {"ss_base_model_version": "stable_cascade"}
+        assert lib._detect_architecture([], meta) == "cascade"
+
+    def test_metadata_overrides_keys(self, lib):
+        # Even if keys look like SD1.5, metadata saying SDXL wins
+        meta = {"ss_base_model_version": "sdxl_base_1.0"}
+        keys = ["model.diffusion_model.x"]  # looks like SD1.5/SD2 keys
+        assert lib._detect_architecture(keys, meta) == "sdxl"
+
+    # ── Key-pattern detection for additional architectures ────────────────────
+
+    def test_animatediff_keys(self, lib):
+        keys = ["unet.mid_block.motion_modules.0.weight", "unet.down_blocks.0.weight"]
+        assert lib._detect_architecture(keys, {}) == "animatediff"
+
+    def test_sd35_joint_transformer_blocks(self, lib):
+        keys = ["joint_transformer_blocks.0.attn.weight", "final_layer.weight"]
+        assert lib._detect_architecture(keys, {}) == "sd35"
+
+    def test_kolors_chatglm_keys(self, lib):
+        keys = ["text_encoder.transformer.word_embeddings.weight",
+                "text_encoder.transformer.layers.0.weight"]
+        assert lib._detect_architecture(keys, {}) == "kolors"
+
+    def test_pixart_adaln_keys(self, lib):
+        keys = ["caption_projection.linear_1.weight", "transformer.adaln_single.weight"]
+        assert lib._detect_architecture(keys, {}) == "pixart"
+
+    def test_lora_flux_from_double_single_keys(self, lib):
+        keys = ["double_blocks.0.attn.lora_A.weight", "single_blocks.0.linear.lora_A.weight"]
+        assert lib._detect_architecture(keys, {}) == "flux"
+
+    def test_lora_sdxl_te2_keys(self, lib):
+        keys = ["lora_te2_text_model.lora_down.weight", "lora_unet_down_blocks.lora_up.weight"]
+        assert lib._detect_architecture(keys, {}) == "sdxl"
+
+    # ── MODEL_ARCHITECTURES constant completeness ─────────────────────────────
+
+    def test_model_architectures_constant_present(self):
+        from dataset_sorter.constants import MODEL_ARCHITECTURES
+        for key in ("sd15", "sdxl", "flux", "sd3", "zimage", "pony", "cascade",
+                    "pixart", "hidream", "kolors", "animatediff", "lcm", "lightning",
+                    "hunyuan", "chroma", "auraflow", "sana", "deepfloyd", "playground",
+                    "wuerstchen", "hyper_sd", "sdxl_turbo", "flux2", "sd35", "sd2"):
+            assert key in MODEL_ARCHITECTURES, f"Missing architecture key: {key}"
+
+    def test_model_architectures_labels_nonempty(self):
+        from dataset_sorter.constants import MODEL_ARCHITECTURES
+        for key, label in MODEL_ARCHITECTURES.items():
+            assert label, f"Empty label for architecture key: {key}"
+
+    # ── Label generation for new architectures ────────────────────────────────
+
+    def test_label_pony(self, lib):
+        entry = ModelEntry("/x", "x.safetensors", 6000.0, "2026-01-01T00:00:00Z",
+                           model_type="checkpoint", architecture="pony")
+        assert "Pony" in lib._build_label(entry)
+
+    def test_label_lcm(self, lib):
+        entry = ModelEntry("/x", "x.safetensors", 300.0, "2026-01-01T00:00:00Z",
+                           model_type="lora", architecture="lcm", network_type="lora", rank=4)
+        label = lib._build_label(entry)
+        assert "LCM" in label
+        assert "rank 4" in label
+
+    def test_label_animatediff_checkpoint(self, lib):
+        entry = ModelEntry("/x", "x.safetensors", 1000.0, "2026-01-01T00:00:00Z",
+                           model_type="checkpoint", architecture="animatediff")
+        assert "AnimateDiff" in lib._build_label(entry)
+
+    def test_label_cascade(self, lib):
+        entry = ModelEntry("/x", "x.safetensors", 5000.0, "2026-01-01T00:00:00Z",
+                           model_type="checkpoint", architecture="cascade")
+        assert "Cascade" in lib._build_label(entry)
+
+
+# ── Thumbnail support ─────────────────────────────────────────────────────────
+
+class TestThumbnailSupport:
+    """Tests for thumbnail management methods."""
+
+    @pytest.fixture
+    def lib(self, tmp_path):
+        return ModelLibrary(str(tmp_path))
+
+    def test_thumbnail_dir_property(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        assert lib._thumb_dir == tmp_path / ".thumbnails"
+
+    def test_thumbnail_filename_stable(self, lib):
+        name1 = lib._thumbnail_filename("/models/mymodel.safetensors")
+        name2 = lib._thumbnail_filename("/models/mymodel.safetensors")
+        assert name1 == name2
+        assert name1.endswith(".jpg")
+
+    def test_thumbnail_filename_different_paths(self, lib):
+        name1 = lib._thumbnail_filename("/a/model.safetensors")
+        name2 = lib._thumbnail_filename("/b/model.safetensors")
+        assert name1 != name2
+
+    def test_get_thumbnail_missing_entry(self, lib):
+        assert lib.get_thumbnail("/nonexistent/path.safetensors") is None
+
+    def test_get_thumbnail_no_file(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        entry = ModelEntry(
+            path=str(tmp_path / "model.safetensors"),
+            filename="model.safetensors",
+            file_size_mb=100.0,
+            date_modified="2026-01-01T00:00:00Z",
+            thumbnail_path="/nonexistent/thumb.jpg",  # file does not actually exist
+        )
+        lib.entries[entry.path] = entry
+        assert lib.get_thumbnail(entry.path) is None  # file missing → returns None
+
+    def test_get_thumbnail_existing_file(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        # Create a dummy thumbnail file
+        thumb = tmp_path / "thumb.jpg"
+        thumb.write_bytes(b"\xff\xd8\xff")  # minimal JPEG-like header
+        entry = ModelEntry(
+            path=str(tmp_path / "model.safetensors"),
+            filename="model.safetensors",
+            file_size_mb=100.0,
+            date_modified="2026-01-01T00:00:00Z",
+            thumbnail_path=str(thumb),
+        )
+        lib.entries[entry.path] = entry
+        assert lib.get_thumbnail(entry.path) == str(thumb)
+
+    def test_set_thumbnail_no_pillow(self, tmp_path, monkeypatch):
+        """set_thumbnail returns None gracefully when Pillow is missing."""
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "PIL" or name.startswith("PIL."):
+                raise ImportError("PIL not available")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        lib = ModelLibrary(str(tmp_path))
+        result = lib.set_thumbnail("/some/model.safetensors", "/some/image.png")
+        assert result is None
+
+    def test_find_preview_image_present(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        model = tmp_path / "mymodel.safetensors"
+        model.write_bytes(b"")
+        preview = tmp_path / "mymodel.preview.png"
+        preview.write_bytes(b"\x89PNG")  # PNG magic bytes
+
+        found = lib._find_preview_image(model)
+        assert found == str(preview)
+
+    def test_find_preview_image_jpg(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        model = tmp_path / "mymodel.safetensors"
+        model.write_bytes(b"")
+        preview = tmp_path / "mymodel.preview.jpg"
+        preview.write_bytes(b"\xff\xd8\xff")
+
+        found = lib._find_preview_image(model)
+        assert found == str(preview)
+
+    def test_find_preview_image_absent(self, tmp_path):
+        lib = ModelLibrary(str(tmp_path))
+        model = tmp_path / "mymodel.safetensors"
+        model.write_bytes(b"")
+        assert lib._find_preview_image(model) is None
+
+    def test_scan_auto_imports_preview_image(self, tmp_path):
+        """When scanning, adjacent .preview.png files are recorded as thumbnails."""
+        # Write a minimal safetensors file
+        header = {"model.diffusion_model.x": {"dtype": "F32", "shape": [1, 1], "data_offsets": [0, 4]}}
+        import struct
+        hdr_bytes = json.dumps(header).encode()
+        model = tmp_path / "mymodel.safetensors"
+        model.write_bytes(struct.pack("<Q", len(hdr_bytes)) + hdr_bytes)
+
+        preview = tmp_path / "mymodel.preview.png"
+        preview.write_bytes(b"\x89PNG")
+
+        lib = ModelLibrary(str(tmp_path))
+        lib.scan()
+
+        entries = list(lib.entries.values())
+        assert len(entries) == 1
+        assert entries[0].thumbnail_path == str(preview)
+
+    def test_model_entry_thumbnail_default_none(self):
+        entry = ModelEntry(path="/x", filename="x.safetensors", file_size_mb=1.0,
+                           date_modified="2026-01-01T00:00:00Z")
+        assert entry.thumbnail_path is None
+
+    def test_model_entry_roundtrip_with_thumbnail(self):
+        entry = ModelEntry(
+            path="/x", filename="x.safetensors", file_size_mb=1.0,
+            date_modified="2026-01-01T00:00:00Z",
+            thumbnail_path="/thumbs/abc123.jpg",
+        )
+        restored = ModelEntry.from_dict(entry.to_dict())
+        assert restored.thumbnail_path == "/thumbs/abc123.jpg"
+
+    def test_arch_colors_all_architectures_covered(self, lib):
+        """Every architecture in MODEL_ARCHITECTURES has a color or falls back to 'unknown'."""
+        from dataset_sorter.constants import MODEL_ARCHITECTURES
+        for arch in MODEL_ARCHITECTURES:
+            color = lib.ARCH_COLORS.get(arch, lib.ARCH_COLORS["unknown"])
+            assert color.startswith("#"), f"Bad color for arch {arch}: {color!r}"
+            assert len(color) == 7, f"Color wrong length for arch {arch}: {color!r}"

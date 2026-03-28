@@ -57,6 +57,7 @@ class ModelEntry:
     label: str = ""                    # Human-readable summary label
     tags: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)  # Raw metadata from safetensors header
+    thumbnail_path: Optional[str] = None  # Path to 256×256 JPEG thumbnail (None = use auto-gen)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -74,6 +75,42 @@ class ModelLibrary:
 
     INDEX_FILENAME = "model_library.json"
     SUPPORTED_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".bin"}
+    THUMBNAIL_DIR = ".thumbnails"
+
+    # Background fill color (hex) for auto-generated thumbnails, keyed by architecture.
+    ARCH_COLORS: dict[str, str] = {
+        "sd15":         "#4A90D9",   # Blue
+        "sd2":          "#5B9BD5",   # Light blue
+        "sdxl":         "#27AE60",   # Green
+        "sdxl_turbo":   "#2ECC71",   # Bright green
+        "pony":         "#8E44AD",   # Purple
+        "flux":         "#E67E22",   # Orange
+        "flux2":        "#D35400",   # Dark orange
+        "sd3":          "#E74C3C",   # Red
+        "sd35":         "#C0392B",   # Dark red
+        "zimage":       "#1ABC9C",   # Teal
+        "zimage_turbo": "#16A085",   # Dark teal
+        "hidream":      "#F39C12",   # Gold
+        "kolors":       "#D35400",   # Dark orange
+        "cascade":      "#2980B9",   # Steel blue
+        "wuerstchen":   "#3498DB",   # Dodger blue
+        "pixart":       "#C0392B",   # Dark red
+        "sana":         "#E91E63",   # Pink
+        "hunyuan":      "#16A085",   # Dark teal
+        "chroma":       "#9B59B6",   # Amethyst
+        "auraflow":     "#1ABC9C",   # Emerald
+        "animatediff":  "#2C3E50",   # Midnight
+        "lcm":          "#F1C40F",   # Yellow
+        "lightning":    "#FFEB3B",   # Bright yellow (dark text)
+        "hyper_sd":     "#FF5722",   # Deep orange
+        "deepfloyd":    "#607D8B",   # Blue grey
+        "playground":   "#00BCD4",   # Cyan
+        "kolors":       "#FF7043",   # Deep orange variant
+        "unknown":      "#95A5A6",   # Grey
+    }
+
+    # Architectures where the auto-thumbnail needs dark text (bright background)
+    _LIGHT_ARCH_BG: set[str] = {"lcm", "lightning"}
 
     def __init__(self, models_dir: str) -> None:
         self.models_dir = Path(models_dir)
@@ -206,7 +243,192 @@ class ModelLibrary:
             entry.rank = self._detect_lora_rank_from_header(keys, raw_meta)
 
         entry.label = self._build_label(entry)
+
+        # Auto-import CivitAI-style preview images (.preview.png / .preview.jpg)
+        entry.thumbnail_path = self._find_preview_image(filepath)
+
         return entry
+
+    # ── Thumbnail support ─────────────────────────────────────────────────────
+
+    @property
+    def _thumb_dir(self) -> Path:
+        return self.models_dir / self.THUMBNAIL_DIR
+
+    def _thumbnail_filename(self, model_path: str) -> str:
+        """Derive a stable thumbnail filename from the model file path (SHA1 prefix)."""
+        import hashlib
+        digest = hashlib.sha1(model_path.encode()).hexdigest()[:16]
+        return f"{digest}.jpg"
+
+    def _find_preview_image(self, filepath: Path) -> Optional[str]:
+        """Return path to a CivitAI-style preview image if one exists.
+
+        Checks for <stem>.preview.png and <stem>.preview.jpg adjacent to the
+        model file (both naming conventions used in the wild).
+        """
+        for suffix in (".preview.png", ".preview.jpg", ".preview.jpeg"):
+            candidate = filepath.with_name(filepath.stem + suffix)
+            if candidate.is_file():
+                return str(candidate)
+        return None
+
+    def set_thumbnail(self, model_path: str, image_path: str) -> Optional[str]:
+        """Copy and resize *image_path* to the thumbnails directory as a 256×256 JPEG.
+
+        Args:
+            model_path: Absolute path string to the model file (index key).
+            image_path: Path to the source image (any PIL-supported format).
+
+        Returns:
+            Absolute path to the saved thumbnail, or None if PIL is unavailable
+            or the operation failed.
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            log.warning("set_thumbnail requires Pillow: pip install Pillow")
+            return None
+
+        try:
+            self._thumb_dir.mkdir(parents=True, exist_ok=True)
+            thumb_name = self._thumbnail_filename(model_path)
+            thumb_path = self._thumb_dir / thumb_name
+
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                img = img.resize((256, 256), Image.LANCZOS)
+                img.save(str(thumb_path), "JPEG", quality=85)
+
+            # Update the index entry
+            if model_path in self.entries:
+                self.entries[model_path].thumbnail_path = str(thumb_path)
+
+            return str(thumb_path)
+
+        except Exception as exc:
+            log.warning("set_thumbnail failed for %s: %s", model_path, exc)
+            return None
+
+    def get_thumbnail(self, model_path: str) -> Optional[str]:
+        """Return path to this model's thumbnail, or None if not set."""
+        entry = self.entries.get(model_path)
+        if entry is None:
+            return None
+        if entry.thumbnail_path and Path(entry.thumbnail_path).is_file():
+            return entry.thumbnail_path
+        return None
+
+    def generate_default_thumbnail(self, entry: ModelEntry) -> Optional[str]:
+        """Auto-generate a 256×256 JPEG thumbnail for *entry* using PIL.
+
+        The thumbnail shows:
+        - Solid background color based on the model's architecture
+        - Model type pill (LoRA / Checkpoint / VAE / …) at the top
+        - Architecture name in large text in the center
+        - LoRA rank (if available) below
+        - Filename at the bottom
+
+        Returns the absolute path to the generated thumbnail, or None if PIL
+        is not installed.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            log.debug("generate_default_thumbnail requires Pillow: pip install Pillow")
+            return None
+
+        try:
+            self._thumb_dir.mkdir(parents=True, exist_ok=True)
+            thumb_name = self._thumbnail_filename(entry.path)
+            thumb_path = self._thumb_dir / thumb_name
+
+            SIZE = 256
+            bg_hex = self.ARCH_COLORS.get(entry.architecture, self.ARCH_COLORS["unknown"])
+            # Convert hex (#RRGGBB) to RGB tuple
+            r = int(bg_hex[1:3], 16)
+            g = int(bg_hex[3:5], 16)
+            b = int(bg_hex[5:7], 16)
+            bg_color = (r, g, b)
+
+            # Text color: dark for bright backgrounds, white otherwise
+            use_dark_text = entry.architecture in self._LIGHT_ARCH_BG
+            text_color = (30, 30, 30) if use_dark_text else (255, 255, 255)
+            pill_text_color = bg_color  # inverted for the pill badge
+            pill_bg = text_color
+
+            img = Image.new("RGB", (SIZE, SIZE), bg_color)
+            draw = ImageDraw.Draw(img)
+
+            # Use PIL's built-in bitmap font (always available, no font files needed)
+            try:
+                font_sm = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+                font_md = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+                font_lg = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 28)
+            except (OSError, AttributeError):
+                # Fallback to PIL default bitmap font
+                font_sm = font_md = font_lg = ImageFont.load_default()
+
+            from dataset_sorter.constants import MODEL_ARCHITECTURES
+
+            arch_label = MODEL_ARCHITECTURES.get(entry.architecture, entry.architecture.upper())
+            type_labels = {
+                "checkpoint": "Checkpoint",
+                "lora":       "LoRA",
+                "vae":        "VAE",
+                "text_encoder": "Text Encoder",
+                "controlnet": "ControlNet",
+            }
+            net_labels = {"dora": "DoRA", "lokr": "LoKr", "loha": "LoHa", "lora": "LoRA"}
+            type_str = (
+                net_labels.get(entry.network_type, entry.network_type.upper())
+                if entry.model_type == "lora" and entry.network_type
+                else type_labels.get(entry.model_type, entry.model_type.title())
+            )
+
+            # ── Type pill badge at top ────────────────────────────────────────
+            pill_pad = 8
+            bbox = draw.textbbox((0, 0), type_str, font=font_sm)
+            pill_w = bbox[2] - bbox[0] + pill_pad * 2
+            pill_h = bbox[3] - bbox[1] + pill_pad
+            pill_x = (SIZE - pill_w) // 2
+            draw.rounded_rectangle(
+                [pill_x, 16, pill_x + pill_w, 16 + pill_h],
+                radius=6, fill=pill_bg,
+            )
+            draw.text((pill_x + pill_pad, 16 + pill_pad // 2), type_str, font=font_sm, fill=pill_text_color)
+
+            # ── Architecture name centered ────────────────────────────────────
+            bbox2 = draw.textbbox((0, 0), arch_label, font=font_lg)
+            arch_w = bbox2[2] - bbox2[0]
+            draw.text(((SIZE - arch_w) // 2, 100), arch_label, font=font_lg, fill=text_color)
+
+            # ── Rank (if applicable) ──────────────────────────────────────────
+            if entry.rank is not None:
+                rank_str = f"rank {entry.rank}"
+                bbox3 = draw.textbbox((0, 0), rank_str, font=font_md)
+                rank_w = bbox3[2] - bbox3[0]
+                draw.text(((SIZE - rank_w) // 2, 140), rank_str, font=font_md, fill=text_color)
+
+            # ── Filename at the bottom (truncated) ───────────────────────────
+            name = entry.filename
+            if len(name) > 28:
+                name = name[:25] + "…"
+            bbox4 = draw.textbbox((0, 0), name, font=font_sm)
+            name_w = bbox4[2] - bbox4[0]
+            draw.text(((SIZE - name_w) // 2, SIZE - 28), name, font=font_sm, fill=text_color)
+
+            img.save(str(thumb_path), "JPEG", quality=85)
+
+            # Update entry
+            if entry.path in self.entries:
+                self.entries[entry.path].thumbnail_path = str(thumb_path)
+
+            return str(thumb_path)
+
+        except Exception as exc:
+            log.warning("generate_default_thumbnail failed for %s: %s", entry.filename, exc)
+            return None
 
     def _read_safetensors_header(self, filepath: Path) -> tuple[list[str], dict]:
         """Read the JSON header of a safetensors file without loading tensors.
@@ -284,20 +506,81 @@ class ModelLibrary:
         # Fallback: large file with no LoRA keys → probably a checkpoint
         return "checkpoint"
 
-    def _detect_architecture(self, keys: list[str], metadata: dict) -> str:
-        """Detect the SD architecture from tensor key patterns.
+    # Mapping of metadata string fragments → internal architecture key.
+    # Checked against ss_base_model_version / modelspec.architecture / tags fields.
+    # IMPORTANT: listed most-specific first — "animatediff" must precede "sdxl",
+    # "lcm" must precede "sdxl", etc., to avoid shorter tokens shadowing longer ones.
+    # Values are normalised to lowercase with hyphens→underscores before matching.
+    _METADATA_ARCH_MAP: list[tuple[str, str]] = [
+        # Specific variants/derivatives — must come before their base arch
+        ("sdxl_turbo",              "sdxl_turbo"),
+        ("stable_diffusion_xl_turbo", "sdxl_turbo"),
+        ("animatediff",             "animatediff"),
+        ("deepfloyd",               "deepfloyd"),
+        ("if_i_",                   "deepfloyd"),
+        ("playground",              "playground"),
+        ("pony",                    "pony"),
+        ("lcm",                     "lcm"),
+        ("lightning",               "lightning"),
+        ("hyper_sd",                "hyper_sd"),
+        ("wuerstchen",              "wuerstchen"),
+        ("stable_cascade",          "cascade"),
+        # Versioned SD3.5 before SD3 before others
+        ("stable_diffusion_3.5",    "sd35"),
+        ("sd_3.5",                  "sd35"),
+        ("sd3.5",                   "sd35"),
+        ("stable_diffusion_3",      "sd3"),
+        ("sd_3",                    "sd3"),
+        ("sd3",                     "sd3"),
+        # Flux variants
+        ("flux_dev",                "flux"),
+        ("flux_schnell",            "flux"),
+        ("flux",                    "flux"),
+        # SDXL-based (after pony/lcm/lightning/animatediff)
+        ("stable_diffusion_xl",     "sdxl"),
+        ("sdxl",                    "sdxl"),
+        ("sd_xl",                   "sdxl"),
+        # SD 2.x
+        ("stable_diffusion_2",      "sd2"),
+        ("sd_2",                    "sd2"),
+        ("sd2",                     "sd2"),
+        # SD 1.5
+        ("stable_diffusion_1",      "sd15"),
+        ("sd_1",                    "sd15"),
+        ("sd15",                    "sd15"),
+        ("sd_15",                   "sd15"),
+        # Others
+        ("pixart",                  "pixart"),
+        ("sana",                    "sana"),
+        ("hunyuan",                 "hunyuan"),
+        ("kolors",                  "kolors"),
+        ("chroma",                  "chroma"),
+        ("auraflow",                "auraflow"),
+        ("hidream",                 "hidream"),
+        ("zimage",                  "zimage"),
+        ("z_image",                 "zimage"),
+    ]
 
-        Uses the same heuristics as generate_worker._detect_model_type_from_keys.
+    def _detect_architecture(self, keys: list[str], metadata: dict) -> str:
+        """Detect the SD architecture by checking metadata first, then key patterns.
+
+        Metadata check is preferred because it is explicit and model-creator
+        supplied.  Key-pattern detection is used as a fallback when metadata
+        is absent or non-standard.
+
+        Metadata fields checked (in order):
+            - modelspec.architecture  (ModelSpec standard)
+            - ss_base_model_version   (CivitAI / kohya_ss)
+            - ss_sd_model_hash        (presence only — hash not checked)
+            - tags                    (CivitAI tag list)
         """
+        # ── 1. Metadata-first detection ───────────────────────────────────────
+        arch_from_meta = self._detect_architecture_from_metadata(metadata)
+        if arch_from_meta != "unknown":
+            return arch_from_meta
+
+        # ── 2. Key-pattern fallback ───────────────────────────────────────────
         if not keys:
-            # Fall back to metadata hints (CivitAI uses ss_base_model_version)
-            base = metadata.get("ss_base_model_version", "").lower()
-            if "xl" in base or "sdxl" in base:
-                return "sdxl"
-            if "flux" in base:
-                return "flux"
-            if "sd3" in base or "sd 3" in base:
-                return "sd3"
             return "unknown"
 
         key_set = set(keys)
@@ -305,35 +588,70 @@ class ModelLibrary:
         def _any(prefix: str) -> bool:
             return any(k.startswith(prefix) for k in key_set)
 
-        # SD1.5 / SDXL — A1111 full checkpoint format
+        def _contains(fragment: str) -> bool:
+            return any(fragment in k for k in key_set)
+
+        # SD1.5 / SDXL / SD2 — A1111 full checkpoint format
         if _any("model.diffusion_model."):
             if _any("conditioner.embedders."):
+                # Pony is SDXL-based — already caught by metadata, but double-check
                 return "sdxl"
             if _any("cond_stage_model.model."):
                 return "sd2"
             return "sd15"
 
+        # Stable Cascade / Wuerstchen
+        if _any("down_blocks.") and _any("up_blocks.") and _any("effnet."):
+            return "cascade"
+        if _contains("prior_") and _contains("decoder_"):
+            return "wuerstchen"
+
+        # DeepFloyd IF: pixel-space U-Net with t5 encoder
+        if _any("unet.time_embed.") and _any("encoder_hid_proj."):
+            return "deepfloyd"
+
         # Flux: double_blocks + single_blocks
         has_double = _any("double_blocks.") or _any("transformer.double_blocks.")
         has_single = _any("single_blocks.") or _any("transformer.single_blocks.")
         if has_double and has_single:
+            # Flux2 uses an LLM text encoder; hard to distinguish from key names alone
             return "flux"
 
-        # SD3 / SD3.5: joint_blocks
+        # SD3 / SD3.5: joint_transformer_blocks or joint_blocks
+        if _any("joint_transformer_blocks.") or _any("transformer.joint_transformer_blocks."):
+            return "sd35"
         if _any("joint_blocks.") or _any("transformer.joint_blocks."):
             return "sd3"
-
-        # Z-Image: LLM-based text encoder
-        if _any("text_encoder.model.embed_tokens.") or _any("text_encoder.model.layers."):
-            return "zimage"
-
-        # PixArt / Sana: caption_projection
-        if _any("caption_projection.") or _any("transformer.caption_projection."):
-            return "pixart"
 
         # HiDream: LLM sub-model keys
         if _any("llm.") or _any("transformer.llm."):
             return "hidream"
+
+        # Z-Image: LLM-based text encoder (Qwen3)
+        if _any("text_encoder.model.embed_tokens.") or _any("text_encoder.model.layers."):
+            return "zimage"
+
+        # PixArt Sigma / Sana: caption_projection distinctive key
+        if _any("caption_projection.") or _any("transformer.caption_projection."):
+            if _any("transformer.adaln_single.") or _any("adaln_single."):
+                return "pixart"
+            return "sana"
+
+        # Kolors: ChatGLM text encoder
+        if _any("text_encoder.transformer.word_embeddings."):
+            return "kolors"
+
+        # Chroma: specific to its custom transformer block naming
+        if _any("chroma_") or _contains("chroma."):
+            return "chroma"
+
+        # AuraFlow: specific block naming
+        if _any("register_tokens") and _any("joint_transformer_blocks"):
+            return "auraflow"
+
+        # AnimateDiff: motion module keys
+        if _contains("motion_modules.") or _contains("temporal_attention."):
+            return "animatediff"
 
         # Z-Image unprefixed top-level keys
         _ZIMAGE_TOPS = {"all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
@@ -347,21 +665,84 @@ class ModelLibrary:
         if top_level & _HUNYUAN_TOPS:
             return "hunyuan"
 
-        # LoRA files: detect architecture from lora key prefixes
-        if any("lora_unet_" in k or "lora_A." in k or "lora_down." in k for k in key_set):
-            has_add_emb = any("add_embedding" in k or "add_k_proj" in k for k in key_set)
-            has_joint = any("joint_attn" in k or "joint_blocks" in k for k in key_set)
-            has_flux_prefix = any("double_blocks" in k or "single_blocks" in k for k in key_set)
-            if has_flux_prefix:
+        # LoRA files: derive architecture from specialised key naming conventions
+        is_lora_file = any(
+            "lora_unet_" in k or "lora_A." in k or "lora_down." in k
+            or "lora_up." in k or "lora_B." in k
+            for k in key_set
+        )
+        if is_lora_file:
+            # Flux LoRA
+            if _contains("double_blocks") or _contains("single_blocks"):
                 return "flux"
-            if has_joint:
+            # SD3 LoRA
+            if _contains("joint_attn") or _contains("joint_blocks"):
                 return "sd3"
-            if has_add_emb:
-                return "sdxl"
-            # SDXL LoRAs from CivitAI often use lora_te1/lora_te2 naming
+            # SDXL LoRA: second TE or add_embedding
             if any("lora_te1_" in k or "lora_te2_" in k for k in key_set):
                 return "sdxl"
+            if _contains("add_embedding") or _contains("add_k_proj"):
+                return "sdxl"
             return "sd15"
+
+        return "unknown"
+
+    @staticmethod
+    def _normalize_meta_str(s: str) -> str:
+        """Lowercase and replace hyphens/spaces with underscores for consistent matching."""
+        return s.lower().replace("-", "_").replace(" ", "_").strip()
+
+    def _detect_architecture_from_metadata(self, metadata: dict) -> str:
+        """Try to identify architecture solely from safetensors __metadata__ fields.
+
+        Checks modelspec.architecture (ModelSpec standard), ss_base_model_version
+        (CivitAI/kohya_ss), and free-text tags fields.  Returns 'unknown' if no
+        reliable signal is found.
+
+        All string values are normalised (lowercase, hyphens→underscores) before
+        matching so that "stable-diffusion-xl-v1-base" matches "stable_diffusion_xl".
+        """
+        if not metadata:
+            return "unknown"
+
+        def _match(raw: str) -> str:
+            """Return the first matching architecture key or empty string."""
+            val = self._normalize_meta_str(raw)
+            if not val:
+                return ""
+            for fragment, arch in self._METADATA_ARCH_MAP:
+                if fragment in val:
+                    return arch
+            return ""
+
+        # ModelSpec standard: explicit architecture string
+        modelspec = metadata.get("modelspec.architecture", "")
+        if modelspec:
+            arch = _match(modelspec)
+            if arch:
+                return arch
+
+        # CivitAI / kohya_ss base model version field
+        base_ver = metadata.get("ss_base_model_version", "")
+        if base_ver:
+            arch = _match(base_ver)
+            if arch:
+                return arch
+
+        # CivitAI tags list (comma-separated string)
+        tags_raw = metadata.get("tags", metadata.get("ss_tag_frequency", ""))
+        if isinstance(tags_raw, str) and tags_raw:
+            arch = _match(tags_raw)
+            if arch:
+                return arch
+
+        # Additional CivitAI hint fields
+        for field_name in ("modelspec.title", "modelspec.description"):
+            val = metadata.get(field_name, "")
+            if val:
+                arch = _match(str(val))
+                if arch:
+                    return arch
 
         return "unknown"
 
@@ -422,30 +803,27 @@ class ModelLibrary:
     # ── Label builder ─────────────────────────────────────────────────────────
 
     def _build_label(self, entry: ModelEntry) -> str:
-        """Build a human-readable one-line description."""
+        """Build a human-readable one-line description.
+
+        Uses MODEL_ARCHITECTURES from constants for arch labels so that adding
+        new architectures there automatically updates labels here.
+        """
+        from dataset_sorter.constants import MODEL_ARCHITECTURES
+
         parts: list[str] = []
 
         type_labels = {
-            "checkpoint": "Checkpoint",
-            "lora": "LoRA",
-            "vae": "VAE",
-            "text_encoder": "Text Encoder",
-            "controlnet": "ControlNet",
+            "checkpoint":    "Checkpoint",
+            "lora":          "LoRA",
+            "vae":           "VAE",
+            "text_encoder":  "Text Encoder",
+            "controlnet":    "ControlNet",
         }
         net_labels = {
-            "dora": "DoRA",
-            "lokr": "LoKr",
-            "loha": "LoHa",
-            "lora": "LoRA",
-        }
-        arch_labels = {
-            "sd15": "SD 1.5", "sd2": "SD 2.x", "sdxl": "SDXL",
-            "flux": "Flux", "flux2": "Flux 2",
-            "sd3": "SD3", "sd35": "SD 3.5",
-            "zimage": "Z-Image", "pixart": "PixArt", "sana": "Sana",
-            "hunyuan": "HunyuanDiT", "kolors": "Kolors",
-            "cascade": "Cascade", "chroma": "Chroma",
-            "auraflow": "AuraFlow", "hidream": "HiDream",
+            "dora":  "DoRA",
+            "lokr":  "LoKr",
+            "loha":  "LoHa",
+            "lora":  "LoRA",
         }
 
         if entry.model_type == "lora" and entry.network_type:
@@ -453,9 +831,10 @@ class ModelLibrary:
         else:
             parts.append(type_labels.get(entry.model_type, entry.model_type.title()))
 
-        arch = arch_labels.get(entry.architecture)
-        if arch:
-            parts.append(arch)
+        # Use the canonical label from MODEL_ARCHITECTURES; skip "Unknown"
+        arch_label = MODEL_ARCHITECTURES.get(entry.architecture, "")
+        if arch_label and arch_label != "Unknown":
+            parts.append(arch_label)
 
         if entry.rank is not None:
             parts.append(f"rank {entry.rank}")

@@ -90,6 +90,43 @@ OPTIMIZERS = {
     "GaLoreAdamW8bit":    "GaLore AdamW 8-bit — GaLore + memory savings",
 }
 
+# All known model architectures with human-readable labels.
+# Keys are the internal architecture identifiers used throughout the codebase.
+MODEL_ARCHITECTURES: dict[str, str] = {
+    # Stable Diffusion family
+    "sd15":           "SD 1.5",
+    "sd2":            "SD 2.x",
+    "sdxl":           "SDXL",
+    "sdxl_turbo":     "SDXL Turbo",
+    "pony":           "Pony Diffusion (SDXL)",
+    "playground":     "Playground v2/v2.5",
+    "lcm":            "LCM (Latent Consistency)",
+    "lightning":      "Lightning (few-step)",
+    "hyper_sd":       "Hyper-SD",
+    # Latent Diffusion variants
+    "cascade":        "Stable Cascade",
+    "wuerstchen":     "Wuerstchen",
+    "deepfloyd":      "DeepFloyd IF",
+    # Next-gen transformer architectures
+    "flux":           "Flux",
+    "flux2":          "Flux 2",
+    "sd3":            "SD3",
+    "sd35":           "SD 3.5",
+    "zimage":         "Z-Image",
+    "zimage_turbo":   "Z-Image Turbo",
+    "pixart":         "PixArt Sigma",
+    "sana":           "Sana",
+    "hunyuan":        "HunyuanDiT",
+    "kolors":         "Kolors",
+    "chroma":         "Chroma",
+    "auraflow":       "AuraFlow",
+    "hidream":        "HiDream",
+    # Video / multi-frame models
+    "animatediff":    "AnimateDiff",
+    # Fallback
+    "unknown":        "Unknown",
+}
+
 # Quantization options for UNet/transformer (via optimum.quanto)
 QUANTIZATION_OPTIONS = {
     "none":  "None — Full precision (no quantization)",
