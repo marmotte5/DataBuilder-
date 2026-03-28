@@ -120,6 +120,8 @@ class TrainingConfig:
     enable_tf32: bool = False       # TF32 matmul on NVIDIA Ampere+ (faster fp32, no dtype change)
     fp8_base_model: bool = False    # Load base model in fp8 (saves ~50% VRAM)
     quantize_text_encoder: str = "none"  # none, int8, int4 — quantize frozen TE via bitsandbytes
+    quantize_unet: str = "none"     # none, int8, int4 — quantize UNet/transformer via optimum.quanto
+    enable_layer_offload: bool = False  # Offload individual model layers to CPU between forward passes (low-VRAM)
 
     # ── Dataset & Tags ─────────────────────────────────────────────────
     tag_shuffle: bool = True        # Shuffle tags in captions each epoch
@@ -148,6 +150,7 @@ class TrainingConfig:
     noise_offset: float = 0.0
     adaptive_noise_scale: float = 0.0   # Scale noise offset by channel mean
     min_snr_gamma: int = 0
+    snr_gamma_mode: str = "fixed"   # "fixed" = standard min-SNR-γ, "learnable" = trainable per-timestep weights
     ip_noise_gamma: float = 0.0
     debiased_estimation: bool = False
     multires_noise_discount: float = 0.0

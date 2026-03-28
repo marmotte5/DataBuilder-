@@ -237,6 +237,7 @@ class Trainer:
         self.scheduler = None
         self.ema_model: Optional[EMAModel] = None
         self.grad_scaler = None
+        self._snr_weights = None  # nn.Parameter for learnable SNR gamma (None = disabled)
 
         # TensorBoard logger
         self._tb_logger = None
@@ -440,6 +441,31 @@ class Trainer:
             )
             self.backend.unet = self._fp8_wrapper.setup()
             log.info(f"FP8 training: {self._fp8_wrapper.get_stats()}")
+
+        # ── 3b-q. UNet/transformer quantization via optimum.quanto ──
+        quant_level = getattr(config, "quantize_unet", "none")
+        if quant_level and quant_level != "none" and self.backend.unet is not None:
+            from dataset_sorter.quantization import quantize_model
+            self.backend.unet = quantize_model(self.backend.unet, quant_level)
+
+        # ── 3b-o. Layer offloading for low-VRAM setups ──
+        # Uses accelerate cpu_offload to move individual model layers to CPU RAM
+        # between forward passes.  Only useful when VRAM < model size.
+        if getattr(config, "enable_layer_offload", False) and self.backend.unet is not None:
+            try:
+                from accelerate import cpu_offload
+                cpu_offload(self.backend.unet, execution_device=self.device)
+                log.info(
+                    "Layer offloading enabled: UNet layers move CPU↔GPU each forward "
+                    "pass (low-VRAM mode, will be slower)"
+                )
+            except ImportError:
+                log.warning(
+                    "enable_layer_offload=True but accelerate is not installed. "
+                    "Install with: pip install accelerate"
+                )
+            except Exception as exc:
+                log.warning("Layer offload setup failed: %s — continuing without it", exc)
 
         # ── 3c. MeBP: selective activation checkpointing (Apple 2025) ──
         if config.mebp_enabled and self.backend.unet is not None:
@@ -662,6 +688,35 @@ class Trainer:
 
         if progress_fn:
             progress_fn(5, 8, "Setting up optimizer...")
+
+        # ── 8b. Learnable SNR gamma ──
+        # Allocates a trainable per-timestep weight vector (1000 bins) initialized
+        # with min-SNR-5 values.  These weights scale per-step loss during training,
+        # effectively learning which timesteps need more/less emphasis.
+        self._snr_weights: torch.nn.Parameter | None = None
+        snr_mode = getattr(config, "snr_gamma_mode", "fixed")
+        if snr_mode == "learnable" and config.min_snr_gamma > 0:
+            # Compute initial min-SNR-5 values using the noise scheduler.
+            # Fall back to uniform ones(1000) if the scheduler lacks alphas_cumprod.
+            num_timesteps = 1000
+            initial_weights = torch.ones(num_timesteps, dtype=torch.float32, device=self.device)
+            scheduler = getattr(self.backend, "noise_scheduler", None)
+            if scheduler is not None and hasattr(scheduler, "alphas_cumprod"):
+                alphas = scheduler.alphas_cumprod.to(self.device, dtype=torch.float32)
+                # Clamp to the actual scheduler length in case it differs from 1000
+                n = min(num_timesteps, len(alphas))
+                sqrt_alpha = alphas[:n] ** 0.5
+                sqrt_one_minus = (1.0 - alphas[:n]).clamp(min=1e-8) ** 0.5
+                snr = (sqrt_alpha / sqrt_one_minus) ** 2
+                clamped = snr.clamp(max=config.min_snr_gamma)
+                # Epsilon prediction: weight = min(SNR, γ) / SNR
+                initial_weights[:n] = (clamped / snr.clamp(min=1e-8)).clamp(0.01, 10.0)
+            self._snr_weights = torch.nn.Parameter(initial_weights)
+            log.info(
+                "Learnable SNR gamma enabled: 1000-timestep weight vector initialised "
+                "from min-SNR-%d values, will be optimized jointly with model params.",
+                config.min_snr_gamma,
+            )
 
         # ── 9. Build parameter groups (separate LR for text encoders) ──
         if config.triton_fused_adamw:
@@ -942,6 +997,15 @@ class Trainer:
                 params = [p for p in encoder.parameters() if p.requires_grad]
                 if params:
                     groups.append({"params": params, "lr": te_lr})
+
+        # Learnable SNR gamma: include the per-timestep weight vector in the optimizer.
+        # Uses a higher LR (10x base) so the weights adapt quickly without
+        # over-fitting; the vector is small (1000 scalars) so the cost is negligible.
+        if self._snr_weights is not None:
+            groups.append({
+                "params": [self._snr_weights],
+                "lr": base_lr * 10.0,
+            })
 
         return groups
 
@@ -1734,6 +1798,10 @@ class Trainer:
         # ── Timestep EMA: pass sampler to backend for adaptive timestep selection ──
         if self._timestep_ema is not None:
             self.backend._timestep_ema_sampler = self._timestep_ema
+
+        # ── Learnable SNR gamma: expose weight vector to backend training step ──
+        if self._snr_weights is not None:
+            self.backend._learnable_snr_weights = self._snr_weights
 
         # ── Adaptive tag weighting: apply per-caption weights before loss ──
         if self._adaptive_tag_weighter is not None and "caption" in batch:

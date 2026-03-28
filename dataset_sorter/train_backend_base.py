@@ -652,10 +652,19 @@ class TrainBackendBase(ABC):
         # Compute loss (model-specific: epsilon, v-pred, or flow)
         loss = self.compute_loss(noise_pred, noise, latents, timesteps)
 
-        # Min SNR gamma weighting
+        # Min SNR gamma weighting (fixed or learnable)
+        snr_mode = getattr(config, "snr_gamma_mode", "fixed")
         if config.min_snr_gamma > 0:
-            snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
-            loss = loss * snr_weights
+            if snr_mode == "learnable" and getattr(self, "_learnable_snr_weights", None) is not None:
+                # Index the per-timestep learnable weight vector.  softplus keeps
+                # weights positive; we clamp to [0.01, 10] for training stability.
+                import torch.nn.functional as F
+                w = F.softplus(self._learnable_snr_weights[timesteps]).clamp(0.01, 10.0)
+                # Reshape to broadcast over spatial dims: (B,) -> (B, 1, 1, ...)
+                loss = loss * w.view(-1, *([1] * (loss.dim() - 1)))
+            else:
+                snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
+                loss = loss * snr_weights
 
         # SpeeD change-aware loss weighting (CVPR 2025)
         if config.speed_change_aware and self._speed_sampler is not None:

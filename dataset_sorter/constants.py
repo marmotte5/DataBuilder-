@@ -90,6 +90,13 @@ OPTIMIZERS = {
     "GaLoreAdamW8bit":    "GaLore AdamW 8-bit — GaLore + memory savings",
 }
 
+# Quantization options for UNet/transformer (via optimum.quanto)
+QUANTIZATION_OPTIONS = {
+    "none":  "None — Full precision (no quantization)",
+    "int8":  "INT8 — ~50% VRAM reduction, minimal quality loss",
+    "int4":  "INT4 — ~75% VRAM reduction, slight quality loss",
+}
+
 # LoRA initialization methods (PEFT library)
 LORA_INIT_METHODS = {
     "default":   "Default — Kaiming uniform (standard)",

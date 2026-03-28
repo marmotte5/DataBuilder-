@@ -504,6 +504,40 @@ def get_available_precisions(device: str) -> list[str]:
     return available
 
 
+def get_available_quantization(device: str) -> list[str]:
+    """Return quantization options supported on the current hardware.
+
+    Requires optimum.quanto (pip install optimum-quanto).  INT8 runs on any
+    CUDA/ROCm/XPU device; INT4 additionally requires CUDA SM 8.0+ (Ampere+).
+    CPU-only inference always returns ["none"] since quanto needs a real device.
+    """
+    available = ["none"]
+    if device not in ("cuda", "xpu", "rocm"):
+        return available
+
+    try:
+        import optimum.quanto  # noqa: F401 — check availability only
+    except ImportError:
+        return available  # optimum-quanto not installed
+
+    available.append("int8")
+
+    if device == "cuda":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                major, _ = torch.cuda.get_device_capability()
+                if major >= 8:  # Ampere (RTX 30xx) and newer
+                    available.append("int4")
+        except Exception:
+            pass
+    else:
+        # ROCm/XPU: report int4 if quanto is present; actual support may vary
+        available.append("int4")
+
+    return available
+
+
 def log_hardware_summary(hw: dict[str, Any] | None = None) -> None:
     """Log a one-line hardware capability summary plus any advisory notes."""
     info = hw or detect_hardware()
