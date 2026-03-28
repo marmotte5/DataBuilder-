@@ -341,6 +341,23 @@ ZIMAGE_INVENTIONS = {
     "zimage_timestep_bandit":   "Timestep Bandit — Thompson Sampling, targets hardest noise levels",
 }
 
+# ── IP-Adapter ────────────────────────────────────────────────────────
+# Must stay in sync with IP_ADAPTER_TYPES in ip_adapter.py.
+IP_ADAPTER_TYPES: list[str] = ["standard", "plus", "face", "composition", "ilora"]
+
+# ── Polarity Guidance defaults ────────────────────────────────────────
+POLARITY_GUIDANCE_DEFAULTS: dict[str, float] = {
+    "threshold": 0.1,   # Normalised diff threshold above which a region is differential
+    "min_mask_ratio": 0.01,  # Fall back to standard loss when masked area < this
+}
+
+# ── Latent Cache defaults ─────────────────────────────────────────────
+LATENT_CACHE_DEFAULTS: dict[str, object] = {
+    "cache_dir": ".latent_cache",    # Default subdirectory name (relative to output dir)
+    "device": "cpu",                 # Tensors are stored and loaded on CPU
+    "enabled": False,                # Off by default; opt-in for speed
+}
+
 # ── Recommended GPU setup ─────────────────────────────────────────────
 CUDA_RECOMMENDATION = "CUDA 12.4+ with PyTorch 2.5+ for best performance"
 MPS_RECOMMENDATION = "Apple Silicon with PyTorch 2.1+ for Metal acceleration"
