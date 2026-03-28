@@ -159,8 +159,19 @@ def _cuda_info(torch, notes: list[str]) -> dict[str, Any]:
 
 def _mps_info(torch, notes: list[str]) -> dict[str, Any]:
     """Build info dict for Apple Silicon MPS backend."""
+    import os
     import platform
     chip = platform.processor() or "Apple Silicon"
+
+    # Prevent MPS OOM on the first forward pass (fp32 training especially).
+    # Must be set before any Metal allocations happen.
+    if os.environ.get("PYTORCH_MPS_HIGH_WATERMARK_RATIO") is None:
+        os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+        import logging
+        logging.getLogger(__name__).info(
+            "MPS detected: set PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to prevent OOM"
+        )
+
     notes.append(
         "Apple Silicon MPS: fp16 training not supported — bf16 used automatically."
     )

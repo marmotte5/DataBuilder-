@@ -231,6 +231,7 @@ pip install -e ".[training]"
 - `bitsandbytes` has limited MPS support; 8-bit/4-bit quantised optimizers will not be available.
 - `num_workers > 0` in the DataLoader can cause hangs on macOS — DataBuilder sets `num_workers=0` automatically when MPS is detected.
 - `torch.compile` requires `triton` (not available on MPS) and is automatically disabled.
+- FP32 training can trigger MPS OOM on the first forward pass — DataBuilder automatically sets `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0` at startup to disable the memory ceiling and let the Metal allocator use all available unified memory. You can override this by setting the env var yourself before launching.
 
 ---
 

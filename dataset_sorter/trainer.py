@@ -138,6 +138,15 @@ class Trainer:
         self.state = TrainingState()
         self.device = get_device()
 
+        # Set MPS watermark ratio before any Metal allocations to avoid OOM on
+        # the first forward pass (especially with fp32). setdefault leaves user
+        # overrides intact.
+        if self.device.type == "mps":
+            import os
+            if os.environ.get("PYTORCH_MPS_HIGH_WATERMARK_RATIO") is None:
+                os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+                log.info("MPS detected: set PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to prevent OOM")
+
         # Detect hardware capabilities once and log summary
         from dataset_sorter.hardware_detect import detect_hardware, log_hardware_summary
         self._hw = detect_hardware()
