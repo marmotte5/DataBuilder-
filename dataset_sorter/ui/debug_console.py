@@ -674,10 +674,14 @@ def _show_crash_dialog(exc_type, exc_value, exc_tb):
     """Show a non-blocking error dialog after a caught crash.
 
     The dialog informs the user that an error occurred but the
-    application is still running.  They can open the debug console
-    (F12) for the full traceback.
+    application is still running.  It offers three actions:
+      - Continue: dismiss and keep working
+      - Report Bug: open the bug reporter dialog (pre-filled GitHub issue)
+      - Quit: exit the application
     """
     try:
+        from PyQt6.QtWidgets import QPushButton
+
         tb_lines = traceback.format_exception(exc_type, exc_value, exc_tb)
         # Show only the last few lines to keep the dialog readable
         short_tb = "".join(tb_lines[-4:]) if len(tb_lines) > 4 else "".join(tb_lines)
@@ -690,17 +694,33 @@ def _show_crash_dialog(exc_type, exc_value, exc_tb):
             "You can continue working or save your progress."
         )
         msg.setDetailedText(short_tb)
-        msg.setInformativeText("Press F12 to open the Debug Console for the full traceback.")
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Close
+        msg.setInformativeText(
+            "Press F12 to open the Debug Console for the full traceback.\n"
+            "Click 'Report Bug' to submit a pre-filled GitHub issue."
         )
-        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
-        msg.button(QMessageBox.StandardButton.Ok).setText("Continue")
-        msg.button(QMessageBox.StandardButton.Close).setText("Quit")
 
-        result = msg.exec()
-        if result == QMessageBox.StandardButton.Close:
+        btn_continue = msg.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        btn_report = msg.addButton("Report Bug", QMessageBox.ButtonRole.ActionRole)
+        btn_quit = msg.addButton("Quit", QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(btn_continue)
+
+        msg.exec()
+        clicked = msg.clickedButton()
+
+        if clicked is btn_report:
+            try:
+                from dataset_sorter.bug_reporter import show_bug_report_dialog
+                exc_obj = exc_value if isinstance(exc_value, BaseException) else None
+                show_bug_report_dialog(
+                    error=exc_obj,
+                    context="Uncaught exception in Qt event dispatch",
+                )
+            except Exception:
+                pass  # Bug reporter itself must never crash the app
+
+        elif clicked is btn_quit:
             QApplication.quit()
+
     except Exception:
         # If even the dialog crashes, just continue silently
         pass

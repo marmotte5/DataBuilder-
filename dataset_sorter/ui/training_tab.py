@@ -934,9 +934,25 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
         )
 
-    def _on_error(self, error_msg):
-        """Log an error message received from the training worker."""
+    def _on_error(self, error_msg: str):
+        """Log a training error and offer a GitHub bug report dialog."""
         self._log(f"ERROR: {error_msg}")
+
+        # Offer the user a one-click bug report for critical training failures.
+        # We re-construct a lightweight RuntimeError so bug_reporter has an
+        # exception object with a useful __str__ and no stale __traceback__.
+        try:
+            from dataset_sorter.bug_reporter import show_bug_report_dialog
+            # Build a synthetic exception from the worker's error string so the
+            # dialog has a proper title and the full traceback is in the body.
+            synthetic = RuntimeError(error_msg[:200])
+            show_bug_report_dialog(
+                error=synthetic,
+                context="Training worker emitted an error signal",
+                parent=self,
+            )
+        except Exception:
+            pass  # Bug reporter must never break the training UI
 
     # ── Smart Resume ─────────────────────────────────────────────────
 
