@@ -385,6 +385,64 @@ ZIMAGE_INVENTIONS = {
     "zimage_timestep_bandit":   "Timestep Bandit — Thompson Sampling, targets hardest noise levels",
 }
 
+# ── Auto-tagger models ────────────────────────────────────────────────
+# Mirrors TAGGER_MODELS in auto_tagger.py (kept in sync manually).
+# Keys are user-facing model identifiers; "type" drives dispatch logic.
+TAGGER_MODELS: dict[str, dict] = {
+    "wd-vit-v2": {
+        "repo": "SmilingWolf/wd-v1-4-vit-tagger-v2",
+        "description": "WD ViT v2 — Classic, reliable booru tagger",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-swinv2-v2": {
+        "repo": "SmilingWolf/wd-v1-4-swinv2-tagger-v2",
+        "description": "WD SwinV2 v2 — Better accuracy",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-convnext-v2": {
+        "repo": "SmilingWolf/wd-v1-4-convnext-tagger-v2",
+        "description": "WD ConvNext v2 — Good balance speed/accuracy",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-vit-v3": {
+        "repo": "SmilingWolf/wd-vit-large-tagger-v3",
+        "description": "WD ViT Large v3 — Latest, high quality",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-swinv2-v3": {
+        "repo": "SmilingWolf/wd-swinv2-tagger-v3",
+        "description": "WD SwinV2 v3 — Latest SwinV2",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-convnext-v3": {
+        "repo": "SmilingWolf/wd-convnext-tagger-v3",
+        "description": "WD ConvNext v3 — Latest ConvNext",
+        "type": "wd",
+        "size": 448,
+    },
+    "wd-eva02-v3": {
+        "repo": "SmilingWolf/wd-eva02-large-tagger-v3",
+        "description": "WD EVA02 Large v3 — Newest, highest accuracy",
+        "type": "wd",
+        "size": 448,
+    },
+    "blip": {
+        "repo": "Salesforce/blip-image-captioning-large",
+        "description": "BLIP — Natural language captions",
+        "type": "blip",
+    },
+    "blip2": {
+        "repo": "Salesforce/blip2-opt-2.7b",
+        "description": "BLIP-2 — Advanced natural language captions",
+        "type": "blip2",
+    },
+}
+
 # ── IP-Adapter ────────────────────────────────────────────────────────
 # Must stay in sync with IP_ADAPTER_TYPES in ip_adapter.py.
 IP_ADAPTER_TYPES: list[str] = ["standard", "plus", "face", "composition", "ilora"]
