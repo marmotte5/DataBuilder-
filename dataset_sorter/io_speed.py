@@ -1013,6 +1013,17 @@ def compute_optimal_workers(
     (important in containers where cpu_count() may be wrong).
     """
     import sys
+    if sys.platform == "win32":
+        # On Windows, PyTorch DataLoader uses the "spawn" start method for
+        # multiprocessing. This requires all code that spawns workers to be
+        # guarded by `if __name__ == '__main__':`. When calling from scripts,
+        # notebooks, or the API without this guard, num_workers > 0 raises:
+        #   "An attempt has been made to start a new process before the current
+        #    process has finished its bootstrapping phase."
+        # The safe fix is to force num_workers=0 (in-process loading) on Windows.
+        # The GUI's QThread workers are already guarded, so this only affects the
+        # CLI/API usage path where spawning is unsafe.
+        return 0
     if sys.platform == "darwin":
         # On macOS, MPS (Metal Performance Shaders) has limitations with
         # PyTorch DataLoader multiprocessing (fork + CUDA context = crash).

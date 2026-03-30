@@ -413,16 +413,19 @@ def auto_enable_speed_optimizations(config, report: IntegrationReport) -> None:
             config.stochastic_rounding = True
             opts.append("Stochastic rounding (bf16 LoRA)")
 
-        # Fused backward for Adafactor on large models
+        # Fused backward for AdamW-family optimizers on large models.
+        # NOTE: FusedBackwardPass only supports AdamW/FusedAdamW/SGD/Adam —
+        # Adafactor is NOT compatible and must not be auto-enabled here.
+        _FUSED_BACKWARD_COMPATIBLE = {"AdamW", "FusedAdamW", "SGD", "Adam"}
         is_large_model = any(
             k in config.model_type for k in ("sdxl", "pony", "flux", "zimage", "sd3")
         )
-        if (config.optimizer == "Adafactor"
+        if (config.optimizer in _FUSED_BACKWARD_COMPATIBLE
                 and is_large_model
                 and config.model_type.endswith("_lora")
                 and not config.fused_backward_pass):
             config.fused_backward_pass = True
-            opts.append("Fused backward pass (Adafactor + large model)")
+            opts.append(f"Fused backward pass ({config.optimizer} + large model)")
 
         # MeBP: enable when gradient checkpointing is off and model is large
         if (not config.gradient_checkpointing

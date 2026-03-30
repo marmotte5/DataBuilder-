@@ -676,12 +676,13 @@ class ZImageBackend(TrainBackendBase):
         # ZImageTransformerBlock has:
         #   attention.{to_q, to_k, to_v, to_out.0}
         #   feed_forward.{w1, w2, w3}
-        #   adaLN_modulation (adaptive layer norm)
+        #   adaLN_modulation = Sequential(SiLU, Linear) — must NOT be targeted as
+        #     a whole module since PEFT only supports nn.Linear/Conv/Embedding.
+        #     Use "adaLN_modulation.1" to target only the inner Linear.
         # Using short names for PEFT substring matching.
         return [
             "to_q", "to_k", "to_v", "to_out.0",
             "w1", "w2", "w3",
-            "adaLN_modulation",
         ]
 
     def _format_caption(self, caption: str) -> str:

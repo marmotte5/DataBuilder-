@@ -118,6 +118,7 @@ def train_lora(
     model_type: str,
     dataset: str | Path,
     output: str | Path = "./output",
+    model_path: str | Path | None = None,
     trigger_word: str = "",
     steps: int = 500,
     lora_rank: int = 8,
@@ -195,21 +196,82 @@ def train_lora(
             progress_callback(step, total, msg)
 
     try:
-        trainer = Trainer(cfg, str(dataset), str(output), str(lora_path))
-        trainer.train(progress_callback=_progress)
-        log.info("Training complete — saved to %s", lora_path)
+        # Scan dataset folder for image/caption pairs
+        _image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
+        _image_paths: list[Path] = sorted(
+            p for p in dataset.iterdir() if p.suffix.lower() in _image_exts
+        )
+        _captions: list[str] = []
+        for img in _image_paths:
+            txt = img.with_suffix(".txt")
+            if txt.exists():
+                raw = txt.read_text(encoding="utf-8", errors="replace").strip()
+                cap = f"{trigger_word}, {raw}" if trigger_word and not raw.startswith(trigger_word) else raw
+            else:
+                cap = trigger_word
+            _captions.append(cap)
+
+        if not _image_paths:
+            raise ValueError(f"No images found in dataset folder: {dataset}")
+
+        log.info("Dataset: %d images found", len(_image_paths))
+
+        # Fix Bug 8: trainer uses min(epochs×steps_per_epoch, max_train_steps) as
+        # the cap — so max_train_steps alone won't run >1 epoch.  When the caller
+        # specifies `steps` as a target count, we must also set `epochs` high enough
+        # that (epochs × steps_per_epoch) ≥ steps.
+        if cfg.max_train_steps > 0 and "epochs" not in extra_config:
+            import math
+            _steps_per_epoch = max(len(_image_paths) // max(batch_size, 1), 1)
+            _needed_epochs = math.ceil(cfg.max_train_steps / _steps_per_epoch)
+            cfg.epochs = max(1, _needed_epochs)
+
+        trainer = Trainer(cfg)
+        trainer.setup(
+            model_path=str(model_path) if model_path else "",
+            image_paths=_image_paths,
+            captions=_captions,
+            output_dir=output,
+            progress_fn=_progress,
+        )
+        trainer.train(progress_fn=_progress)
+
+        # The trainer saves the LoRA to output_dir/checkpoints/final/adapter_model.safetensors
+        # (and models/final/adapter_model.safetensors for export).
+        # Find the actual saved path rather than the pre-computed flat filename.
+        _actual_lora: Path | None = None
+        for _candidate in [
+            output / "models" / "final" / "adapter_model.safetensors",
+            output / "checkpoints" / "final" / "adapter_model.safetensors",
+            lora_path,  # flat path (legacy, may not exist)
+        ]:
+            if _candidate.exists():
+                _actual_lora = _candidate
+                break
+
+        log.info("Training complete — saved to %s", _actual_lora or lora_path)
         return {
             "success": True,
-            "lora_path": str(lora_path) if lora_path.exists() else None,
+            "lora_path": str(_actual_lora) if _actual_lora else None,
             "steps_completed": steps_completed,
             "error": None,
         }
     except Exception as exc:
         log.error("Training failed: %s", exc, exc_info=True)
         last_error = str(exc)
+        # Try to find any partial output even on failure
+        _partial_lora: Path | None = None
+        for _candidate in [
+            output / "models" / "final" / "adapter_model.safetensors",
+            output / "checkpoints" / "final" / "adapter_model.safetensors",
+            lora_path,
+        ]:
+            if _candidate.exists():
+                _partial_lora = _candidate
+                break
         return {
             "success": False,
-            "lora_path": str(lora_path) if lora_path.exists() else None,
+            "lora_path": str(_partial_lora) if _partial_lora else None,
             "steps_completed": steps_completed,
             "error": last_error,
         }
