@@ -1,0 +1,63 @@
+# DataBuilder
+
+> High-performance desktop application for text-to-image AI model training and generation.
+
+DataBuilder covers the full pipeline: dataset preparation, LoRA / full finetune training
+across 17 model architectures, image generation, and model/LoRA library management.
+Built with PyTorch + PyQt6. Targets RTX 4090 / H100 class hardware.
+
+**Goal: be the fastest trainer and generator for text-to-image models.**
+
+- GitHub: https://github.com/marmotte5/DataBuilder-
+- License: MIT
+- Python: 3.10+
+- Install: `pip install "dataset-sorter[all]"`
+- Launch GUI: `dataset-sorter`
+- MCP server: `dataset-sorter-mcp serve-mcp`
+
+## Supported architectures (17)
+
+SD 1.5, SD 2.x, SDXL, Pony Diffusion, SD3, SD 3.5, Flux, Flux 2,
+Z-Image, PixArt Sigma, Kolors, Stable Cascade, Chroma, AuraFlow, Sana,
+Hunyuan DiT, HiDream.
+
+Each architecture supports both LoRA and full finetune training modes.
+Model type keys follow the pattern `{arch}_lora` / `{arch}_full`
+(e.g. `sdxl_lora`, `flux_full`).
+
+## Key capabilities
+
+- Dataset sorting, filtering, and deduplication
+- WD14 and BLIP auto-captioning
+- Multi-aspect bucketing for variable-resolution training
+- 15+ optimizers: Marmotte (custom), Adafactor, AdamW 8-bit, Prodigy, Lion, SOAP, Muon
+- FP8 training, torch.compile, Triton fused kernels, sequence packing
+- Image generation with samplers, CFG, seed, img2img, inpainting
+- LoRA composition (multiple adapters, per-adapter weights)
+- Batch generation from prompt queues, CSV, JSON, TXT
+- A/B comparison of models/LoRAs side-by-side
+- Model merging: weighted sum, SLERP, add-difference
+- Model and LoRA library with favourites, notes, tags, ratings
+- VRAM estimation without GPU
+
+## MCP tools
+
+list_supported_models, estimate_vram, train_lora, generate_image,
+tag_images, analyze_dataset, scan_models.
+
+## Core files
+
+- `dataset_sorter/models.py` — TrainingConfig dataclass (100+ fields)
+- `dataset_sorter/constants.py` — MODEL_TYPES, optimizers, samplers
+- `dataset_sorter/trainer.py` — training orchestrator
+- `dataset_sorter/generate_worker.py` — generation QThread
+- `dataset_sorter/vram_estimator.py` — VRAM estimation (no GPU needed)
+- `dataset_sorter/mcp_server.py` — stdio MCP server
+- `dataset_sorter/cli.py` — CLI entry point
+- `dataset_sorter/train_backend_*.py` — 17 model backends
+- `dataset_sorter/optimizers.py` — Marmotte, SOAP, Muon
+
+## Optional docs
+
+- /AGENTS.md — Full AI agent integration guide (MCP setup, Python API, examples)
+- /CONTRIBUTING.md — Contribution guidelines
