@@ -155,6 +155,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── list-models ───────────────────────────────────────────────────
     sub.add_parser("list-models", help="List all supported model architecture types")
 
+    # ── serve-mcp ─────────────────────────────────────────────────────
+    sub.add_parser("serve-mcp", help="Start the stdio MCP server for AI agent integration")
+
     return parser
 
 
@@ -309,6 +312,15 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
+    def _handle_serve_mcp(_args):
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            stream=sys.stderr,
+        )
+        from dataset_sorter.mcp_server import run_server
+        run_server()
+
     dispatch = {
         "train":            _handle_train,
         "generate":         _handle_generate,
@@ -317,6 +329,7 @@ def main() -> None:
         "analyze-dataset":  _handle_analyze_dataset,
         "list-taggers":     _handle_list_taggers,
         "list-models":      _handle_list_models,
+        "serve-mcp":        _handle_serve_mcp,
     }
 
     handler = dispatch.get(args.command)

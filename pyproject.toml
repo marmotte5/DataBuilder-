@@ -71,6 +71,7 @@ all = [
 [project.scripts]
 dataset-sorter = "dataset_sorter.__main__:main"
 databuilder = "dataset_sorter.cli:main"
+dataset-sorter-mcp = "dataset_sorter.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/marmotte5/DataBuilder-"

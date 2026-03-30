@@ -1116,6 +1116,10 @@ class GenerateWorker(QThread):
         pnginfo.add_text("width", str(_width))
         pnginfo.add_text("height", str(_height))
 
+        # Software attribution fields
+        pnginfo.add_text("Software", "DataBuilder")
+        pnginfo.add_text("Source", "https://github.com/marmotte5/DataBuilder-")
+
         return pnginfo, parameters_str
 
     def _get_pipeline_for_mode(self, pipe_ref, init_img, mask_img):
