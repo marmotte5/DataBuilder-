@@ -206,7 +206,7 @@ class Marmotte(Optimizer):
                 # ── Gradient-norm adaptive scaling ────────────────────
                 grad_rms = grad.norm() / max(math.sqrt(grad.numel()), 1.0)
                 ema = state["grad_rms_ema"]
-                ema.lerp_(grad_rms, 1 - rms_beta)
+                ema.lerp_(grad_rms.float(), 1 - rms_beta)
                 ema_corrected = ema / (1 - rms_beta ** step_num)
                 if ema_corrected > eps:
                     adaptive_scale = (grad_rms / ema_corrected).clamp(0.1, 10.0).item()

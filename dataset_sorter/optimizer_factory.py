@@ -220,15 +220,25 @@ def get_locked_fields(optimizer_name: str) -> dict:
     return {}
 
 
-class _CombinedOptimizer:
+class _CombinedOptimizer(torch.optim.Optimizer):
     """Wraps multiple optimizers so they behave like a single optimizer.
 
     Used for Muon (2D+ params) + AdamW (1D params) combination.
+
+    Inherits torch.optim.Optimizer so that LRScheduler's isinstance check
+    passes. __init__ is bypassed (we set attributes directly) to avoid
+    Optimizer re-processing the already-configured sub-optimizer groups.
     """
 
     def __init__(self, optimizers: list):
         self.optimizers = optimizers
-        # Expose param_groups from all sub-optimizers
+        # torch.optim.Optimizer requires these attributes; set them directly
+        # instead of calling super().__init__() to avoid re-processing groups.
+        self.defaults = {}
+        self._hook_for_profile = None  # used by some PyTorch internals
+        # Collect param_groups from sub-optimizers. PyTorch's add_param_group
+        # appends the same dict object (no copy), so updating lr here updates
+        # the sub-optimizer's group too — the LRScheduler works correctly.
         self.param_groups = []
         for opt in self.optimizers:
             self.param_groups.extend(opt.param_groups)
@@ -306,6 +316,12 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                     f"Prodigy: lr={lr:.2e} — Prodigy estimates the actual learning rate "
                     "internally; recommended starting lr is 1.0 (e.g. learning_rate=1.0)."
                 )
+            # Prodigy requires all parameter groups to have the same initial lr.
+            # When multiple groups exist (e.g. LoRA + text encoder with different LRs),
+            # Prodigy raises RuntimeError at step time. Normalize all groups to `lr`
+            # so Prodigy can estimate the actual learning rate from a consistent base.
+            for g in param_groups:
+                g["lr"] = lr
             return Prodigy(
                 param_groups, lr=lr, weight_decay=config.weight_decay,
                 d_coef=config.prodigy_d_coef,
@@ -347,6 +363,9 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                     f"DAdaptAdam: lr={lr:.2e} — D-Adaptation estimates the step size "
                     "automatically; recommended starting lr is 1.0 (e.g. learning_rate=1.0)."
                 )
+            # DAdaptAdam requires all param groups to have the same initial lr.
+            for g in param_groups:
+                g["lr"] = lr
             return DAdaptAdam(param_groups, lr=lr, weight_decay=config.weight_decay)
         except ImportError:
             log.warning("dadaptation not installed, falling back to AdamW")

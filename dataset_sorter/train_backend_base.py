@@ -493,6 +493,15 @@ class TrainBackendBase(ABC):
         self.unet = get_peft_model(self.unet, lora_config)
         self.unet.train()
 
+        # fp16 mode: GradScaler requires trainable params to be float32.
+        # Cast only LoRA (requires_grad) params; frozen weights stay in fp16.
+        # torch.autocast handles mixed precision in the forward pass.
+        if self.dtype == torch.float16:
+            for param in self.unet.parameters():
+                if param.requires_grad:
+                    param.data = param.data.float()
+            log.info("fp16: LoRA parameters cast to float32 for GradScaler compatibility.")
+
         # Update pipeline reference (handle both UNet and transformer models).
         # Check getattr value, not hasattr, because transformer pipelines
         # define 'unet' as an optional component (exists but is None).

@@ -169,6 +169,17 @@ def train_lora(
 
     model_type_key = f"{model_type}_lora" if network_type == "lora" else f"{model_type}_full"
 
+    # For LoRA training: freeze the text encoder and enable TE output caching.
+    # The default in TrainingConfig is train_text_encoder=True (for full finetune),
+    # but LoRA training should keep the TE frozen and cache its outputs for speed.
+    # Let the caller override via extra_config if needed.
+    lora_te_defaults: dict = {}
+    if network_type == "lora":
+        if "train_text_encoder" not in extra_config:
+            lora_te_defaults["train_text_encoder"] = False
+        if "train_text_encoder_2" not in extra_config:
+            lora_te_defaults["train_text_encoder_2"] = False
+
     cfg = TrainingConfig(
         model_type=model_type_key,
         resolution=resolution,
@@ -179,6 +190,7 @@ def train_lora(
         optimizer=optimizer,
         learning_rate=learning_rate,
         network_type=network_type,
+        **lora_te_defaults,
         **extra_config,
     )
 

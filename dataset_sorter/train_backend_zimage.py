@@ -535,11 +535,37 @@ class ZImageBackend(TrainBackendBase):
         if is_single_file:
             errors = []
 
-            # Strategy 1: Load full Z-Image pipeline from HF and swap
-            # fine-tuned transformer weights from the checkpoint.
-            # This is the most reliable method because it downloads all
-            # components (Qwen3 TE, VAE, scheduler) from the official repo.
-            if not use_quantized_te:
+            # Strategy 1: Manual single-file loading.
+            # Loads the local checkpoint, splits by component prefix, and only
+            # downloads from HF the parts that are missing (typically just the
+            # Qwen3 text encoder and VAE — NOT the transformer, which is in the
+            # local file). This avoids downloading 12+ GB of transformer weights
+            # from HF that we'd just replace with the local checkpoint anyway.
+            # Supports both plain and quantized TE.
+            try:
+                self._load_single_file_manual(model_path)
+                log.info("Z-Image loaded via manual single-file parsing")
+            except Exception as e:
+                errors.append(f"Manual single-file: {e}")
+                log.debug("_load_single_file_manual failed: %s", e)
+
+            # Strategy 2: Try from_single_file pipeline methods (rarely works for
+            # Z-Image's custom architecture but worth trying as a fallback).
+            if pipe is None and self.unet is None and not use_quantized_te:
+                try:
+                    pipe = self._load_single_file_pipeline(model_path)
+                    if pipe is None:
+                        # Manual loading was used; components already set on self
+                        pass
+                except Exception as e:
+                    errors.append(f"Pipeline loading: {e}")
+                    log.debug("_load_single_file_pipeline failed: %s", e)
+
+            # Strategy 3: Load full Z-Image pipeline from HF and swap fine-tuned
+            # transformer weights from the checkpoint. Downloads ALL components
+            # (~20 GB), so this is only used as a last resort when the manual
+            # loader above fails.
+            if pipe is None and self.unet is None and not use_quantized_te:
                 for repo in (self._HF_BASE_REPO, self._HF_TURBO_REPO):
                     try:
                         log.info("Trying base pipeline from %s + weight swap", repo)
@@ -552,28 +578,6 @@ class ZImageBackend(TrainBackendBase):
                     except Exception as e:
                         errors.append(f"Base swap ({repo}): {e}")
                         log.debug("Base swap from %s failed: %s", repo, e)
-
-            # Strategy 2: Try from_single_file methods
-            if pipe is None and not use_quantized_te:
-                try:
-                    pipe = self._load_single_file_pipeline(model_path)
-                    if pipe is None:
-                        # Manual loading was used; components already set on self
-                        pass
-                except Exception as e:
-                    errors.append(f"Pipeline loading: {e}")
-                    log.debug("_load_single_file_pipeline failed: %s", e)
-
-            # Strategy 3: Manual single-file loading (supports quantized TE).
-            # Strategies 1-2 are skipped when use_quantized_te is True, so
-            # this is the only path that handles quantized TE + single file.
-            if pipe is None and self.unet is None:
-                try:
-                    self._load_single_file_manual(model_path)
-                    log.info("Z-Image loaded via manual single-file parsing")
-                except Exception as e:
-                    errors.append(f"Manual single-file: {e}")
-                    log.debug("_load_single_file_manual failed: %s", e)
 
             # If all strategies failed, raise with combined errors
             if pipe is None and self.unet is None:
