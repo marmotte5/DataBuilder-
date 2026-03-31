@@ -116,6 +116,7 @@ class TrainingConfig:
     sdpa: bool = True               # Scaled dot-product attention (PyTorch 2.0+)
     flash_attention: bool = False   # Flash Attention 2
     torch_compile: bool = False     # torch.compile() JIT
+    compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
     cudnn_benchmark: bool = True    # cuDNN auto-tuner
     enable_tf32: bool = False       # TF32 matmul on NVIDIA Ampere+ (faster fp32, no dtype change)
     fp8_base_model: bool = False    # Load base model in fp8 (saves ~50% VRAM)
@@ -213,6 +214,10 @@ class TrainingConfig:
 
     # ── Memory-Mapped Dataset ────────────────────────────────────
     mmap_dataset: bool = False         # Use mmap'd safetensors for zero-copy data loading
+
+    # ── Parallel Caching ─────────────────────────────────────────
+    parallel_caching: bool = False       # Parallelise image loading during latent/TE caching
+    parallel_caching_workers: int = 4   # Number of threads for parallel image pre-loading
 
     # ── Zero-Bottleneck DataLoader ───────────────────────────────
     zero_bottleneck_loader: bool = False  # Replace DataLoader with mmap+pinned+DMA pipeline

@@ -1331,9 +1331,24 @@ class TrainingTabBuildersMixin:
         self.async_opt_check = QCheckBox("Async Optimizer Step (overlap optimizer.step() with next forward)")
         self.async_opt_check.setToolTip("Launches optimizer.step() on a separate CUDA stream, hiding optimizer latency behind compute.")
         g_mem_l.addWidget(self.async_opt_check)
-        self.torch_compile_check = QCheckBox("torch.compile() JIT (20-40% speedup on Ampere+)")
-        self.torch_compile_check.setToolTip("JIT-compile the UNet/transformer. Slow first step, faster after. Requires PyTorch 2.0+.")
+        self.torch_compile_check = QCheckBox("Enable torch.compile")
+        self.torch_compile_check.setToolTip("Compiles model for 20-40% faster training (first epoch slower). Requires PyTorch 2.0+.")
         g_mem_l.addWidget(self.torch_compile_check)
+        _compile_row = QHBoxLayout()
+        _compile_row.addSpacing(20)
+        _compile_row.addWidget(QLabel("Compile mode:"))
+        self.compile_mode_combo = QComboBox()
+        self.compile_mode_combo.addItem("default", "default")
+        self.compile_mode_combo.addItem("reduce-overhead  (lower latency, more VRAM)", "reduce-overhead")
+        self.compile_mode_combo.addItem("max-autotune  (slowest compile, fastest run)", "max-autotune")
+        self.compile_mode_combo.setToolTip(
+            "default: good all-around\n"
+            "reduce-overhead: minimises per-step overhead (extra VRAM)\n"
+            "max-autotune: exhaustive kernel search — very slow first run, best throughput"
+        )
+        _compile_row.addWidget(self.compile_mode_combo)
+        _compile_row.addStretch()
+        g_mem_l.addLayout(_compile_row)
         self.liger_check = QCheckBox("Liger-Kernel Fused Ops (fused LayerNorm, RMSNorm, etc.)")
         self.liger_check.setToolTip("Apply Triton fused kernels from Liger-Kernel for transformer layers.")
         g_mem_l.addWidget(self.liger_check)
@@ -1355,6 +1370,12 @@ class TrainingTabBuildersMixin:
         self.fp8_training_check = QCheckBox("FP8 Training (2x TFLOPS on Ada/Hopper GPUs)")
         self.fp8_training_check.setToolTip("Enable FP8 forward/backward pass. Requires RTX 4090, H100, or newer.")
         g_speed_l.addWidget(self.fp8_training_check)
+        self.parallel_caching_check = QCheckBox("Parallel Caching (multi-threaded image loading during VAE encode)")
+        self.parallel_caching_check.setToolTip(
+            "Pre-load and decode images in background threads while the VAE encodes the current batch.\n"
+            "Reduces CPU↔GPU stalls on large datasets. Safe to enable on any GPU."
+        )
+        g_speed_l.addWidget(self.parallel_caching_check)
         self.zero_bottleneck_check = QCheckBox("Zero-Bottleneck DataLoader (mmap + pinned DMA)")
         self.zero_bottleneck_check.setToolTip("Replace standard DataLoader with mmap+pinned+DMA pipeline. Requires cached latents and TE.")
         g_speed_l.addWidget(self.zero_bottleneck_check)

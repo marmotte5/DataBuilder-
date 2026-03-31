@@ -502,6 +502,26 @@ class Trainer:
                 if active:
                     log.info(f"Z-Image exclusive optimizations: {', '.join(active)}")
 
+        # ── 3e. torch.compile() JIT ──
+        # Must run AFTER all wrappers (fp8, quantize, mebp) and BEFORE TE setup.
+        # fullgraph=False avoids graph breaks that crash on PEFT LoRA dynamic dispatch.
+        if config.torch_compile and self.backend.unet is not None:
+            try:
+                _mode = getattr(config, "compile_mode", "default") or "default"
+                log.info(f"torch.compile: mode={_mode!r} — first step will be slow (JIT warmup)")
+                self.backend.unet = torch.compile(
+                    self.backend.unet,
+                    mode=_mode,
+                    fullgraph=False,
+                )
+                log.info("torch.compile applied to UNet/transformer")
+            except Exception as exc:
+                log.warning(
+                    "torch.compile failed (%s) — continuing without it. "
+                    "Upgrade to PyTorch 2.0+ for JIT support.",
+                    exc,
+                )
+
         # ── 4. Text encoder setup ──
         self.backend.freeze_text_encoders()
         if config.train_text_encoder:
@@ -590,10 +610,12 @@ class Trainer:
             self.state.phase = "caching"
             if progress_fn:
                 progress_fn(2, 8, "Caching VAE latents...")
+            _cache_workers = config.parallel_caching_workers if getattr(config, "parallel_caching", False) else 1
             self.dataset.cache_latents_from_vae(
                 self.backend.vae, self.device, self.backend.vae_dtype,
                 to_disk=config.cache_latents_to_disk,
                 progress_fn=lambda c, t: progress_fn(c, t, f"Caching latents {c}/{t}") if progress_fn else None,
+                num_workers=_cache_workers,
             )
             self.backend.offload_vae()
 

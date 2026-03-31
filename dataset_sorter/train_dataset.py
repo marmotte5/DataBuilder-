@@ -244,7 +244,15 @@ class CachedTrainDataset(Dataset):
         random.shuffle(rest)
         return ", ".join(fixed + rest)
 
-    def cache_latents_from_vae(self, vae, device, dtype, to_disk=False, progress_fn=None):
+    def cache_latents_from_vae(
+        self,
+        vae,
+        device,
+        dtype,
+        to_disk=False,
+        progress_fn=None,
+        num_workers: int = 1,
+    ):
         """Pre-compute and cache VAE latents for all images.
 
         When bucket_assignments are set, each image is resized to its
@@ -257,6 +265,8 @@ class CachedTrainDataset(Dataset):
         - FP16 latent compression (50% RAM/disk savings)
         - Content-based deduplication (skip identical images)
         - Parallel disk cache writes
+        - Parallel image loading (num_workers > 1): ThreadPoolExecutor pre-loads
+          and transforms images while the VAE encodes the previous batch.
         """
         from dataset_sorter.io_speed import (
             fast_decode_image, load_tensor_fast,
@@ -326,28 +336,38 @@ class CachedTrainDataset(Dataset):
         # Filter to_encode: only encode representatives (skip duplicates that will be filled later)
         to_encode_unique = [idx for idx in to_encode if idx_to_rep.get(idx, idx) == idx]
 
-        # Second pass: batch VAE encode, grouped by resolution
-        # Group by resolution since batching requires same-size tensors
+        # Second pass: load + transform images, grouped by resolution.
+        # When num_workers > 1 use a ThreadPoolExecutor to parallelise the
+        # CPU-bound decode+transform work across multiple threads.
         resolution_groups: dict[tuple[int, int], list[tuple[int, torch.Tensor]]] = {}
-        for idx in to_encode_unique:
+
+        def _load_one(idx: int) -> tuple[int, tuple[int, int], torch.Tensor]:
             if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
                 target_w, target_h = self._bucket_assignments[idx]
             else:
                 target_w, target_h = self.resolution, self.resolution
-
             try:
                 img = fast_decode_image(self.image_paths[idx])
             except Exception as e:
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
                 img = Image.new("RGB", (target_w, target_h))
-
             if self._bucket_assignments is not None:
                 t = self._get_transforms_for_resolution(target_w, target_h)
                 pixel_values = t(img).unsqueeze(0)
             else:
                 pixel_values = self._transforms(img).unsqueeze(0)
+            return idx, (target_w, target_h), pixel_values
 
-            resolution_groups.setdefault((target_w, target_h), []).append((idx, pixel_values))
+        if num_workers > 1 and len(to_encode_unique) > 0:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=num_workers) as pool:
+                for idx, res, pixel_values in pool.map(_load_one, to_encode_unique):
+                    resolution_groups.setdefault(res, []).append((idx, pixel_values))
+            log.info(f"Parallel image loading: {len(to_encode_unique)} images with {num_workers} threads")
+        else:
+            for idx in to_encode_unique:
+                idx, res, pixel_values = _load_one(idx)
+                resolution_groups.setdefault(res, []).append((idx, pixel_values))
 
         # Encode each resolution group in batches with dynamic batch sizing.
         # Start with a larger batch and reduce on OOM for maximum throughput.

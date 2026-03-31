@@ -151,6 +151,7 @@ class TrainingConfigIOMixin:
         config.fp8_base_model = self.fp8_check.isChecked()
         config.quantize_text_encoder = self.te_quant_combo.currentData() or "none"
         config.torch_compile = self.torch_compile_check.isChecked()
+        config.compile_mode = self.compile_mode_combo.currentData() or "default"
         config.liger_kernels = self.liger_check.isChecked()
 
         # Extreme Speed
@@ -158,6 +159,7 @@ class TrainingConfigIOMixin:
         config.triton_fused_loss = self.triton_loss_check.isChecked()
         config.triton_fused_flow = self.triton_flow_check.isChecked()
         config.fp8_training = self.fp8_training_check.isChecked()
+        config.parallel_caching = self.parallel_caching_check.isChecked()
         config.zero_bottleneck_loader = self.zero_bottleneck_check.isChecked()
         config.mmap_dataset = self.mmap_dataset_check.isChecked()
         config.sequence_packing = self.sequence_packing_check.isChecked()
@@ -377,6 +379,11 @@ class TrainingConfigIOMixin:
                 self.te_quant_combo.setCurrentIndex(i)
                 break
         self.torch_compile_check.setChecked(config.torch_compile)
+        _cm = getattr(config, "compile_mode", "default")
+        for i in range(self.compile_mode_combo.count()):
+            if self.compile_mode_combo.itemData(i) == _cm:
+                self.compile_mode_combo.setCurrentIndex(i)
+                break
         self.liger_check.setChecked(config.liger_kernels)
 
         # Extreme Speed
@@ -384,6 +391,7 @@ class TrainingConfigIOMixin:
         self.triton_loss_check.setChecked(config.triton_fused_loss)
         self.triton_flow_check.setChecked(config.triton_fused_flow)
         self.fp8_training_check.setChecked(config.fp8_training)
+        self.parallel_caching_check.setChecked(getattr(config, "parallel_caching", False))
         self.zero_bottleneck_check.setChecked(config.zero_bottleneck_loader)
         self.mmap_dataset_check.setChecked(config.mmap_dataset)
         self.sequence_packing_check.setChecked(config.sequence_packing)

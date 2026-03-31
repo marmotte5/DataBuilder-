@@ -343,6 +343,8 @@ class GenerateWorker(QThread):
 
         # Speed optimizations
         self.taylorseer_enabled = False  # TaylorSeer inference cache
+        self.torch_compile_enabled = False  # torch.compile() the transformer/unet
+        self.torch_compile_mode = "default"  # default, reduce-overhead, max-autotune
 
         # Modes
         self._mode = "generate"  # "load" or "generate"
@@ -581,6 +583,24 @@ class GenerateWorker(QThread):
 
             # Apply TaylorSeer cache for DiT models (3-5x inference speedup)
             self._apply_taylorseer(pipe)
+
+            # torch.compile() the transformer/unet for 20-40% faster inference
+            if self.torch_compile_enabled:
+                _model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
+                if _model_component is not None:
+                    try:
+                        _compiled = torch.compile(
+                            _model_component,
+                            mode=self.torch_compile_mode or "default",
+                            fullgraph=False,
+                        )
+                        if hasattr(pipe, "transformer"):
+                            pipe.transformer = _compiled
+                        else:
+                            pipe.unet = _compiled
+                        log.info(f"torch.compile applied to generation pipeline (mode={self.torch_compile_mode!r})")
+                    except Exception as exc:
+                        log.warning("torch.compile on pipeline failed: %s — continuing without it", exc)
 
             self.progress.emit(90, 100, "Finalizing...")
 
