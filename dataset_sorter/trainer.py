@@ -443,15 +443,9 @@ class Trainer:
         self.backend.apply_speed_optimizations()
 
         # ── 3b. FP8 Training (Ada/Hopper GPUs — 2x TFLOPS) ──
-        # FP8 is incompatible with PEFT LoRA: FP8LinearWrapper does not expose
-        # `.weight`, which PEFT's lora/layer.py accesses to cast input dtype.
-        # Disable FP8 when LoRA is active and fall back to bf16 autocast.
-        if config.fp8_training and is_lora:
-            log.warning(
-                "FP8 training is incompatible with LoRA (PEFT FP8LinearWrapper lacks .weight). "
-                "Falling back to bf16 autocast. Use full finetune to enable FP8."
-            )
-            config.fp8_training = False
+        # FP8 + LoRA: FP8TrainingWrapper._setup_manual() wraps only the base_layer
+        # inside each PEFT LoRA layer, leaving lora_A/lora_B as plain nn.Linear.
+        # This lets PEFT's _cast_input_dtype access lora_A.weight normally.
         if config.fp8_training and self.backend.unet is not None:
             from dataset_sorter.fp8_training import FP8TrainingWrapper
             self._fp8_wrapper = FP8TrainingWrapper(
@@ -770,16 +764,25 @@ class Trainer:
 
         # ── 9b. Final fp16 param sweep (GradScaler compatibility) ──
         # GradScaler.unscale_() raises ValueError if any param.grad is float16.
-        # Previous casts (step 3 LoRA, step 5 TE) cover most cases, but some
-        # optimizers (DAdaptAdam, GaLoreAdamW8bit-fallback) may add or expose
-        # additional param groups after construction.  This definitive sweep runs
-        # AFTER the optimizer is built so it catches everything unconditionally.
+        # Two-pass sweep: (A) via optimizer.param_groups (standard path), then
+        # (B) directly over all model parameters that require_grad (catches
+        # optimizers like DAdaptAdam that may not expose all params via groups).
         if self.grad_scaler is not None:
             n_cast = 0
+            # Pass A: optimizer param groups
             for group in self.optimizer.param_groups:
                 for param in group["params"]:
                     if isinstance(param, torch.Tensor) and param.requires_grad \
                             and param.dtype != torch.float32:
+                        param.data = param.data.float()
+                        n_cast += 1
+            # Pass B: direct model parameter sweep (belt-and-suspenders)
+            _be = self.backend
+            for _module in (_be.unet, _be.text_encoder, _be.text_encoder_2):
+                if _module is None:
+                    continue
+                for param in _module.parameters():
+                    if param.requires_grad and param.dtype != torch.float32:
                         param.data = param.data.float()
                         n_cast += 1
             if n_cast:

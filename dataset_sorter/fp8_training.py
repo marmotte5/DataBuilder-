@@ -161,9 +161,9 @@ class FP8LinearWrapper(nn.Module):
         self.name = name
         self._has_scaled_mm = hasattr(torch, '_scaled_mm')
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         if not self._has_scaled_mm or not _FP8_DTYPES_AVAILABLE or not x.is_cuda:
-            return self.linear(x)
+            return self.linear(x, *args, **kwargs)
 
         try:
             # torch._scaled_mm requires 2D inputs. Transformer layers pass
@@ -212,7 +212,7 @@ class FP8LinearWrapper(nn.Module):
         except (RuntimeError, TypeError):
             # Fallback for unsupported shapes or hardware — use the saved
             # original input, not the potentially mutated/quantized `x`.
-            return self.linear(x_orig)
+            return self.linear(x_orig, *args, **kwargs)
 
 
 class FP8TrainingWrapper:
@@ -263,35 +263,68 @@ class FP8TrainingWrapper:
         return self.model
 
     def _setup_manual(self) -> nn.Module:
-        """Replace Linear layers in attention/FF blocks with FP8 versions."""
+        """Replace Linear layers in attention/FF blocks with FP8 versions.
+
+        When PEFT LoRA is active, only the base_layer inside each LoRA layer is
+        wrapped with FP8 — lora_A/lora_B stay as plain nn.Linear so that PEFT
+        can still access lora_A.weight.dtype without AttributeError.
+
+        For full-finetune (no LoRA), every matching nn.Linear is wrapped directly.
+        """
         converted = 0
+
+        # Try to import PEFT LoRA layer type for smart base_layer wrapping.
+        _LoraLayer = None
+        try:
+            from peft.tuners.lora import LoraLayer as _LoraLayerCls
+            _LoraLayer = _LoraLayerCls
+        except ImportError:
+            pass
+
+        _TARGET_PATTERNS = (
+            "to_q", "to_k", "to_v", "to_out", "ff.", "mlp.",
+            "proj_in", "proj_out", "linear1", "linear2",
+            "attn.qkv", "attn.proj",
+        )
         # Snapshot the module list first — mutating the tree during
         # named_modules() iteration can skip or double-wrap layers.
         all_modules = list(self.model.named_modules())
         module_dict = dict(all_modules)
+
         for name, module in all_modules:
-            # Only convert attention projection and feedforward layers
-            # (these are the compute-bound matmuls that benefit from FP8)
-            if isinstance(module, nn.Linear):
+            # ── LoRA path: wrap only the base_layer inside each LoRA Linear ──
+            # This preserves lora_A/lora_B as plain nn.Linear so PEFT's
+            # _cast_input_dtype can access lora_A.weight.dtype normally.
+            if _LoraLayer is not None and isinstance(module, _LoraLayer):
+                if not any(pat in name.lower() for pat in _TARGET_PATTERNS):
+                    continue
+                base = getattr(module, "base_layer", None)
+                if isinstance(base, nn.Linear) and not isinstance(base, FP8LinearWrapper):
+                    module.base_layer = FP8LinearWrapper(
+                        base, self._scaling_tracker, name=f"{name}.base",
+                    )
+                    converted += 1
+                continue
+
+            # ── Full-finetune path: wrap nn.Linear directly ──
+            if isinstance(module, nn.Linear) and not isinstance(module, FP8LinearWrapper):
+                # Skip LoRA adapter sub-modules (lora_A, lora_B, etc.) so they
+                # remain as plain nn.Linear even if named_modules lists them.
+                if any(lk in name for lk in ("lora_A.", "lora_B.", "lora_embedding")):
+                    continue
+                if not any(pat in name.lower() for pat in _TARGET_PATTERNS):
+                    continue
                 parent_name = name.rsplit(".", 1)[0] if "." in name else ""
                 attr_name = name.rsplit(".", 1)[-1] if "." in name else name
                 parent = module_dict.get(parent_name, self.model)
-
-                # Target attention projections and FF layers
-                if any(pat in name.lower() for pat in
-                       ("to_q", "to_k", "to_v", "to_out", "ff.", "mlp.",
-                        "proj_in", "proj_out", "linear1", "linear2",
-                        "attn.qkv", "attn.proj")):
-                    wrapper = FP8LinearWrapper(
-                        module, self._scaling_tracker, name=name,
-                    )
-                    setattr(parent, attr_name, wrapper)
-                    converted += 1
+                wrapper = FP8LinearWrapper(module, self._scaling_tracker, name=name)
+                setattr(parent, attr_name, wrapper)
+                converted += 1
 
         self._converted = converted > 0
         self._converted_count = converted
         if converted > 0:
-            log.info(f"FP8 training: converted {converted} Linear layers to FP8")
+            log.info("FP8 training: converted %d Linear layers to FP8 (LoRA base_layers only)", converted)
         else:
             log.warning("FP8 training: no compatible Linear layers found")
 
