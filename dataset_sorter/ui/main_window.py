@@ -957,16 +957,16 @@ class MainWindow(QMainWindow):
     # ── Footer navigation ──────────────────────────────────────────────────
 
     def _update_footer_nav_buttons(self):
-        """Enable/disable Back and Next footer buttons based on current nav."""
+        """Show/hide and enable/disable Back and Next footer buttons based on current nav."""
         stepper_order = ["dataset", "train", "generate"]
         cur = self._current_nav
-        if cur in stepper_order:
+        on_stepper = cur in stepper_order
+        self.btn_footer_back.setVisible(on_stepper)
+        self.btn_footer_next.setVisible(on_stepper)
+        if on_stepper:
             idx = stepper_order.index(cur)
             self.btn_footer_back.setEnabled(idx > 0)
             self.btn_footer_next.setEnabled(idx < len(stepper_order) - 1)
-        else:
-            self.btn_footer_back.setEnabled(False)
-            self.btn_footer_next.setEnabled(False)
 
     def _nav_back(self):
         """Navigate to the previous main workflow step."""

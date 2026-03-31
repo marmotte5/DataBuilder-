@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QTextEdit, QScrollArea, QFrame,
 )
 
+from dataset_sorter.ui.theme import COLORS
 from dataset_sorter.constants import (
     MODEL_TYPE_LABELS, MODEL_TYPE_KEYS, VRAM_TIERS,
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
@@ -23,6 +24,22 @@ from dataset_sorter.training_presets import (
     CHECKPOINT_GRANULARITY, CUSTOM_SCHEDULES,
 )
 from dataset_sorter.optimizer_factory import get_optimizer_defaults, get_locked_fields
+
+
+def _param_label(text: str, hint: str) -> QWidget:
+    """Return a QWidget with a parameter name and a small grey hint below."""
+    w = QWidget()
+    vb = QVBoxLayout(w)
+    vb.setContentsMargins(0, 1, 0, 1)
+    vb.setSpacing(0)
+    lbl = QLabel(text)
+    sub = QLabel(hint)
+    sub.setStyleSheet(
+        f"color: {COLORS['text_secondary']}; font-size: 10px; background: transparent;"
+    )
+    vb.addWidget(lbl)
+    vb.addWidget(sub)
+    return w
 
 
 class TrainingTabBuildersMixin:
@@ -86,7 +103,7 @@ class TrainingTabBuildersMixin:
         self.train_network_combo.setToolTip("LoRA variant. Standard LoRA is recommended; LoCon adds conv layers.")
         g2l.addWidget(self.train_network_combo, 0, 1)
 
-        g2l.addWidget(QLabel("Rank"), 1, 0)
+        g2l.addWidget(_param_label("Rank", "Network complexity (16-64 typical)"), 1, 0)
         self.rank_spin = QSpinBox()
         self.rank_spin.setRange(1, 256)
         self.rank_spin.setValue(32)
@@ -788,7 +805,7 @@ class TrainingTabBuildersMixin:
         self.train_optimizer_combo.setToolTip("Optimizer algorithm. Adafactor is memory-efficient; AdamW8bit for speed; Prodigy for auto-LR.")
         g1l.addWidget(self.train_optimizer_combo, 0, 1)
 
-        g1l.addWidget(QLabel("Learning Rate"), 1, 0)
+        g1l.addWidget(_param_label("Learning Rate", "Too high = unstable, too low = slow"), 1, 0)
         self.lr_spin = QDoubleSpinBox()
         self.lr_spin.setRange(1e-8, 10.0)
         self.lr_spin.setDecimals(8)
@@ -797,7 +814,7 @@ class TrainingTabBuildersMixin:
         self.lr_spin.setToolTip("UNet/LoRA learning rate. 1e-4 for LoRA, 1e-6 for full finetune. Use 1.0 for Prodigy.")
         g1l.addWidget(self.lr_spin, 1, 1)
 
-        g1l.addWidget(QLabel("TE Learning Rate"), 2, 0)
+        g1l.addWidget(_param_label("TE Learning Rate", "0 = freeze text encoder"), 2, 0)
         self.te_lr_spin = QDoubleSpinBox()
         self.te_lr_spin.setRange(0, 10.0)
         self.te_lr_spin.setDecimals(8)
@@ -835,7 +852,7 @@ class TrainingTabBuildersMixin:
         self.scheduler_combo.setToolTip("LR schedule. Cosine is standard. Use constant_with_warmup for Prodigy.")
         g2l.addWidget(self.scheduler_combo, 0, 1)
 
-        g2l.addWidget(QLabel("Warmup Steps"), 1, 0)
+        g2l.addWidget(_param_label("Warmup Steps", "Gradual LR ramp-up at start"), 1, 0)
         self.warmup_spin = QSpinBox()
         self.warmup_spin.setRange(0, 10000)
         self.warmup_spin.setValue(100)
@@ -857,7 +874,7 @@ class TrainingTabBuildersMixin:
         # Batch & Epochs
         g3 = self._group("Batch & Epochs")
         g3l = QGridLayout()
-        g3l.addWidget(QLabel("Batch Size"), 0, 0)
+        g3l.addWidget(_param_label("Batch Size", "Higher = faster but more VRAM"), 0, 0)
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 64)
         self.batch_spin.setValue(2)
@@ -871,7 +888,7 @@ class TrainingTabBuildersMixin:
         self.grad_accum_spin.setToolTip("Accumulate gradients over N steps before updating. Effective batch = batch_size x this.")
         g3l.addWidget(self.grad_accum_spin, 1, 1)
 
-        g3l.addWidget(QLabel("Epochs"), 2, 0)
+        g3l.addWidget(_param_label("Epochs", "Full passes through dataset"), 2, 0)
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 1000)
         self.epochs_spin.setValue(10)

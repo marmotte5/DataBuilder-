@@ -34,6 +34,24 @@ from dataset_sorter.ui.theme import (
 from dataset_sorter.ui.toast import show_toast
 
 
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _param_label(text: str, hint: str) -> QWidget:
+    """Return a QWidget with a bold parameter name and a small grey hint below."""
+    w = QWidget()
+    vb = QVBoxLayout(w)
+    vb.setContentsMargins(0, 1, 0, 1)
+    vb.setSpacing(0)
+    lbl = QLabel(text)
+    sub = QLabel(hint)
+    sub.setStyleSheet(
+        f"color: {COLORS['text_secondary']}; font-size: 10px; background: transparent;"
+    )
+    vb.addWidget(lbl)
+    vb.addWidget(sub)
+    return w
+
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 def _flat_resolutions() -> list[tuple[int, int]]:
@@ -211,6 +229,12 @@ class GenerateTab(QWidget):
         btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
+        self._lbl_model_status = QLabel("No model")
+        self._lbl_model_status.setStyleSheet(
+            f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
+        )
+        mg.addWidget(self._lbl_model_status, 0, 4)
+        self.model_path_edit.textChanged.connect(self._update_model_status)
 
         mg.addWidget(QLabel("Model type:"), 1, 0)
         self.model_type_combo = QComboBox()
@@ -302,7 +326,7 @@ class GenerateTab(QWidget):
         params.setSpacing(6)
 
         # Sampler / Scheduler
-        self._lbl_sampler = QLabel("Sampler:")
+        self._lbl_sampler = _param_label("Sampler", "Diffusion algorithm")
         params.addWidget(self._lbl_sampler, 0, 0)
         self.scheduler_combo = QComboBox()
         self.scheduler_combo.setToolTip("Diffusion sampling algorithm (Euler A is a good default)")
@@ -311,7 +335,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.scheduler_combo, 0, 1)
 
         # Steps
-        params.addWidget(QLabel("Steps:"), 0, 2)
+        params.addWidget(_param_label("Steps", "Denoising iterations"), 0, 2)
         self.steps_spin = QSpinBox()
         self.steps_spin.setRange(1, 200)
         self.steps_spin.setValue(28)
@@ -319,7 +343,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.steps_spin, 0, 3)
 
         # CFG Scale
-        self._lbl_cfg = QLabel("CFG Scale:")
+        self._lbl_cfg = _param_label("CFG Scale", "Prompt adherence")
         params.addWidget(self._lbl_cfg, 1, 0)
         self.cfg_spin = QDoubleSpinBox()
         self.cfg_spin.setRange(1.0, 30.0)
@@ -329,7 +353,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.cfg_spin, 1, 1)
 
         # Seed
-        params.addWidget(QLabel("Seed:"), 1, 2)
+        params.addWidget(_param_label("Seed", "−1 = random each time"), 1, 2)
         seed_row = QHBoxLayout()
         self.seed_spin = QSpinBox()
         self.seed_spin.setRange(-1, 2147483647)
@@ -349,7 +373,7 @@ class GenerateTab(QWidget):
         params.addLayout(seed_row, 1, 3)
 
         # Resolution
-        params.addWidget(QLabel("Resolution:"), 2, 0)
+        params.addWidget(_param_label("Resolution", "Output dimensions"), 2, 0)
         self.resolution_combo = QComboBox()
         self.resolution_combo.setToolTip(
             "Output image resolution preset — updates when model type changes"
@@ -358,7 +382,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.resolution_combo, 2, 1)
 
         # Clip skip
-        self._lbl_clip_skip = QLabel("Clip skip:")
+        self._lbl_clip_skip = _param_label("Clip skip", "CLIP layer bypass")
         params.addWidget(self._lbl_clip_skip, 2, 2)
         self.clip_skip_spin = QSpinBox()
         self.clip_skip_spin.setRange(0, 4)
@@ -367,7 +391,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.clip_skip_spin, 2, 3)
 
         # Batch count
-        params.addWidget(QLabel("Batch count:"), 3, 0)
+        params.addWidget(_param_label("Batch count", "Images per run"), 3, 0)
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 100)
         self.batch_spin.setValue(1)
@@ -375,7 +399,7 @@ class GenerateTab(QWidget):
         params.addWidget(self.batch_spin, 3, 1)
 
         # Custom resolution
-        self._lbl_custom_w = QLabel("Custom W:")
+        self._lbl_custom_w = _param_label("Custom W", "Override width (px)")
         params.addWidget(self._lbl_custom_w, 3, 2)
         self.custom_w_spin = QSpinBox()
         self.custom_w_spin.setRange(0, 4096)
@@ -385,7 +409,7 @@ class GenerateTab(QWidget):
         self.custom_w_spin.setToolTip("0 = use preset above. Set both W and H to override.")
         params.addWidget(self.custom_w_spin, 3, 3)
 
-        self._lbl_custom_h = QLabel("Custom H:")
+        self._lbl_custom_h = _param_label("Custom H", "Override height (px)")
         params.addWidget(self._lbl_custom_h, 4, 2)
         self.custom_h_spin = QSpinBox()
         self.custom_h_spin.setRange(0, 4096)
@@ -730,6 +754,19 @@ class GenerateTab(QWidget):
         return str(save_path)
 
     # ── Model loading ───────────────────────────────────────────────────
+
+    def _update_model_status(self, text: str) -> None:
+        """Update the model path validation indicator."""
+        if text.strip():
+            self._lbl_model_status.setText("✓")
+            self._lbl_model_status.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 10px; font-weight: 600; background: transparent;"
+            )
+        else:
+            self._lbl_model_status.setText("No model")
+            self._lbl_model_status.setStyleSheet(
+                f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
+            )
 
     def _browse_model(self):
         """Open a file-or-folder dialog to select a base model path."""
