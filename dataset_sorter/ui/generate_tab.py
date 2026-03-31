@@ -16,14 +16,14 @@ from datetime import datetime
 
 from PIL import Image as PILImage
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QStringListModel
 from PyQt6.QtGui import QFont, QPixmap, QImage
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
     QTextEdit, QFileDialog, QGroupBox, QCheckBox,
     QScrollArea, QFrame, QProgressBar, QSplitter,
-    QToolButton,
+    QToolButton, QCompleter,
 )
 
 from dataset_sorter.constants import RESOLUTION_PRESETS, RESOLUTION_LABELS, MODEL_RESOLUTION_FAMILY
@@ -193,8 +193,10 @@ class GenerateTab(QWidget):
         self._generated_images: list = []  # [(PIL.Image, info_str)]
         self._max_gallery_images = 200  # Cap to prevent unbounded memory growth
         self._current_gallery_idx = 0
+        self._scan_worker_gen: QThread | None = None
         self._build_ui()
         self._connect_signals()
+        QTimer.singleShot(2000, self._start_model_scan)
 
     # ── UI Construction ─────────────────────────────────────────────────
 
@@ -224,16 +226,26 @@ class GenerateTab(QWidget):
         self.model_path_edit = QLineEdit()
         self.model_path_edit.setPlaceholderText("HuggingFace ID or local path...")
         self.model_path_edit.setToolTip("HuggingFace model ID or path to a local model file/folder")
+        self._gen_model_completer = QCompleter([], self)
+        self._gen_model_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._gen_model_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._gen_model_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.model_path_edit.setCompleter(self._gen_model_completer)
         mg.addWidget(self.model_path_edit, 0, 1, 1, 2)
         btn_browse_model = QPushButton("Browse")
         btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
+        self._btn_scan_gen = QPushButton("⟳")
+        self._btn_scan_gen.setFixedWidth(28)
+        self._btn_scan_gen.setToolTip("Scan for local model files")
+        self._btn_scan_gen.clicked.connect(self._start_model_scan)
+        mg.addWidget(self._btn_scan_gen, 0, 4)
         self._lbl_model_status = QLabel("No model")
         self._lbl_model_status.setStyleSheet(
             f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
         )
-        mg.addWidget(self._lbl_model_status, 0, 4)
+        mg.addWidget(self._lbl_model_status, 0, 5)
         self.model_path_edit.textChanged.connect(self._update_model_status)
 
         mg.addWidget(QLabel("Model type:"), 1, 0)
@@ -779,6 +791,44 @@ class GenerateTab(QWidget):
             path = QFileDialog.getExistingDirectory(self, "Select model directory")
         if path:
             self.model_path_edit.setText(path)
+
+    def _start_model_scan(self):
+        """Background scan for local model files to populate the autocompleter."""
+        if self._scan_worker_gen is not None and self._scan_worker_gen.isRunning():
+            return
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            scan_dirs = settings.model_scan_dirs or []
+        except Exception:
+            scan_dirs = []
+        if not scan_dirs:
+            return
+
+        class _ScanThread(QThread):
+            scan_done = pyqtSignal(list)
+            def __init__(self, dirs, parent=None):
+                super().__init__(parent)
+                self._dirs = dirs
+            def run(self):
+                from dataset_sorter.model_scanner import scan_models
+                from pathlib import Path
+                results = scan_models([Path(d) for d in self._dirs], max_total=400)
+                self.scan_done.emit(results)
+
+        self._btn_scan_gen.setText("…")
+        self._btn_scan_gen.setEnabled(False)
+        self._scan_worker_gen = _ScanThread(scan_dirs, parent=self)
+        self._scan_worker_gen.scan_done.connect(self._on_gen_models_scanned)
+        self._scan_worker_gen.start()
+
+    def _on_gen_models_scanned(self, models: list):
+        """Populate the model completer from scan results."""
+        paths = [str(m.path) for m in models]
+        self._gen_model_completer.setModel(QStringListModel(paths, self))
+        self._btn_scan_gen.setText("⟳")
+        self._btn_scan_gen.setEnabled(True)
+        self._scan_worker_gen = None
 
     def _on_load_model(self):
         """Validate inputs and launch the background model-loading worker."""

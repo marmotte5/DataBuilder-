@@ -63,6 +63,16 @@ class AppSettings:
         )
     )
 
+    # ── Model scan directories ─────────────────────────────────────────
+    # Scanned at startup for .safetensors / .ckpt files to populate model
+    # path autocompleters in the training and generation tabs.
+    model_scan_dirs: list[str] = field(default_factory=lambda: [
+        str(Path("H:/modèles")),
+        str(Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))),
+    ])
+    # LoRA output dirs to scan (added automatically when a training completes)
+    lora_scan_dirs: list[str] = field(default_factory=list)
+
     # ── Recent projects ────────────────────────────────────────────────
     recent_projects: list[str] = field(default_factory=list)
 
@@ -155,4 +165,8 @@ class AppSettings:
             settings.recent_projects = [str(p) for p in d["recent_projects"]][:_MAX_RECENT]
         if "ui_preferences" in d and isinstance(d["ui_preferences"], dict):
             settings.ui_preferences = d["ui_preferences"]
+        if "model_scan_dirs" in d and isinstance(d["model_scan_dirs"], list):
+            settings.model_scan_dirs = [str(p) for p in d["model_scan_dirs"]]
+        if "lora_scan_dirs" in d and isinstance(d["lora_scan_dirs"], list):
+            settings.lora_scan_dirs = [str(p) for p in d["lora_scan_dirs"]]
         return settings

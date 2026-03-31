@@ -15,14 +15,15 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer, QThread
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QFileDialog, QGroupBox, QTabWidget,
     QProgressBar, QSplitter, QMessageBox, QTextEdit, QLineEdit,
-    QFrame,
+    QFrame, QCompleter,
 )
+from PyQt6.QtCore import QStringListModel
 
 from dataset_sorter.models import ImageEntry
 from dataset_sorter.ui.theme import (
@@ -169,6 +170,111 @@ def _gpu_status_text() -> str:
         return "GPU: Detection failed (torch not installed?)"
 
 
+# ── VRAM estimation tables ───────────────────────────────────────────────────
+
+# Base VRAM needed (GB) per architecture for LoRA training (rough lower-bound)
+_VRAM_BASE_GB: dict[str, float] = {
+    "sd15_lora":     3.5,
+    "sd2_lora":      4.5,
+    "sdxl_lora":     6.0,
+    "pony_lora":     6.0,
+    "sd3_lora":      9.0,
+    "sd35_lora":     9.0,
+    "flux_lora":    11.0,
+    "flux2_lora":   14.0,
+    "zimage_lora":  16.0,
+    "hidream_lora": 20.0,
+    "sd15_full":     6.0,
+    "sd2_full":      7.0,
+    "sdxl_full":    14.0,
+    "pony_full":    14.0,
+    "sd3_full":     16.0,
+    "sd35_full":    16.0,
+    "flux_full":    20.0,
+    "flux2_full":   22.0,
+    "zimage_full":  24.0,
+    "hidream_full": 28.0,
+}
+_VRAM_BASE_DEFAULT_GB = 8.0
+
+# Approximate seconds per step by base architecture
+_STEP_TIME_S: dict[str, float] = {
+    "sd15":    0.3,
+    "sd2":     0.4,
+    "sdxl":    0.7,
+    "pony":    0.7,
+    "sd3":     1.2,
+    "sd35":    1.2,
+    "flux":    2.0,
+    "flux2":   2.5,
+    "zimage":  3.0,
+    "hidream": 3.5,
+    "pixart":  1.5,
+    "cascade": 1.0,
+    "hunyuan": 1.0,
+    "kolors":  0.8,
+    "auraflow":1.0,
+    "sana":    1.2,
+    "chroma":  1.5,
+}
+_STEP_TIME_DEFAULT_S = 1.0
+
+
+def _estimate_vram(
+    model_type: str,  # e.g. "sdxl_lora"
+    batch_size: int,
+    resolution: int,
+    mixed_precision: str,  # "bf16", "fp16", "fp32", "no"
+    gradient_checkpointing: bool,
+    fp8_base: bool,
+) -> float:
+    """Rough VRAM estimate in GB."""
+    base = _VRAM_BASE_GB.get(model_type, _VRAM_BASE_DEFAULT_GB)
+    # Activation VRAM scales with batch × (res/512)²
+    act = batch_size * (resolution / 512) ** 2 * 0.4
+    total = base + act
+    # Precision multiplier
+    if fp8_base:
+        total *= 0.6
+    elif mixed_precision in ("fp32", "no"):
+        total *= 2.0
+    # Gradient checkpointing saves ~33%
+    if gradient_checkpointing:
+        total *= 0.68
+    return round(total, 1)
+
+
+def _estimate_time(model_type: str, total_steps: int) -> str:
+    """Rough human-readable time estimate for total_steps."""
+    arch = model_type.replace("_lora", "").replace("_full", "")
+    sps = _STEP_TIME_S.get(arch, _STEP_TIME_DEFAULT_S)
+    seconds = total_steps * sps
+    if seconds < 60:
+        return f"~{int(seconds)}s"
+    if seconds < 3600:
+        return f"~{int(seconds / 60)}min"
+    return f"~{seconds / 3600:.1f}h"
+
+
+# ── Background model scanner ─────────────────────────────────────────────────
+
+class _ModelScanWorker(QThread):
+    """Background thread that scans configured dirs for model files."""
+
+    scan_done = pyqtSignal(list)  # list[ModelInfo]
+
+    def __init__(self, scan_dirs: list, parent=None):
+        super().__init__(parent)
+        self._scan_dirs = scan_dirs
+
+    def run(self):
+        from dataset_sorter.model_scanner import scan_models
+        from pathlib import Path
+        dirs = [Path(d) for d in self._scan_dirs if d]
+        results = scan_models(dirs, max_total=400)
+        self.scan_done.emit(results)
+
+
 class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     """Full training configuration and execution tab."""
 
@@ -182,6 +288,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         super().__init__(parent)
         self._training_worker = None
         self._loss_history: list[tuple[int, float]] = []
+        self._scan_worker: _ModelScanWorker | None = None
+        self._scanned_models: list = []  # list[ModelInfo]
         self._build_ui()
         self._restore_autosave()
 
@@ -189,6 +297,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._autosave_timer.setInterval(30_000)  # 30 s
         self._autosave_timer.timeout.connect(self._do_autosave)
         self._autosave_timer.start()
+
+        # Kick off async model scan after a short delay (avoids blocking startup)
+        QTimer.singleShot(1500, self._start_model_scan)
 
     def _build_ui(self):
         """Construct the full training tab layout: paths, presets, config tabs, log, and controls."""
@@ -209,11 +320,30 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.model_path_input.setPlaceholderText("Path to .safetensors / HuggingFace model ID...")
         self.model_path_input.setToolTip("Local path to a .safetensors/.ckpt file or a HuggingFace model ID")
         self.base_model_edit = self.model_path_input  # Alias for library tab integration
+        # Auto-completer — populated after background scan
+        self._model_completer = QCompleter([], self)
+        self._model_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._model_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._model_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.model_path_input.setCompleter(self._model_completer)
         paths_grid.addWidget(self.model_path_input, 0, 1)
+        _model_btn_widget = QWidget()
+        _model_btn_layout = QHBoxLayout(_model_btn_widget)
+        _model_btn_layout.setContentsMargins(0, 0, 0, 0)
+        _model_btn_layout.setSpacing(4)
         btn_model = QPushButton("Browse")
         btn_model.setToolTip("Browse for a base model file")
         btn_model.clicked.connect(self._browse_model)
-        paths_grid.addWidget(btn_model, 0, 2)
+        _model_btn_layout.addWidget(btn_model)
+        self._btn_scan_models = QPushButton("⟳")
+        self._btn_scan_models.setToolTip(
+            "Scan configured directories for local model files.\n"
+            "Configure scan paths in Settings → Model Scan Dirs."
+        )
+        self._btn_scan_models.setFixedWidth(28)
+        self._btn_scan_models.clicked.connect(self._start_model_scan)
+        _model_btn_layout.addWidget(self._btn_scan_models)
+        paths_grid.addWidget(_model_btn_widget, 0, 2)
 
         paths_grid.addWidget(self._muted("Output Dir"), 1, 0)
         self.output_dir_input = QLineEdit()
@@ -253,6 +383,35 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.output_dir_input.textChanged.connect(self._auto_detect_resume_checkpoint)
 
         main_layout.addLayout(paths_grid)
+
+        # ── Resume banner (Feature 3) ──────────────────────────────────
+        self._resume_banner = QFrame()
+        self._resume_banner.setFrameShape(QFrame.Shape.StyledPanel)
+        self._resume_banner.setStyleSheet(
+            f"QFrame {{ background-color: {COLORS['accent']}22; "
+            f"border: 1px solid {COLORS['accent']}; border-radius: 6px; padding: 4px; }}"
+        )
+        self._resume_banner.setVisible(False)
+        _rb_layout = QHBoxLayout(self._resume_banner)
+        _rb_layout.setContentsMargins(8, 4, 8, 4)
+        _rb_layout.setSpacing(8)
+        self._resume_banner_label = QLabel()
+        self._resume_banner_label.setStyleSheet(
+            f"color: {COLORS['text']}; font-weight: 600; background: transparent;"
+        )
+        _rb_layout.addWidget(self._resume_banner_label, 1)
+        _btn_resume_yes = QPushButton("Resume Training")
+        _btn_resume_yes.setStyleSheet(ACCENT_BUTTON_STYLE)
+        _btn_resume_yes.setToolTip("Fill resume-from path and restore last session")
+        _btn_resume_yes.clicked.connect(self._accept_resume_banner)
+        _rb_layout.addWidget(_btn_resume_yes)
+        _btn_resume_no = QPushButton("Start Fresh")
+        _btn_resume_no.setToolTip("Ignore the saved checkpoint and start a new training run")
+        _btn_resume_no.clicked.connect(self._decline_resume_banner)
+        _rb_layout.addWidget(_btn_resume_no)
+        main_layout.addWidget(self._resume_banner)
+        # Store checkpoint path for the banner action
+        self._resume_banner_checkpoint: Path | None = None
 
         # Training presets
         preset_row = QHBoxLayout()
@@ -540,6 +699,37 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         ep_layout.addWidget(self._error_traceback)
         main_layout.addWidget(self._error_panel)
 
+        # ── VRAM / Time estimator (Feature 2) ────────────────────────
+        self._vram_est_frame = QFrame()
+        self._vram_est_frame.setStyleSheet(
+            f"QFrame {{ background-color: {COLORS['surface']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; "
+            f"padding: 2px; }}"
+        )
+        _ve_row = QHBoxLayout(self._vram_est_frame)
+        _ve_row.setContentsMargins(10, 4, 10, 4)
+        _ve_row.setSpacing(16)
+        _ve_title = QLabel("Estimate:")
+        _ve_title.setStyleSheet(MUTED_LABEL_STYLE)
+        _ve_row.addWidget(_ve_title)
+        self._vram_est_label = QLabel("—")
+        self._vram_est_label.setStyleSheet(
+            f"color: {COLORS['text']}; font-weight: 600; background: transparent;"
+        )
+        _ve_row.addWidget(self._vram_est_label)
+        self._time_est_label = QLabel("")
+        self._time_est_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; background: transparent;"
+        )
+        _ve_row.addWidget(self._time_est_label)
+        _ve_row.addStretch()
+        self._vram_warning_label = QLabel("")
+        self._vram_warning_label.setStyleSheet(
+            f"color: {COLORS.get('danger', '#f87171')}; font-weight: 600; background: transparent;"
+        )
+        _ve_row.addWidget(self._vram_warning_label)
+        main_layout.addWidget(self._vram_est_frame)
+
         # Bottom row 1: mid-training actions
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -602,6 +792,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_row.addWidget(self.btn_train)
 
         main_layout.addLayout(btn_row)
+
+        # Wire up VRAM estimator to config widgets (all widgets built by now)
+        QTimer.singleShot(0, self.connect_vram_estimator)
 
     # ── Helpers ────────────────────────────────────────────────────────
 
@@ -680,20 +873,171 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self.resume_from_input.setText(path)
 
     def _auto_detect_resume_checkpoint(self, output_dir_text: str):
-        """Auto-fill the resume-from field with the latest resumable checkpoint."""
-        # Only auto-fill if the field is empty (don't overwrite a user's choice)
-        if self.resume_from_input.text().strip():
-            return
+        """Auto-fill the resume-from field and show resume banner when a checkpoint is found."""
         output_dir = output_dir_text.strip()
         if not output_dir:
+            self._resume_banner.setVisible(False)
             return
         try:
-            from dataset_sorter.training_state_manager import TrainingStateManager
+            from dataset_sorter.training_state_manager import (
+                TrainingStateManager, read_checkpoint_metadata,
+            )
             latest = TrainingStateManager.get_latest_resumable_checkpoint(Path(output_dir))
-            if latest is not None:
+            if latest is None:
+                self._resume_banner.setVisible(False)
+                return
+
+            # Read step count from metadata
+            meta = read_checkpoint_metadata(latest)
+            step = meta.get("global_step", "?") if meta else "?"
+            total = meta.get("total_steps", 0) if meta else 0
+            ts = meta.get("timestamp", "") if meta else ""
+            ts_short = ts[:16] if ts else ""
+            pct = f" ({int(step / total * 100)}%)" if total and isinstance(step, int) else ""
+
+            # Show banner — let user decide what to do
+            self._resume_banner_checkpoint = latest
+            self._resume_banner_label.setText(
+                f"Interrupted training found — step {step}{pct}"
+                + (f"  [{ts_short}]" if ts_short else "")
+                + f"  ({latest.name})"
+            )
+            self._resume_banner.setVisible(True)
+
+            # Also auto-fill the field if it's empty
+            if not self.resume_from_input.text().strip():
                 self.resume_from_input.setText(str(latest))
         except Exception as e:
             log.debug("Could not detect latest checkpoint in %s: %s", output_dir, e)
+
+    def _accept_resume_banner(self):
+        """Fill resume-from input from the banner checkpoint and hide the banner."""
+        if self._resume_banner_checkpoint:
+            self.resume_from_input.setText(str(self._resume_banner_checkpoint))
+        self._resume_banner.setVisible(False)
+
+    def _decline_resume_banner(self):
+        """Clear resume-from input and hide the banner (start fresh)."""
+        self.resume_from_input.clear()
+        self._resume_banner.setVisible(False)
+        self._resume_banner_checkpoint = None
+
+    # ── Model scanner ──────────────────────────────────────────────────
+
+    def _start_model_scan(self):
+        """Start a background scan for local model files."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return  # Already scanning
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            scan_dirs = settings.model_scan_dirs or []
+        except Exception:
+            scan_dirs = []
+        if not scan_dirs:
+            return
+        self._btn_scan_models.setText("…")
+        self._btn_scan_models.setEnabled(False)
+        self._scan_worker = _ModelScanWorker(scan_dirs, parent=self)
+        self._scan_worker.scan_done.connect(self._on_models_scanned)
+        self._scan_worker.start()
+
+    def _on_models_scanned(self, models: list):
+        """Populate the model path completer from scan results."""
+        self._scanned_models = models
+        paths = [str(m.path) for m in models]
+        model = QStringListModel(paths, self)
+        self._model_completer.setModel(model)
+        self._btn_scan_models.setText("⟳")
+        self._btn_scan_models.setEnabled(True)
+        count = len(models)
+        if count:
+            log.debug("Model scan complete: %d models found", count)
+        # Clean up worker ref
+        self._scan_worker = None
+
+    # ── VRAM / Time estimator ──────────────────────────────────────────
+
+    def connect_vram_estimator(self):
+        """Wire up config change signals to update the VRAM/time estimate.
+
+        Called after all builder mixins have created their widgets.
+        Must be called once the full UI is built.
+        """
+        for widget in (
+            self.train_model_combo,
+            self.resolution_spin,
+            self.batch_spin,
+            self.precision_combo,
+            self.fp8_check,
+            self.grad_ckpt_check,
+        ):
+            try:
+                if hasattr(widget, 'currentIndexChanged'):
+                    widget.currentIndexChanged.connect(self._update_vram_estimate)
+                elif hasattr(widget, 'valueChanged'):
+                    widget.valueChanged.connect(self._update_vram_estimate)
+                elif hasattr(widget, 'stateChanged'):
+                    widget.stateChanged.connect(self._update_vram_estimate)
+            except Exception:
+                pass
+        # Also connect steps/epochs changes
+        for w in (getattr(self, 'epochs_spin', None),
+                  getattr(self, 'max_steps_spin', None)):
+            if w is not None and hasattr(w, 'valueChanged'):
+                w.valueChanged.connect(self._update_vram_estimate)
+
+    def _update_vram_estimate(self, *_):
+        """Recompute the VRAM and time estimates from current config."""
+        try:
+            model_type = self.train_model_combo.currentData() or ""
+            resolution = self.resolution_spin.value()
+            batch_size = self.batch_spin.value()
+            precision = self.precision_combo.currentData() or "bf16"
+            fp8 = self.fp8_check.isChecked()
+            grad_ckpt = self.grad_ckpt_check.isChecked()
+
+            vram = _estimate_vram(
+                model_type=model_type,
+                batch_size=batch_size,
+                resolution=resolution,
+                mixed_precision=precision,
+                gradient_checkpointing=grad_ckpt,
+                fp8_base=fp8,
+            )
+
+            # Try to get available VRAM
+            try:
+                import torch
+                available_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            except Exception:
+                available_gb = 24.0  # Assume RTX 4090
+
+            color = COLORS.get("danger", "#f87171") if vram > available_gb * 0.95 else COLORS["text"]
+            self._vram_est_label.setText(f"VRAM: ~{vram} GB")
+            self._vram_est_label.setStyleSheet(
+                f"color: {color}; font-weight: 600; background: transparent;"
+            )
+
+            if vram > available_gb * 0.95:
+                self._vram_warning_label.setText(
+                    f"WARNING: exceeds GPU {available_gb:.0f} GB"
+                )
+            else:
+                self._vram_warning_label.setText("")
+
+            # Estimate total steps
+            try:
+                epochs = getattr(self, 'epochs_spin', None)
+                max_steps = getattr(self, 'max_steps_spin', None)
+                total_steps = (max_steps.value() if max_steps and max_steps.value() > 0
+                               else (epochs.value() * 100 if epochs else 100))
+                time_str = _estimate_time(model_type, total_steps)
+                self._time_est_label.setText(f"|  Time: {time_str} / {total_steps} steps")
+            except Exception:
+                self._time_est_label.setText("")
+        except Exception as exc:
+            log.debug("VRAM estimate error: %s", exc)
 
     def _log(self, msg: str):
         """Append a message to the training log and auto-scroll to the bottom."""
@@ -822,6 +1166,23 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._training_worker = None
 
         resume_from = self.resume_from_input.text().strip() or None
+
+        # Save session state so user can resume if training is interrupted
+        try:
+            import time
+            from dataclasses import asdict
+            _session_file = Path(output_dir) / ".last_session.json"
+            _session_file.write_text(
+                json.dumps({
+                    "model_path": model_path,
+                    "output_dir": output_dir,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "config": asdict(config),
+                }, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as _e:
+            log.debug("Could not save session file: %s", _e)
 
         from dataset_sorter.training_worker import TrainingWorker, VRAMMonitor
         self._training_worker = TrainingWorker(
@@ -1346,6 +1707,16 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"{'=' * 40}")
         if success:
             show_toast(self, "Training completed", "success", 4000)
+            # Clean up interrupted-session file on success
+            output_dir = self.output_dir_input.text().strip()
+            if output_dir:
+                _session_file = Path(output_dir) / ".last_session.json"
+                try:
+                    if _session_file.exists():
+                        _session_file.unlink()
+                except OSError:
+                    pass
+            self._resume_banner.setVisible(False)
         else:
             show_toast(self, f"Training failed: {message[:60]}", "error", 4000)
         # Log final VRAM peak
