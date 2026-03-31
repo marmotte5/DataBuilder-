@@ -321,6 +321,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         config_tabs.addTab(ext_container, "Extensions")
         config_tabs.setTabToolTip(3, "ControlNet, DPO, and RLHF configuration")
 
+        self._config_tabs = config_tabs  # stored for Simple/Advanced mode toggling
         splitter.addWidget(config_tabs)
 
         # Right: Training output
@@ -557,6 +558,19 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.apply_config(config)
         self._log(f"Applied preset: {TRAINING_PRESETS[key]['label']}")
         show_toast(self, f"Preset applied: {TRAINING_PRESETS[key]['label']}", "success")
+
+    def set_simple_mode(self, simple: bool):
+        """Show/hide Advanced and Extensions config tabs based on Simple/Advanced mode."""
+        if not hasattr(self, '_config_tabs'):
+            return
+        tabs = self._config_tabs
+        # Tab indices: 0=Core, 1=Dataset, 2=Advanced, 3=Extensions
+        for idx in (2, 3):
+            if idx < tabs.count():
+                tabs.setTabVisible(idx, not simple)
+        # In Simple mode, ensure we're on a visible tab
+        if simple and tabs.currentIndex() >= 2:
+            tabs.setCurrentIndex(0)
 
     def _group(self, title: str) -> QGroupBox:
         """Create a QGroupBox with the given title for use in config sections."""

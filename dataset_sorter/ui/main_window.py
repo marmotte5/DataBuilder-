@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
-    QStackedWidget, QFrame,
+    QStackedWidget, QFrame, QMenu, QScrollArea,
 )
 
 from dataset_sorter.constants import (
@@ -151,8 +151,8 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._load_progress_state()
         self.statusBar().showMessage(
-            "Ready! Select Dataset in the sidebar, set source folder, then click Scan. "
-            "See Help for a full guide."
+            "Ready! Set source folder in Dataset, click Scan, then proceed through the steps. "
+            "See Help (More ▾) for a full guide."
         )
 
     def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
@@ -175,135 +175,165 @@ class MainWindow(QMainWindow):
         ("help",     "?",   "Help",      "Getting started guide",           "util"),
     ]
 
+    # ── Steps for the main workflow stepper ──
+    _STEPPER_STEPS = [
+        # (step_id, number, label, tooltip)
+        ("dataset",  "1", "Dataset",   "Prepare your training dataset"),
+        ("train",    "2", "Configure", "Configure training settings"),
+        ("_train3",  "3", "Train",     "Run training"),
+        ("generate", "4", "Generate",  "Generate images"),
+    ]
+
     def _build_ui(self):
-        """Construct all widgets: sidebar nav, top bar, content area, action bar."""
+        """Construct all widgets: header, stepper, content area with helper panel, footer."""
         central = QWidget()
         self.setCentralWidget(central)
-        outer = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Left sidebar navigation ──
-        sidebar = QWidget()
-        sidebar.setFixedWidth(72)
-        sidebar.setStyleSheet(
+        # ── Header bar (60px) ──────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(60)
+        header.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
-            f"border-right: 1px solid {COLORS['border']};"
+            f"border-bottom: 1px solid {COLORS['border']};"
         )
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 8, 0, 8)
-        sidebar_layout.setSpacing(2)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 0, 16, 0)
+        header_layout.setSpacing(12)
 
-        # App logo / branding
-        brand = QLabel("DB")
-        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand.setStyleSheet(
+        # Logo
+        logo_lbl = QLabel("DataBuilder")
+        logo_lbl.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 18px; font-weight: 800; "
-            f"background: transparent; padding: 8px 0 12px 0; "
-            f"letter-spacing: -0.5px;"
+            f"background: transparent; letter-spacing: -0.5px;"
         )
-        brand.setToolTip("DataBuilder")
-        sidebar_layout.addWidget(brand)
+        logo_lbl.setToolTip("DataBuilder — AI Training Suite")
+        header_layout.addWidget(logo_lbl)
+
+        header_layout.addStretch()
+
+        # Simple / Advanced toggle
+        mode_lbl = QLabel("Mode:")
+        mode_lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; "
+            f"font-weight: 600; background: transparent;"
+        )
+        header_layout.addWidget(mode_lbl)
+
+        self.btn_simple_mode = QPushButton("Simple")
+        self.btn_simple_mode.setFixedSize(72, 30)
+        self.btn_simple_mode.setCheckable(True)
+        self.btn_simple_mode.setChecked(True)
+        self.btn_simple_mode.setToolTip("Simple mode: show only essential parameters")
+        self.btn_simple_mode.clicked.connect(lambda: self._set_simple_mode(True))
+        header_layout.addWidget(self.btn_simple_mode)
+
+        self.btn_advanced_mode = QPushButton("Advanced")
+        self.btn_advanced_mode.setFixedSize(80, 30)
+        self.btn_advanced_mode.setCheckable(True)
+        self.btn_advanced_mode.setChecked(False)
+        self.btn_advanced_mode.setToolTip("Advanced mode: show all parameters")
+        self.btn_advanced_mode.clicked.connect(lambda: self._set_simple_mode(False))
+        header_layout.addWidget(self.btn_advanced_mode)
+
+        self._simple_mode = True
+        self._update_mode_buttons()
 
         # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {COLORS['border']}; background: {COLORS['border']}; max-height: 1px;")
-        sidebar_layout.addWidget(sep)
-        sidebar_layout.addSpacing(4)
+        sep_lbl = QLabel("|")
+        sep_lbl.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
+        header_layout.addWidget(sep_lbl)
 
-        # Nav buttons
-        self._nav_buttons: dict[str, QPushButton] = {}
-        prev_section = None
-        for nav_id, icon, label, tooltip, section in self._NAV_ITEMS:
-            if prev_section and section != prev_section:
-                spacer = QFrame()
-                spacer.setFrameShape(QFrame.Shape.HLine)
-                spacer.setStyleSheet(
-                    f"color: {COLORS['border_subtle']}; background: {COLORS['border_subtle']}; "
-                    f"max-height: 1px; margin: 4px 12px;"
-                )
-                sidebar_layout.addWidget(spacer)
-            prev_section = section
+        # More... menu (secondary navigation)
+        self.btn_more = QPushButton("More ▾")
+        self.btn_more.setFixedSize(70, 30)
+        self.btn_more.setToolTip("Access secondary tools")
+        self.btn_more.setStyleSheet(
+            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {COLORS['text_muted']}; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
+        )
+        self.btn_more.clicked.connect(self._show_more_menu)
+        header_layout.addWidget(self.btn_more)
 
-            btn = QPushButton(f"{icon}\n{label}")
-            btn.setToolTip(tooltip)
-            btn.setFixedSize(64, 52)
-            btn.setStyleSheet(self._nav_button_style(False))
-            btn.clicked.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
-            sidebar_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
-            self._nav_buttons[nav_id] = btn
-
-        sidebar_layout.addStretch()
-
-        # Theme toggle at bottom
+        # Theme toggle
         self.btn_theme = QPushButton("Light")
         self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
-        self.btn_theme.setFixedSize(64, 32)
+        self.btn_theme.setFixedSize(60, 30)
         self.btn_theme.setStyleSheet(
-            f"QPushButton {{ padding: 4px; font-size: 10px; font-weight: 500; "
+            f"QPushButton {{ padding: 4px; font-size: 11px; font-weight: 500; "
             f"border-radius: 6px; color: {COLORS['text_muted']}; "
             f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
             f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
         )
         self.btn_theme.clicked.connect(self._toggle_theme)
-        sidebar_layout.addWidget(self.btn_theme, 0, Qt.AlignmentFlag.AlignHCenter)
+        header_layout.addWidget(self.btn_theme)
 
-        outer.addWidget(sidebar)
+        outer.addWidget(header)
 
-        # ── Right content area ──
-        right_area = QWidget()
-        right_layout = QVBoxLayout(right_area)
-        right_layout.setContentsMargins(12, 10, 12, 10)
-        right_layout.setSpacing(8)
+        # ── Stepper bar (50px) ────────────────────────────────────────────
+        stepper_widget = QWidget()
+        stepper_widget.setFixedHeight(50)
+        stepper_widget.setStyleSheet(
+            f"background-color: {COLORS['bg']}; "
+            f"border-bottom: 1px solid {COLORS['border_subtle']};"
+        )
+        stepper_layout = QHBoxLayout(stepper_widget)
+        stepper_layout.setContentsMargins(24, 0, 24, 0)
+        stepper_layout.setSpacing(0)
 
-        # ── Top bar: step indicators + path bar ──
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(8)
+        stepper_layout.addStretch()
+        self._stepper_btns: dict[str, QPushButton] = {}
+        for i, (step_id, num, label, tip) in enumerate(self._STEPPER_STEPS):
+            if i > 0:
+                arrow = QLabel("→")
+                arrow.setStyleSheet(
+                    f"color: {COLORS['text_muted']}; background: transparent; "
+                    f"font-size: 16px; padding: 0 6px;"
+                )
+                stepper_layout.addWidget(arrow)
+            nav_target = "train" if step_id == "_train3" else step_id
+            btn = QPushButton(f"{num}. {label}")
+            btn.setToolTip(tip)
+            btn.setFixedHeight(34)
+            btn.setMinimumWidth(110)
+            btn.setStyleSheet(self._stepper_button_style("default"))
+            btn.clicked.connect(lambda checked, nid=nav_target: self._switch_nav(nid))
+            stepper_layout.addWidget(btn)
+            self._stepper_btns[step_id] = btn
+        stepper_layout.addStretch()
 
-        # Step indicators (compact, for dataset workflow)
-        self._step_indicators = []
-        self._step_container = QWidget()
-        step_bar = QHBoxLayout(self._step_container)
-        step_bar.setContentsMargins(0, 0, 0, 0)
-        step_bar.setSpacing(4)
-        steps = [
-            ("1. Folders", "Set source and output folders"),
-            ("2. Scan", "Read images and tags"),
-            ("3. Edit", "Review, clean, and organize tags"),
-            ("4. Export", "Save organized dataset"),
-        ]
-        for i, (label, tip) in enumerate(steps):
-            step_lbl = QLabel(label)
-            step_lbl.setToolTip(tip)
-            step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            active = i == 0
-            step_lbl.setStyleSheet(
-                f"background-color: {COLORS['accent'] if active else COLORS['surface']}; "
-                f"color: {'white' if active else COLORS['text_muted']}; "
-                f"border-radius: 6px; padding: 5px 14px; "
-                f"font-size: 11px; font-weight: {'700' if active else '500'};"
-            )
-            step_bar.addWidget(step_lbl)
-            self._step_indicators.append(step_lbl)
-        top_bar.addWidget(self._step_container)
-        top_bar.addStretch()
+        outer.addWidget(stepper_widget)
 
-        # Current section title
-        self._section_title = QLabel("Dataset")
+        # ── Main area: path bar + content + helper panel ──────────────────
+        main_area = QWidget()
+        main_area_layout = QVBoxLayout(main_area)
+        main_area_layout.setContentsMargins(0, 0, 0, 0)
+        main_area_layout.setSpacing(0)
+
+        # Section title (for secondary sections like Batch, Library, etc.)
+        self._section_title = QLabel("")
         self._section_title.setStyleSheet(
             f"color: {COLORS['header']}; font-size: 16px; font-weight: 700; "
-            f"background: transparent; letter-spacing: 0.3px;"
+            f"background: transparent; letter-spacing: 0.3px; "
+            f"padding: 8px 12px 4px 12px;"
         )
-        top_bar.addWidget(self._section_title)
+        self._section_title.setVisible(False)
+        main_area_layout.addWidget(self._section_title)
 
-        right_layout.addLayout(top_bar)
-
-        # ── Compact path bar — single row (visible in dataset mode) ──
+        # Path bar (dataset mode only) ─────────────────────────────────────
         self._path_bar_widget = QWidget()
+        self._path_bar_widget.setStyleSheet(
+            f"background: {COLORS['bg_alt']}; "
+            f"border-bottom: 1px solid {COLORS['border_subtle']};"
+        )
         path_bar = QHBoxLayout(self._path_bar_widget)
-        path_bar.setContentsMargins(0, 0, 0, 0)
+        path_bar.setContentsMargins(12, 6, 12, 6)
         path_bar.setSpacing(6)
+
         src_lbl = QLabel("Source")
         src_lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 600; "
@@ -338,7 +368,6 @@ class MainWindow(QMainWindow):
         btn_out.clicked.connect(self._browse_output)
         path_bar.addWidget(btn_out)
 
-        # Scan controls inline with paths
         self.workers_spinner = QSpinBox()
         self.workers_spinner.setRange(1, 32)
         self.workers_spinner.setValue(DEFAULT_NUM_WORKERS)
@@ -365,28 +394,63 @@ class MainWindow(QMainWindow):
         self.btn_scan.clicked.connect(self._start_scan)
         path_bar.addWidget(self.btn_scan)
 
-        right_layout.addWidget(self._path_bar_widget)
+        main_area_layout.addWidget(self._path_bar_widget)
 
         # Progress bar (hidden until needed)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        right_layout.addWidget(self.progress_bar)
+        main_area_layout.addWidget(self.progress_bar)
 
-        # ── Stacked content pages ──
+        # Content row: main stack + helper panel ───────────────────────────
+        content_row = QWidget()
+        content_row_layout = QHBoxLayout(content_row)
+        content_row_layout.setContentsMargins(0, 0, 0, 0)
+        content_row_layout.setSpacing(0)
+
+        # Main stacked widget
+        main_content = QWidget()
+        main_content_layout = QVBoxLayout(main_content)
+        main_content_layout.setContentsMargins(12, 8, 8, 8)
+        main_content_layout.setSpacing(8)
+
+        # ── Stacked content pages ──────────────────────────────────────────
         self._content_stack = QStackedWidget()
 
-        # Page 0: Dataset — tag panel + sub-tabs (original layout)
+        # Page 0: Dataset ──────────────────────────────────────────────────
         dataset_page = QWidget()
         dataset_layout = QVBoxLayout(dataset_page)
         dataset_layout.setContentsMargins(0, 0, 0, 0)
         dataset_layout.setSpacing(0)
+
+        # Dataset step indicators (compact, kept for backward compatibility)
+        self._step_container = QWidget()
+        self._step_container.setVisible(False)  # hidden — replaced by top stepper
+        self._step_indicators = []
+        step_bar_inner = QHBoxLayout(self._step_container)
+        step_bar_inner.setContentsMargins(0, 0, 0, 0)
+        for i, (lbl_text, tip) in enumerate([
+            ("1. Folders", "Set source and output folders"),
+            ("2. Scan", "Read images and tags"),
+            ("3. Edit", "Review, clean, and organize tags"),
+            ("4. Export", "Save organized dataset"),
+        ]):
+            lbl = QLabel(lbl_text)
+            lbl.setToolTip(tip)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet(
+                f"background-color: {COLORS['accent'] if i == 0 else COLORS['surface']}; "
+                f"color: {'white' if i == 0 else COLORS['text_muted']}; "
+                f"border-radius: 6px; padding: 5px 14px; "
+                f"font-size: 11px; font-weight: {'700' if i == 0 else '500'};"
+            )
+            step_bar_inner.addWidget(lbl)
+            self._step_indicators.append(lbl)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
 
-        # Dataset sub-tabs
         right_tabs = QTabWidget()
 
         self.preview_tab = PreviewTab()
@@ -483,30 +547,141 @@ class MainWindow(QMainWindow):
         self.help_tab = HelpTab()
         self._content_stack.addWidget(self.help_tab)  # index 8
 
-        right_layout.addWidget(self._content_stack, 1)
-        outer.addWidget(right_area, 1)
+        main_content_layout.addWidget(self._content_stack, 1)
+        content_row_layout.addWidget(main_content, 7)
+
+        # ── Helper panel (right, ~30%) ─────────────────────────────────────
+        self._helper_panel = QWidget()
+        self._helper_panel.setFixedWidth(240)
+        self._helper_panel.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border-left: 1px solid {COLORS['border']};"
+        )
+        helper_layout = QVBoxLayout(self._helper_panel)
+        helper_layout.setContentsMargins(12, 12, 12, 12)
+        helper_layout.setSpacing(8)
+
+        helper_title = QLabel("Tips")
+        helper_title.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 13px; font-weight: 700; "
+            f"background: transparent; border-bottom: 1px solid {COLORS['border']}; "
+            f"padding-bottom: 6px;"
+        )
+        helper_layout.addWidget(helper_title)
+
+        self._helper_text = QLabel(self._get_helper_text("dataset"))
+        self._helper_text.setWordWrap(True)
+        self._helper_text.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._helper_text.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; "
+            f"background: transparent; line-height: 1.5;"
+        )
+        helper_layout.addWidget(self._helper_text, 1)
+
+        content_row_layout.addWidget(self._helper_panel)
+
+        main_area_layout.addWidget(content_row, 1)
+        outer.addWidget(main_area, 1)
+
+        # ── Footer bar (50px) ──────────────────────────────────────────────
+        footer = QWidget()
+        footer.setFixedHeight(50)
+        footer.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border-top: 1px solid {COLORS['border']};"
+        )
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(16, 0, 16, 0)
+        footer_layout.setSpacing(12)
+
+        # Status badges
+        self._badge_dataset = QLabel("Dataset: —")
+        self._badge_dataset.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        footer_layout.addWidget(self._badge_dataset)
+
+        footer_sep1 = QLabel("|")
+        footer_sep1.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
+        footer_layout.addWidget(footer_sep1)
+
+        gpu_text = f"GPU: {self._gpu_available and 'Available' or 'CPU only'}"
+        self._badge_gpu = QLabel(gpu_text)
+        self._badge_gpu.setStyleSheet(
+            f"color: {COLORS['success'] if self._gpu_available else COLORS['text_muted']}; "
+            f"font-size: 11px; background: transparent;"
+        )
+        footer_layout.addWidget(self._badge_gpu)
+
+        footer_sep2 = QLabel("|")
+        footer_sep2.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
+        footer_layout.addWidget(footer_sep2)
+
+        self._badge_autosave = QLabel("Auto-save: On")
+        self._badge_autosave.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        footer_layout.addWidget(self._badge_autosave)
+
+        footer_layout.addStretch()
+
+        # Back / Next buttons
+        self.btn_footer_back = QPushButton("← Back")
+        self.btn_footer_back.setFixedSize(80, 32)
+        self.btn_footer_back.setStyleSheet(
+            f"QPushButton {{ padding: 4px 10px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {COLORS['text_muted']}; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }} "
+            f"QPushButton:disabled {{ opacity: 0.4; }}"
+        )
+        self.btn_footer_back.clicked.connect(self._nav_back)
+        footer_layout.addWidget(self.btn_footer_back)
+
+        self.btn_footer_next = QPushButton("Next →")
+        self.btn_footer_next.setFixedSize(80, 32)
+        self.btn_footer_next.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_footer_next.clicked.connect(self._nav_next)
+        footer_layout.addWidget(self.btn_footer_next)
+
+        outer.addWidget(footer)
+
+        # ── Legacy compatibility: nav_buttons dict (empty, kept for signal safety) ──
+        self._nav_buttons: dict[str, QPushButton] = {}
 
         # Set initial nav state
         self._current_nav = "dataset"
         self._switch_nav("dataset")
 
     def _nav_button_style(self, active: bool) -> str:
-        """Return stylesheet for a sidebar nav button."""
-        if active:
+        """Return stylesheet for a nav button (legacy compatibility)."""
+        return self._stepper_button_style("active" if active else "default")
+
+    def _stepper_button_style(self, state: str) -> str:
+        """Return stylesheet for a stepper step button.
+
+        state: 'active' | 'done' | 'default'
+        """
+        if state == "active":
             return (
-                f"QPushButton {{ background-color: {COLORS['accent_subtle']}; "
-                f"color: {COLORS['accent']}; border: none; border-radius: 8px; "
-                f"font-size: 10px; font-weight: 700; padding: 4px 2px; "
-                f"border-left: 3px solid {COLORS['accent']}; }} "
-                f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }}"
+                f"QPushButton {{ background-color: {COLORS['accent']}; "
+                f"color: white; border: none; border-radius: 8px; "
+                f"font-size: 11px; font-weight: 700; padding: 4px 12px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent']}; }}"
             )
+        if state == "done":
+            return (
+                f"QPushButton {{ background-color: {COLORS['success_bg']}; "
+                f"color: {COLORS['success']}; border: 1px solid {COLORS['success']}; "
+                f"border-radius: 8px; font-size: 11px; font-weight: 600; padding: 4px 12px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['success_bg']}; }}"
+            )
+        # default / future
         return (
-            f"QPushButton {{ background-color: transparent; "
-            f"color: {COLORS['text_muted']}; border: none; border-radius: 8px; "
-            f"font-size: 10px; font-weight: 500; padding: 4px 2px; "
-            f"border-left: 3px solid transparent; }} "
-            f"QPushButton:hover {{ background-color: {COLORS['surface']}; "
-            f"color: {COLORS['text']}; }}"
+            f"QPushButton {{ background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 8px; font-size: 11px; font-weight: 500; padding: 4px 12px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
         )
 
     def _switch_nav(self, nav_id: str):
@@ -517,25 +692,63 @@ class MainWindow(QMainWindow):
             "library": 6, "settings": 7, "help": 8,
         }
         nav_to_title = {
-            "dataset": "Dataset", "train": "Train", "generate": "Generate",
+            "dataset": "", "train": "", "generate": "",
             "batch": "Batch Generate", "compare": "A/B Compare", "merge": "Merge",
             "library": "Library", "settings": "Settings", "help": "Help",
+        }
+        # Stepper step_id → stepper highlight mapping
+        nav_to_stepper = {
+            "dataset": "dataset",
+            "train": "train",
+            "generate": "generate",
         }
         page = nav_to_page.get(nav_id, 0)
         self._content_stack.setCurrentIndex(page)
         self._current_nav = nav_id
 
-        # Update button styles
-        for nid, btn in self._nav_buttons.items():
-            btn.setStyleSheet(self._nav_button_style(nid == nav_id))
+        # Update stepper button styles
+        active_stepper = nav_to_stepper.get(nav_id)
+        for step_id, btn in self._stepper_btns.items():
+            nav_target = "train" if step_id == "_train3" else step_id
+            if nav_target == active_stepper or step_id == active_stepper:
+                btn.setStyleSheet(self._stepper_button_style("active"))
+            elif self._is_step_done(step_id):
+                btn.setStyleSheet(self._stepper_button_style("done"))
+            else:
+                btn.setStyleSheet(self._stepper_button_style("default"))
 
-        # Update section title
-        self._section_title.setText(nav_to_title.get(nav_id, ""))
+        # Section title: show for secondary sections, hide for main stepper ones
+        title = nav_to_title.get(nav_id, "")
+        self._section_title.setText(title)
+        self._section_title.setVisible(bool(title))
 
-        # Show path bar and step indicators only in dataset mode
+        # Show path bar only in dataset mode
         is_dataset = nav_id == "dataset"
         self._path_bar_widget.setVisible(is_dataset)
-        self._step_container.setVisible(is_dataset)
+
+        # Update helper panel
+        self._helper_text.setText(self._get_helper_text(nav_id))
+
+        # Update footer Back/Next
+        self._update_footer_nav_buttons()
+
+    def _is_step_done(self, step_id: str) -> bool:
+        """Return True if the given workflow step has been completed."""
+        if step_id == "dataset":
+            return len(self.entries) > 0
+        if step_id == "train":
+            return (
+                hasattr(self, 'training_tab')
+                and bool(getattr(self.training_tab, 'model_path_input', None))
+                and bool(self.training_tab.model_path_input.text().strip())
+            )
+        if step_id == "_train3":
+            return (
+                hasattr(self, 'training_tab')
+                and hasattr(self.training_tab, '_training_started')
+                and self.training_tab._training_started
+            )
+        return False
 
     def _label(self, text):
         """Create a styled muted label for form field headings."""
@@ -570,13 +783,181 @@ class MainWindow(QMainWindow):
             )
 
     def _update_status_label(self):
-        """Update the inline stats in the action bar."""
+        """Update the inline stats in the action bar and footer badge."""
         n = len(self.entries)
         if n > 0:
             n_tags = len(self.tag_counts)
             self._status_label.setText(f"{n:,} images  |  {n_tags:,} tags")
+            self._badge_dataset.setText(f"Dataset: {n:,} images")
+            self._badge_dataset.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 11px; background: transparent;"
+            )
         else:
             self._status_label.setText("")
+            self._badge_dataset.setText("Dataset: —")
+            self._badge_dataset.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+            )
+        # Refresh stepper after data load (step 1 may become "done")
+        self._switch_nav(self._current_nav)
+
+    # ── Simple / Advanced mode ─────────────────────────────────────────────
+
+    def _set_simple_mode(self, simple: bool):
+        """Toggle Simple/Advanced mode and propagate to all tabs."""
+        self._simple_mode = simple
+        self._update_mode_buttons()
+        if hasattr(self, 'training_tab'):
+            self.training_tab.set_simple_mode(simple)
+
+    def _update_mode_buttons(self):
+        """Sync the visual state of Simple/Advanced toggle buttons."""
+        simple = self._simple_mode
+        # Active button: filled accent; inactive: muted surface
+        active_style = (
+            f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "
+            f"border: none; border-radius: 6px; font-size: 11px; font-weight: 700; "
+            f"padding: 4px 10px; }}"
+        )
+        inactive_style = (
+            f"QPushButton {{ background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 6px; font-size: 11px; font-weight: 500; "
+            f"padding: 4px 10px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
+        )
+        self.btn_simple_mode.setChecked(simple)
+        self.btn_advanced_mode.setChecked(not simple)
+        self.btn_simple_mode.setStyleSheet(active_style if simple else inactive_style)
+        self.btn_advanced_mode.setStyleSheet(inactive_style if simple else active_style)
+
+    # ── More... dropdown menu ──────────────────────────────────────────────
+
+    def _show_more_menu(self):
+        """Show a popup menu with secondary navigation sections."""
+        menu = QMenu(self)
+        actions = [
+            ("Batch Generation",  "batch"),
+            ("A/B Compare",       "compare"),
+            ("Model Merge",       "merge"),
+            ("Library",           "library"),
+            (None, None),  # separator
+            ("Settings",          "settings"),
+            ("Help",              "help"),
+        ]
+        for label, nav_id in actions:
+            if label is None:
+                menu.addSeparator()
+            else:
+                act = menu.addAction(label)
+                act.triggered.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
+        menu.exec(self.btn_more.mapToGlobal(
+            self.btn_more.rect().bottomLeft()
+        ))
+
+    # ── Helper panel content ───────────────────────────────────────────────
+
+    def _get_helper_text(self, nav_id: str) -> str:
+        """Return contextual tips for the helper panel based on active section."""
+        tips = {
+            "dataset": (
+                "<b>Step 1 — Dataset</b><br><br>"
+                "• Set source folder (images + .txt tags)<br>"
+                "• Set output folder for export<br>"
+                "• Click <b>Scan</b> to load images<br>"
+                "• Review tags in left panel<br>"
+                "• Click <b>Export Project</b> when done<br>"
+                "<br><i>Tip: Drag a folder onto the window to set source.</i>"
+            ),
+            "train": (
+                "<b>Step 2 — Configure</b><br><br>"
+                "• Set base model path<br>"
+                "• Choose a <b>Preset</b> to auto-fill<br>"
+                "• Adjust Rank (16–64 for LoRA)<br>"
+                "• Set Learning Rate (1e-4 default)<br>"
+                "• Set Epochs (10–30 for LoRA)<br>"
+                "<br><b>Step 3 — Train</b><br><br>"
+                "• Click <b>Train</b> to start<br>"
+                "• Monitor loss in the chart<br>"
+                "• Use <b>Save Now</b> mid-training<br>"
+                "<br><i>Tip: Use Apply Recommendations to auto-set parameters from your dataset.</i>"
+            ),
+            "generate": (
+                "<b>Step 4 — Generate</b><br><br>"
+                "• Load your trained model<br>"
+                "• Add LoRA adapters if needed<br>"
+                "• Write your prompt<br>"
+                "• Adjust Steps (28) and CFG (7)<br>"
+                "• Click <b>Generate</b><br>"
+                "<br><i>Tip: Use Seed=-1 for variety, or fix a seed to compare settings.</i>"
+            ),
+            "batch": (
+                "<b>Batch Generate</b><br><br>"
+                "• Queue multiple prompts<br>"
+                "• Import from CSV/TXT/JSON<br>"
+                "• Set default Steps/CFG/Resolution<br>"
+                "• All images auto-saved to output folder"
+            ),
+            "compare": (
+                "<b>A/B Compare</b><br><br>"
+                "• Compare two LoRA weights<br>"
+                "• Same prompt, different settings<br>"
+                "• Use Swap A/B to swap configs"
+            ),
+            "merge": (
+                "<b>Model Merge</b><br><br>"
+                "• Weighted Sum: blend two models<br>"
+                "• SLERP: smooth interpolation<br>"
+                "• Add Difference: A + (B - C)<br>"
+                "• Alpha=0.5 = equal blend"
+            ),
+            "library": (
+                "<b>Library</b><br><br>"
+                "• Browse models & LoRAs<br>"
+                "• Add folders to scan<br>"
+                "• Mark favorites & rate models<br>"
+                "• One-click send to Generate or Train"
+            ),
+            "settings": (
+                "<b>Settings</b><br><br>"
+                "• Analyzes your dataset<br>"
+                "• Recommends optimal parameters<br>"
+                "• Click Apply to auto-fill Training tab"
+            ),
+        }
+        return tips.get(nav_id, "")
+
+    # ── Footer navigation ──────────────────────────────────────────────────
+
+    def _update_footer_nav_buttons(self):
+        """Enable/disable Back and Next footer buttons based on current nav."""
+        stepper_order = ["dataset", "train", "generate"]
+        cur = self._current_nav
+        if cur in stepper_order:
+            idx = stepper_order.index(cur)
+            self.btn_footer_back.setEnabled(idx > 0)
+            self.btn_footer_next.setEnabled(idx < len(stepper_order) - 1)
+        else:
+            self.btn_footer_back.setEnabled(False)
+            self.btn_footer_next.setEnabled(False)
+
+    def _nav_back(self):
+        """Navigate to the previous main workflow step."""
+        stepper_order = ["dataset", "train", "generate"]
+        cur = self._current_nav
+        if cur in stepper_order:
+            idx = stepper_order.index(cur)
+            if idx > 0:
+                self._switch_nav(stepper_order[idx - 1])
+
+    def _nav_next(self):
+        """Navigate to the next main workflow step."""
+        stepper_order = ["dataset", "train", "generate"]
+        cur = self._current_nav
+        if cur in stepper_order:
+            idx = stepper_order.index(cur)
+            if idx < len(stepper_order) - 1:
+                self._switch_nav(stepper_order[idx + 1])
 
     def _connect_signals(self):
         """Wire all child-panel signals to their MainWindow handler slots."""
@@ -666,9 +1047,8 @@ class MainWindow(QMainWindow):
         new_mode = toggle_theme()
         QApplication.instance().setStyleSheet(get_stylesheet())
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
-        # Refresh sidebar nav button styles
-        for nid, btn in self._nav_buttons.items():
-            btn.setStyleSheet(self._nav_button_style(nid == self._current_nav))
+        # Refresh stepper button styles
+        self._switch_nav(self._current_nav)
         self.statusBar().showMessage(f"Switched to {new_mode} theme.")
         self._toast(f"Switched to {new_mode} theme", "info")
 
@@ -684,6 +1064,7 @@ class MainWindow(QMainWindow):
             "bucket_names": {str(k): v for k, v in self.bucket_names.items()},
             "deleted_tags": sorted(self.deleted_tags),
             "workers": self.workers_spinner.value(),
+            "simple_mode": self._simple_mode,
         }
         try:
             _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -711,6 +1092,8 @@ class MainWindow(QMainWindow):
             set_theme("light")
             QApplication.instance().setStyleSheet(get_stylesheet())
             self.btn_theme.setText("Dark")
+        if "simple_mode" in state:
+            self._set_simple_mode(bool(state["simple_mode"]))
         if "workers" in state:
             self.workers_spinner.setValue(state["workers"])
 
