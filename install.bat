@@ -137,6 +137,13 @@ if %errorlevel% equ 0 (
     echo        dadaptation - skipped
 )
 
+pip install triton-windows >nul 2>&1
+if %errorlevel% equ 0 (
+    echo        triton-windows (torch.compile + Triton kernels on Windows) - OK
+) else (
+    echo        triton-windows - skipped (install manually if needed: pip install triton-windows)
+)
+
 :: ── Verify installation ───────────────────────────────────────────────
 
 echo.

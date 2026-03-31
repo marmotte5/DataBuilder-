@@ -200,6 +200,7 @@ pip install --upgrade lion-pytorch >nul 2>&1 && echo        lion-pytorch - OK ||
 pip install --upgrade dadaptation >nul 2>&1 && echo        dadaptation - OK || echo        dadaptation - skipped
 pip install --upgrade came-pytorch >nul 2>&1 && echo        came-pytorch - OK || echo        came-pytorch - skipped
 pip install --upgrade schedulefree >nul 2>&1 && echo        schedulefree - OK || echo        schedulefree - skipped
+pip install --upgrade triton-windows >nul 2>&1 && echo        triton-windows - OK || echo        triton-windows - skipped
 
 :: ── Step 7: Verify PyTorch ──────────────────────────────────────────
 
