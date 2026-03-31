@@ -518,6 +518,17 @@ class Trainer:
         # ── 5. GradScaler for fp16 (not needed for bf16; CUDA only) ──
         if self.dtype == torch.float16 and self.device.type == "cuda":
             self.grad_scaler = torch.amp.GradScaler("cuda")
+            # GradScaler requires ALL trainable params to be float32 so their
+            # gradients are float32 (unscale_ crashes on fp16 gradients).
+            # The LoRA params are already cast in _apply_lora(); do the same for
+            # any text encoder params that were unfrozen above.
+            for te in (self.backend.text_encoder, self.backend.text_encoder_2):
+                if te is None:
+                    continue
+                for param in te.parameters():
+                    if param.requires_grad:
+                        param.data = param.data.float()
+            log.info("fp16: text encoder trainable parameters cast to float32.")
 
         if progress_fn:
             progress_fn(2, 8, "Preparing dataset...")
