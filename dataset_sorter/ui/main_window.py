@@ -17,7 +17,7 @@ from typing import Optional
 import numpy as np
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QCursor, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
@@ -828,7 +828,7 @@ class MainWindow(QMainWindow):
                 f"border-radius: 8px; font-size: 11px; font-weight: 400; padding: 4px 12px; "
                 f"opacity: 0.5; }} "
                 f"QPushButton:hover {{ color: {COLORS['text_muted']}; "
-                f"border-color: {COLORS['border_subtle']}; cursor: not-allowed; }}"
+                f"border-color: {COLORS['border_subtle']}; }}"
             )
         # default / future
         return (
@@ -875,8 +875,10 @@ class MainWindow(QMainWindow):
             nav_target = "train" if step_id == "_train3" else step_id
             if nav_target == active_stepper or step_id == active_stepper:
                 btn.setStyleSheet(self._stepper_button_style("active"))
+                btn.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
             elif not self._is_step_available(step_id):
                 btn.setStyleSheet(self._stepper_button_style("disabled"))
+                btn.setCursor(QCursor(Qt.CursorShape.ForbiddenCursor))
                 # Show why the step is locked
                 if step_id == "train":
                     btn.setToolTip("Scan a dataset first (Step 1 — Dataset)")
@@ -884,9 +886,11 @@ class MainWindow(QMainWindow):
                     btn.setToolTip("Select a model first (Step 2 — Configure)")
             elif self._is_step_done(step_id):
                 btn.setStyleSheet(self._stepper_button_style("done"))
+                btn.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 btn.setToolTip("")
             else:
                 btn.setStyleSheet(self._stepper_button_style("default"))
+                btn.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 btn.setToolTip("")
 
         # More sub-nav bar: visible only when on a More page
