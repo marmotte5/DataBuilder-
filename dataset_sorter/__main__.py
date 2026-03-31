@@ -32,6 +32,14 @@ if sys.platform == "win32":
 
 import logging
 
+# Route all HuggingFace downloads to H:\hf_cache (the project's dedicated cache
+# drive) instead of the default C:\Users\..\.cache\huggingface.  Must be set
+# before any import of huggingface_hub / diffusers / transformers so the
+# hub client picks it up.  H:\hf_cache\hub already contains cached model
+# snapshots (Z-Image, FLUX, SDXL…) so generation works offline for cached
+# models; new downloads also land on H: instead of C:.
+os.environ.setdefault("HF_HOME", r"H:\hf_cache")
+
 # Configure root logger early so startup diagnostics are captured
 logging.basicConfig(
     level=logging.INFO,
