@@ -150,6 +150,8 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._setup_shortcuts()
         self._load_progress_state()
+        # Apply initial mode to all tabs (handles first launch with no saved state)
+        self._set_simple_mode(self._simple_mode)
         self.statusBar().showMessage(
             "Ready! Set source folder in Dataset, click Scan, then proceed through the steps. "
             "See Help (More ▾) for a full guide."
@@ -498,6 +500,11 @@ class MainWindow(QMainWindow):
         )
         action_bar.addWidget(self._status_label)
 
+        self.btn_import = QPushButton("Import Project")
+        self.btn_import.setToolTip("Re-import a previously exported DataBuilder project, restoring bucket assignments")
+        self.btn_import.clicked.connect(self._import_project)
+        action_bar.addWidget(self.btn_import)
+
         self.btn_export = QPushButton("Export Project")
         self.btn_export.setToolTip("Export organized dataset (Ctrl+E)")
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
@@ -809,6 +816,10 @@ class MainWindow(QMainWindow):
         self._update_mode_buttons()
         if hasattr(self, 'training_tab'):
             self.training_tab.set_simple_mode(simple)
+        if hasattr(self, 'dataset_tab'):
+            self.dataset_tab.set_simple_mode(simple)
+        if hasattr(self, 'generate_tab'):
+            self.generate_tab.set_simple_mode(simple)
 
     def _update_mode_buttons(self):
         """Sync the visual state of Simple/Advanced toggle buttons."""
@@ -2112,6 +2123,101 @@ class MainWindow(QMainWindow):
         dialog.exec()
         if dialog.accepted_export:
             self._do_export()
+
+    def _import_project(self):
+        """Re-import a previously exported DataBuilder project.
+
+        Reads the exported dataset/ subfolder, parses bucket folder names
+        ({repeats}_{bucket_num}_{name}), and restores entries with their
+        original bucket assignments.
+        """
+        import re
+
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "Select Exported Project Directory",
+            self.output_input.text().strip() or "",
+        )
+        if not output_dir:
+            return
+
+        output_path = Path(output_dir)
+        dataset_dir = output_path / "dataset"
+
+        if not dataset_dir.exists():
+            QMessageBox.warning(
+                self, "Import Error",
+                f"No 'dataset' subfolder found in:\n{output_dir}\n\n"
+                "Select a directory previously exported by DataBuilder.",
+            )
+            return
+
+        bucket_pattern = re.compile(r"^(\d+)_(\d+)_(.+)$")
+        _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+
+        entries: list[ImageEntry] = []
+        bucket_names: dict[int, str] = {}
+
+        for folder in sorted(dataset_dir.iterdir()):
+            if not folder.is_dir():
+                continue
+            m = bucket_pattern.match(folder.name)
+            if not m:
+                continue
+            bucket_num = int(m.group(2))
+            bucket_name = m.group(3)
+            bucket_names[bucket_num] = bucket_name
+
+            for img_path in sorted(folder.iterdir()):
+                if img_path.suffix.lower() not in _IMAGE_EXTS:
+                    continue
+                txt_path = img_path.with_suffix(".txt")
+                tags: list[str] = []
+                if txt_path.exists():
+                    try:
+                        content = txt_path.read_text(encoding="utf-8", errors="replace")
+                        tags = [t.strip() for t in content.split(",") if t.strip()]
+                    except OSError:
+                        pass
+                unique_id = f"{len(entries):06d}_{img_path.stem[:8]}"
+                entries.append(ImageEntry(
+                    image_path=img_path,
+                    txt_path=txt_path if txt_path.exists() else None,
+                    tags=tags,
+                    assigned_bucket=bucket_num,
+                    unique_id=unique_id,
+                ))
+
+        if not entries:
+            QMessageBox.warning(
+                self, "Import Error",
+                "No images found in the exported dataset.\n"
+                "Make sure the selected directory contains a DataBuilder export.",
+            )
+            return
+
+        # Apply imported state
+        self.entries = entries
+        self.bucket_names.update(bucket_names)
+        self.output_input.setText(str(output_path))
+        self.deleted_tags.clear()
+        self.manual_overrides.clear()
+
+        self._rebuild_tag_index()
+        self._compute_auto_buckets()
+        # Skip _assign_entries_to_buckets — preserve bucket assignments from folder structure
+        self._refresh_all_ui()
+
+        if not self._selection_connected:
+            self.tag_panel.connect_selection()
+            self._selection_connected = True
+
+        n_buckets = len(bucket_names)
+        self.statusBar().showMessage(
+            f"Imported {len(entries)} images across {n_buckets} bucket(s)."
+        )
+        self._toast(f"Imported {len(entries)} images from {n_buckets} buckets", "success")
+        self._update_step_indicator(2)
+        self._update_status_label()
 
     def _start_export(self):
         """Validate paths and initiate the export process."""

@@ -219,7 +219,8 @@ class GenerateTab(QWidget):
             self.model_type_combo.addItem(v, k)
         mg.addWidget(self.model_type_combo, 1, 1)
 
-        mg.addWidget(QLabel("Precision:"), 1, 2)
+        self._lbl_precision = QLabel("Precision:")
+        mg.addWidget(self._lbl_precision, 1, 2)
         self.precision_combo = QComboBox()
         self.precision_combo.setToolTip("Floating-point precision for inference (bf16 recommended)")
         for k, v in GEN_PRECISIONS.items():
@@ -301,7 +302,8 @@ class GenerateTab(QWidget):
         params.setSpacing(6)
 
         # Sampler / Scheduler
-        params.addWidget(QLabel("Sampler:"), 0, 0)
+        self._lbl_sampler = QLabel("Sampler:")
+        params.addWidget(self._lbl_sampler, 0, 0)
         self.scheduler_combo = QComboBox()
         self.scheduler_combo.setToolTip("Diffusion sampling algorithm (Euler A is a good default)")
         for k, v in GEN_SCHEDULERS.items():
@@ -317,7 +319,8 @@ class GenerateTab(QWidget):
         params.addWidget(self.steps_spin, 0, 3)
 
         # CFG Scale
-        params.addWidget(QLabel("CFG Scale:"), 1, 0)
+        self._lbl_cfg = QLabel("CFG Scale:")
+        params.addWidget(self._lbl_cfg, 1, 0)
         self.cfg_spin = QDoubleSpinBox()
         self.cfg_spin.setRange(1.0, 30.0)
         self.cfg_spin.setSingleStep(0.5)
@@ -355,7 +358,8 @@ class GenerateTab(QWidget):
         params.addWidget(self.resolution_combo, 2, 1)
 
         # Clip skip
-        params.addWidget(QLabel("Clip skip:"), 2, 2)
+        self._lbl_clip_skip = QLabel("Clip skip:")
+        params.addWidget(self._lbl_clip_skip, 2, 2)
         self.clip_skip_spin = QSpinBox()
         self.clip_skip_spin.setRange(0, 4)
         self.clip_skip_spin.setValue(0)
@@ -371,7 +375,8 @@ class GenerateTab(QWidget):
         params.addWidget(self.batch_spin, 3, 1)
 
         # Custom resolution
-        params.addWidget(QLabel("Custom W:"), 3, 2)
+        self._lbl_custom_w = QLabel("Custom W:")
+        params.addWidget(self._lbl_custom_w, 3, 2)
         self.custom_w_spin = QSpinBox()
         self.custom_w_spin.setRange(0, 4096)
         self.custom_w_spin.setSingleStep(64)
@@ -380,7 +385,8 @@ class GenerateTab(QWidget):
         self.custom_w_spin.setToolTip("0 = use preset above. Set both W and H to override.")
         params.addWidget(self.custom_w_spin, 3, 3)
 
-        params.addWidget(QLabel("Custom H:"), 4, 2)
+        self._lbl_custom_h = QLabel("Custom H:")
+        params.addWidget(self._lbl_custom_h, 4, 2)
         self.custom_h_spin = QSpinBox()
         self.custom_h_spin.setRange(0, 4096)
         self.custom_h_spin.setSingleStep(64)
@@ -440,6 +446,7 @@ class GenerateTab(QWidget):
         )
         i2i_layout.addWidget(self.init_preview, 2, 2, 1, 2, Qt.AlignmentFlag.AlignLeft)
 
+        self.i2i_grp = i2i_grp
         left.addWidget(i2i_grp)
 
         # -- Generate / Stop buttons --
@@ -457,7 +464,9 @@ class GenerateTab(QWidget):
         left.addLayout(gen_row)
 
         # -- Speed optimizations --
-        speed_row = QHBoxLayout()
+        self._speed_widget = QWidget()
+        speed_row = QHBoxLayout(self._speed_widget)
+        speed_row.setContentsMargins(0, 0, 0, 0)
         self.taylorseer_check = QCheckBox("TaylorSeer (3-5x faster)")
         self.taylorseer_check.setToolTip(
             "Enable TaylorSeer inference cache for DiT models (Flux, SD3, PixArt, etc.).\n"
@@ -468,7 +477,7 @@ class GenerateTab(QWidget):
         self.taylorseer_check.stateChanged.connect(self._on_taylorseer_toggled)
         speed_row.addWidget(self.taylorseer_check)
         speed_row.addStretch()
-        left.addLayout(speed_row)
+        left.addWidget(self._speed_widget)
 
         # -- Auto-save output folder --
         save_grp = QGroupBox("Auto-Save")
@@ -605,6 +614,33 @@ class GenerateTab(QWidget):
         splitter.setSizes([450, 550])
 
         root.addWidget(splitter)
+
+    def set_simple_mode(self, simple: bool) -> None:
+        """Show/hide advanced generation controls based on Simple/Advanced mode.
+
+        Simple mode keeps: model path/type, LoRA, prompts, steps, seed,
+        resolution, batch count, Auto-Save, Generate/Stop.
+        Advanced mode restores: precision, sampler, CFG, clip skip,
+        custom W/H, img2img/inpainting, TaylorSeer.
+        """
+        adv = not simple
+        # Model group — precision
+        self._lbl_precision.setVisible(adv)
+        self.precision_combo.setVisible(adv)
+        # Params group — sampler, CFG, clip skip, custom W/H
+        self._lbl_sampler.setVisible(adv)
+        self.scheduler_combo.setVisible(adv)
+        self._lbl_cfg.setVisible(adv)
+        self.cfg_spin.setVisible(adv)
+        self._lbl_clip_skip.setVisible(adv)
+        self.clip_skip_spin.setVisible(adv)
+        self._lbl_custom_w.setVisible(adv)
+        self.custom_w_spin.setVisible(adv)
+        self._lbl_custom_h.setVisible(adv)
+        self.custom_h_spin.setVisible(adv)
+        # img2img group and TaylorSeer
+        self.i2i_grp.setVisible(adv)
+        self._speed_widget.setVisible(adv)
 
     def _connect_signals(self):
         """Wire up load, unload, generate, and stop button signals."""

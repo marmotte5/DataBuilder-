@@ -125,6 +125,7 @@ class DatasetTab(QWidget):
         tabs.setTabToolTip(3, "AI-powered tag scoring and automatic bucket assignment")
 
         layout.addWidget(tabs)
+        self._analysis_tabs = tabs
 
     def set_data(self, entries: list[ImageEntry], tag_counts: Counter,
                   deleted_tags: set | None = None,
@@ -171,6 +172,20 @@ class DatasetTab(QWidget):
 
         # Tag importance (concept detection + smart bucketing)
         self.importance_section.set_data(entries, tag_counts, _del)
+
+    def set_simple_mode(self, simple: bool) -> None:
+        """Show/hide advanced analysis tabs based on Simple/Advanced mode.
+
+        Simple mode keeps only Captions (index 0) and Smart Sort (index 3).
+        Advanced mode shows all tabs.
+        """
+        tabs = self._analysis_tabs
+        # Tab indices: 0=Captions, 1=Tag Quality, 2=Data Quality, 3=Smart Sort
+        for idx in (1, 2):
+            if idx < tabs.count():
+                tabs.setTabVisible(idx, not simple)
+        if simple and tabs.currentIndex() in (1, 2):
+            tabs.setCurrentIndex(0)
 
     def get_augmentation_state(self) -> dict:
         """Return the current augmentation configuration as a dictionary."""
