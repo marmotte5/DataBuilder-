@@ -355,16 +355,25 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_out.clicked.connect(self._browse_output)
         paths_grid.addWidget(btn_out, 1, 2)
 
+        paths_grid.addWidget(self._muted("Output Name"), 2, 0)
+        self.output_name_input = QLineEdit()
+        self.output_name_input.setPlaceholderText("my_lora_v1  (auto-filled from model path)")
+        self.output_name_input.setToolTip(
+            "Name for the final model file/folder saved to <output_dir>/models/.\n"
+            "Leave blank to use 'final'. Auto-filled when you select a base model."
+        )
+        paths_grid.addWidget(self.output_name_input, 2, 1, 1, 2)
+
         # Resume from checkpoint row
         self._resume_lbl = self._muted("Resume From")
-        paths_grid.addWidget(self._resume_lbl, 2, 0)
+        paths_grid.addWidget(self._resume_lbl, 3, 0)
         self.resume_from_input = QLineEdit()
         self.resume_from_input.setPlaceholderText("(auto-detected) checkpoint directory to resume from...")
         self.resume_from_input.setToolTip(
             "Path to a checkpoint directory to resume training from. "
             "Auto-filled when a resumable checkpoint is found in the output directory."
         )
-        paths_grid.addWidget(self.resume_from_input, 2, 1)
+        paths_grid.addWidget(self.resume_from_input, 3, 1)
         _resume_btn_row_widget = QWidget()
         _resume_btn_row_layout = QHBoxLayout(_resume_btn_row_widget)
         _resume_btn_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -377,10 +386,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_resume_clear.setToolTip("Clear the resume-from path (start fresh)")
         btn_resume_clear.clicked.connect(self.resume_from_input.clear)
         _resume_btn_row_layout.addWidget(btn_resume_clear)
-        paths_grid.addWidget(_resume_btn_row_widget, 2, 2)
+        paths_grid.addWidget(_resume_btn_row_widget, 3, 2)
 
         # Auto-detect resume checkpoint when output dir changes
         self.output_dir_input.textChanged.connect(self._auto_detect_resume_checkpoint)
+        # Auto-fill output name from model path when the field is empty
+        self.model_path_input.textChanged.connect(self._auto_populate_output_name)
 
         main_layout.addLayout(paths_grid)
 
@@ -623,7 +634,22 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         )
         right_layout.addWidget(self.log_output, 1)
 
-        # Sample preview
+        # Sample preview header row
+        _sample_header = QHBoxLayout()
+        _sample_title = QLabel("Sample Preview")
+        _sample_title.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        _sample_header.addWidget(_sample_title, 1)
+        self.btn_generate_sample = QPushButton("Generate Sample Now")
+        self.btn_generate_sample.setToolTip(
+            "Force sample generation immediately (training must be running)"
+        )
+        self.btn_generate_sample.setEnabled(False)
+        self.btn_generate_sample.clicked.connect(self._on_generate_sample_now)
+        _sample_header.addWidget(self.btn_generate_sample)
+        right_layout.addLayout(_sample_header)
+
         self.sample_label = QLabel("Sample images will appear here\nduring training")
         self.sample_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sample_label.setMinimumHeight(200)
@@ -871,6 +897,24 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         )
         if path:
             self.resume_from_input.setText(path)
+
+    def _auto_populate_output_name(self, model_path_text: str):
+        """Auto-fill the output name from the model path when the field is empty."""
+        if self.output_name_input.text().strip():
+            return  # User has set a name; don't overwrite
+        model_path = model_path_text.strip()
+        if not model_path:
+            return
+        try:
+            import datetime
+            stem = Path(model_path).stem  # e.g. "v1-5-pruned-emaonly"
+            # Trim common suffixes that add noise
+            for suffix in ("-pruned-emaonly", "-pruned", ".ckpt", ".safetensors"):
+                stem = stem.replace(suffix, "")
+            date_tag = datetime.date.today().strftime("%Y%m%d")
+            self.output_name_input.setPlaceholderText(f"{stem}_lora_{date_tag}")
+        except Exception:
+            pass
 
     def _auto_detect_resume_checkpoint(self, output_dir_text: str):
         """Auto-fill the resume-from field and show resume banner when a checkpoint is found."""
@@ -1243,6 +1287,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.btn_resume.setVisible(False)
         self.btn_save_now.setEnabled(training)
         self.btn_sample_now.setEnabled(training)
+        self.btn_generate_sample.setEnabled(training)
         self.btn_backup.setEnabled(training)
         self.btn_collect_now.setEnabled(training)
         self.train_progress.setVisible(training)
@@ -1278,6 +1323,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log("Requesting immediate sample generation...")
             self._training_worker.request_sample()
 
+    def _on_generate_sample_now(self):
+        """Generate Sample Now button (in preview panel) — delegates to request_sample."""
+        if self._training_worker:
+            self._log("Requesting immediate sample generation...")
+            self._training_worker.request_sample()
+
     def _backup_now(self):
         """Request a full timestamped project backup from the training worker."""
         if self._training_worker:
@@ -1308,33 +1359,52 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log(f"[Step {step:6d}] loss={loss:.6f}  lr={lr:.2e}")
 
     def _on_sample(self, images, step):
-        """Handle sample signal: save generated images to disk and display the first one."""
+        """Handle sample signal: save generated images to disk and display a grid."""
         self._log(f"Samples generated at step {step}")
         try:
-            # Save samples to disk
+            # Save samples to a per-step subdirectory
             output_text = self.output_dir_input.text().strip()
             if not output_text:
                 self._log("Warning: output directory not set, skipping sample save")
             else:
                 output_dir = Path(output_text)
-                sample_dir = output_dir / "samples"
-                sample_dir.mkdir(parents=True, exist_ok=True)
+                step_dir = output_dir / "samples" / f"step_{step:06d}"
+                step_dir.mkdir(parents=True, exist_ok=True)
                 for i, img in enumerate(images):
-                    path = sample_dir / f"sample_step{step:06d}_{i}.png"
-                    img.save(str(path))
+                    img.save(str(step_dir / f"sample_{i:02d}.png"))
 
-            # Display first sample
+            # Build a grid pixmap from all images and display it
             if images:
-                img = images[0].convert("RGB")  # Ensure RGB mode
-                data = img.tobytes("raw", "RGB")
-                qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+                from PIL import Image as PilImage
+                imgs_rgb = [img.convert("RGB") for img in images]
+                n = len(imgs_rgb)
+                cols = min(n, 2)
+                rows = (n + cols - 1) // cols
+                cell_w, cell_h = imgs_rgb[0].width, imgs_rgb[0].height
+                grid_img = PilImage.new("RGB", (cols * cell_w, rows * cell_h), (30, 30, 30))
+                for idx, im in enumerate(imgs_rgb):
+                    r, c = divmod(idx, cols)
+                    grid_img.paste(im, (c * cell_w, r * cell_h))
+
+                data = grid_img.tobytes("raw", "RGB")
+                qimg = QImage(
+                    data, grid_img.width, grid_img.height,
+                    grid_img.width * 3, QImage.Format.Format_RGB888,
+                )
                 # .copy() ensures Qt owns the pixel data (avoids dangling pointer
                 # if Python's `data` bytes object is garbage-collected first).
+                max_w = max(self.sample_label.width(), 400)
+                max_h = max(self.sample_label.height(), 300)
                 pixmap = QPixmap.fromImage(qimg.copy()).scaled(
-                    400, 300, Qt.AspectRatioMode.KeepAspectRatio,
+                    max_w, max_h,
+                    Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
                 self.sample_label.setPixmap(pixmap)
+                self.sample_label.setStyleSheet(
+                    f"background-color: {COLORS['surface']}; "
+                    f"border: 2px solid {COLORS['accent']}; border-radius: 16px;"
+                )
         except Exception as e:
             self._log(f"Warning: failed to save/display sample at step {step}: {e}")
         finally:

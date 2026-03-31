@@ -39,6 +39,15 @@ import logging
 # snapshots (Z-Image, FLUX, SDXL…) so generation works offline for cached
 # models; new downloads also land on H: instead of C:.
 os.environ.setdefault("HF_HOME", r"H:\hf_cache")
+# Cover all env-var spellings that different HF library versions check.
+# HF_HUB_CACHE / HUGGINGFACE_HUB_CACHE must also be set explicitly because
+# some older huggingface_hub versions ignore HF_HOME and fall back to the
+# per-user cache on C: instead of inheriting the hub sub-path from HF_HOME.
+os.environ.setdefault("HF_HUB_CACHE", r"H:\hf_cache\hub")
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", r"H:\hf_cache\hub")
+# Suppress the "huggingface_hub cache-system uses symlinks" warning on Windows
+# (symlinks require Developer Mode or admin privileges; the warning is noise).
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 # Configure root logger early so startup diagnostics are captured
 logging.basicConfig(

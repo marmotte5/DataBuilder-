@@ -141,6 +141,9 @@ class TrainingConfig:
     sample_seed: int = 42
     num_sample_images: int = 4
 
+    # ── Output naming ──────────────────────────────────────────────────
+    output_name: str = ""    # User-chosen name for the final model file/folder
+
     # ── Checkpointing ──────────────────────────────────────────────────
     save_every_n_steps: int = 500
     save_every_n_epochs: int = 1

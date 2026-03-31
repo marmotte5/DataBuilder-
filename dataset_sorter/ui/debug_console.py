@@ -153,6 +153,12 @@ class QtLogHandler(logging.Handler):
             level = record.levelname
             # Marshal to main thread via signal
             self._console._log_signal.emit(msg, level)
+        except RuntimeError:
+            # Widget has been destroyed (e.g. tab closed or window hidden during
+            # training).  The log record is not lost — it still reaches the file
+            # handler and root logger — so silently ignore rather than flooding
+            # stderr with "wrapped C/C++ object has been deleted" noise.
+            pass
         except Exception:
             self.handleError(record)
 

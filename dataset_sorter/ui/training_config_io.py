@@ -197,6 +197,9 @@ class TrainingConfigIOMixin:
         if prompts_text:
             config.sample_prompts = [p.strip() for p in prompts_text.split("\n") if p.strip()]
 
+        # Output name
+        config.output_name = self.output_name_input.text().strip()
+
         # Token Weighting
         config.token_weighting_enabled = self.token_weight_check.isChecked()
         config.token_default_weight = self.token_default_weight_spin.value()
@@ -439,6 +442,9 @@ class TrainingConfigIOMixin:
 
         if config.sample_prompts:
             self.prompts_input.setPlainText("\n".join(config.sample_prompts))
+
+        # Output name
+        self.output_name_input.setText(getattr(config, "output_name", "") or "")
 
         # Token Weighting
         self.token_weight_check.setChecked(config.token_weighting_enabled)

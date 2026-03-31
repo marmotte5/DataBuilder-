@@ -1680,12 +1680,13 @@ class Trainer:
         else:
             log.info("save_final_checkpoint=False: skipping final checkpoint save.")
 
-        # Copy final model to models/ for easy access
+        # Copy final model to models/ for easy access, using the user-chosen name
         final_ckpt = self.output_dir / "checkpoints" / "final"
         models_dir = self.output_dir / "models"
         if final_ckpt.exists() and models_dir.exists():
             try:
-                final_model = models_dir / "final"
+                _out_name = (config.output_name or "").strip() or "final"
+                final_model = models_dir / _out_name
                 if final_model.exists():
                     shutil.rmtree(final_model)
                 shutil.copytree(str(final_ckpt), str(final_model))
