@@ -768,6 +768,23 @@ class Trainer:
             self.optimizer.train()
             log.info("ScheduleFree optimizer detected: calling optimizer.train()")
 
+        # ── 9b. Final fp16 param sweep (GradScaler compatibility) ──
+        # GradScaler.unscale_() raises ValueError if any param.grad is float16.
+        # Previous casts (step 3 LoRA, step 5 TE) cover most cases, but some
+        # optimizers (DAdaptAdam, GaLoreAdamW8bit-fallback) may add or expose
+        # additional param groups after construction.  This definitive sweep runs
+        # AFTER the optimizer is built so it catches everything unconditionally.
+        if self.grad_scaler is not None:
+            n_cast = 0
+            for group in self.optimizer.param_groups:
+                for param in group["params"]:
+                    if isinstance(param, torch.Tensor) and param.requires_grad \
+                            and param.dtype != torch.float32:
+                        param.data = param.data.float()
+                        n_cast += 1
+            if n_cast:
+                log.info("fp16 final sweep: cast %d trainable param(s) to float32.", n_cast)
+
         # ── 10. Steps calculation ──
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
         steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)

@@ -51,6 +51,9 @@ class FluxBackend(TrainBackendBase):
     supports_dual_te = True
     prediction_type = "flow"
 
+    # Note: both FLUX.1-dev and FLUX.1-schnell are gated repos on HuggingFace
+    # and require HF_TOKEN authentication. Loading a local .safetensors checkpoint
+    # will fail without a valid token because the config files are fetched from HF.
     _HF_FALLBACK_REPO = "black-forest-labs/FLUX.1-dev"
 
     def load_model(self, model_path: str):
