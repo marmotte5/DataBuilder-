@@ -145,6 +145,7 @@ class TrainingConfig:
     save_every_n_epochs: int = 1
     save_last_n_checkpoints: int = 3    # Keep only last N saves
     save_precision: str = "bf16"        # Checkpoint save precision
+    save_final_checkpoint: bool = True  # Save LoRA/weights at end of training (disable for quick tests)
 
     # ── Advanced parameters ────────────────────────────────────────────
     noise_offset: float = 0.0

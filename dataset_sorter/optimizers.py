@@ -589,7 +589,10 @@ class SOAP(Optimizer):
                 state[cov_key].lerp_(cov, alpha)
             else:
                 state[cov_key] = cov.clone()
-            # Eigendecomposition (small matrices, fast)
+            # Eigendecomposition — skip for very small dims (rank < 8 causes
+            # near-singular covariance that makes linalg.eigh fail repeatedly).
+            if grad.shape[i] < 8:
+                continue
             try:
                 _, eigvecs = torch.linalg.eigh(state[cov_key])
                 Q_list[i] = eigvecs

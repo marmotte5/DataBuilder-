@@ -1618,11 +1618,14 @@ class Trainer:
             torch.cuda.empty_cache()
 
         # Final save (use eval mode for ScheduleFree to get averaged weights)
-        if self._is_schedulefree:
-            self.optimizer.eval()
-        self._save_checkpoint("final")
-        if self._is_schedulefree:
-            self.optimizer.train()
+        if config.save_final_checkpoint:
+            if self._is_schedulefree:
+                self.optimizer.eval()
+            self._save_checkpoint("final")
+            if self._is_schedulefree:
+                self.optimizer.train()
+        else:
+            log.info("save_final_checkpoint=False: skipping final checkpoint save.")
 
         # Copy final model to models/ for easy access
         final_ckpt = self.output_dir / "checkpoints" / "final"
