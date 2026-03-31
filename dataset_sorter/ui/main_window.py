@@ -196,6 +196,7 @@ class MainWindow(QMainWindow):
 
         # ── Header bar (60px) ──────────────────────────────────────────────
         header = QWidget()
+        self._header_widget = header
         header.setFixedHeight(60)
         header.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
@@ -218,6 +219,7 @@ class MainWindow(QMainWindow):
 
         # Simple / Advanced toggle
         mode_lbl = QLabel("Mode:")
+        self._mode_lbl = mode_lbl
         mode_lbl.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; "
             f"font-weight: 600; background: transparent;"
@@ -245,6 +247,7 @@ class MainWindow(QMainWindow):
 
         # Separator
         sep_lbl = QLabel("|")
+        self._header_sep_lbl = sep_lbl
         sep_lbl.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
         header_layout.addWidget(sep_lbl)
 
@@ -278,6 +281,7 @@ class MainWindow(QMainWindow):
 
         # ── Stepper bar (50px) ────────────────────────────────────────────
         stepper_widget = QWidget()
+        self._stepper_widget = stepper_widget
         stepper_widget.setFixedHeight(50)
         stepper_widget.setStyleSheet(
             f"background-color: {COLORS['bg']}; "
@@ -289,6 +293,7 @@ class MainWindow(QMainWindow):
 
         stepper_layout.addStretch()
         self._stepper_btns: dict[str, QPushButton] = {}
+        self._stepper_arrows: list = []
         for i, (step_id, num, label, tip) in enumerate(self._STEPPER_STEPS):
             if i > 0:
                 arrow = QLabel("→")
@@ -296,6 +301,7 @@ class MainWindow(QMainWindow):
                     f"color: {COLORS['text_muted']}; background: transparent; "
                     f"font-size: 16px; padding: 0 6px;"
                 )
+                self._stepper_arrows.append(arrow)
                 stepper_layout.addWidget(arrow)
             nav_target = "train" if step_id == "_train3" else step_id
             btn = QPushButton(f"{num}. {label}")
@@ -569,6 +575,7 @@ class MainWindow(QMainWindow):
         helper_layout.setSpacing(8)
 
         helper_title = QLabel("Tips")
+        self._helper_title = helper_title
         helper_title.setStyleSheet(
             f"color: {COLORS['text']}; font-size: 13px; font-weight: 700; "
             f"background: transparent; border-bottom: 1px solid {COLORS['border']}; "
@@ -592,6 +599,7 @@ class MainWindow(QMainWindow):
 
         # ── Footer bar (50px) ──────────────────────────────────────────────
         footer = QWidget()
+        self._footer_widget = footer
         footer.setFixedHeight(50)
         footer.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
@@ -609,6 +617,7 @@ class MainWindow(QMainWindow):
         footer_layout.addWidget(self._badge_dataset)
 
         footer_sep1 = QLabel("|")
+        self._footer_sep1 = footer_sep1
         footer_sep1.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
         footer_layout.addWidget(footer_sep1)
 
@@ -621,6 +630,7 @@ class MainWindow(QMainWindow):
         footer_layout.addWidget(self._badge_gpu)
 
         footer_sep2 = QLabel("|")
+        self._footer_sep2 = footer_sep2
         footer_sep2.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
         footer_layout.addWidget(footer_sep2)
 
@@ -647,7 +657,13 @@ class MainWindow(QMainWindow):
 
         self.btn_footer_next = QPushButton("Next →")
         self.btn_footer_next.setFixedSize(80, 32)
-        self.btn_footer_next.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_footer_next.setStyleSheet(
+            f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "
+            f"border: none; border-radius: 6px; padding: 4px 10px; "
+            f"font-weight: 600; font-size: 11px; }} "
+            f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }} "
+            f"QPushButton:pressed {{ background-color: {COLORS['accent_subtle']}; }}"
+        )
         self.btn_footer_next.clicked.connect(self._nav_next)
         footer_layout.addWidget(self.btn_footer_next)
 
@@ -1053,6 +1069,92 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+6"), self, lambda: self._switch_nav("compare"))
         QShortcut(QKeySequence("Ctrl+7"), self, lambda: self._switch_nav("merge"))
 
+    def _refresh_theme_styles(self):
+        """Re-apply all hardcoded widget stylesheets after a theme change."""
+        c = COLORS
+        # Header
+        self._header_widget.setStyleSheet(
+            f"background-color: {c['bg_alt']}; border-bottom: 1px solid {c['border']};"
+        )
+        self._mode_lbl.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        self._header_sep_lbl.setStyleSheet(f"color: {c['border']}; background: transparent;")
+        self.btn_more.setStyleSheet(
+            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {c['text_muted']}; "
+            f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
+            f"QPushButton:hover {{ color: {c['text']}; border-color: {c['accent']}; }}"
+        )
+        self.btn_theme.setStyleSheet(
+            f"QPushButton {{ padding: 4px; font-size: 11px; font-weight: 500; "
+            f"border-radius: 6px; color: {c['text_muted']}; "
+            f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
+            f"QPushButton:hover {{ color: {c['text']}; border-color: {c['accent']}; }}"
+        )
+        # Stepper
+        self._stepper_widget.setStyleSheet(
+            f"background-color: {c['bg']}; border-bottom: 1px solid {c['border_subtle']};"
+        )
+        for arrow in self._stepper_arrows:
+            arrow.setStyleSheet(
+                f"color: {c['text_muted']}; background: transparent; "
+                f"font-size: 16px; padding: 0 6px;"
+            )
+        # Section title
+        self._section_title.setStyleSheet(
+            f"color: {c['header']}; font-size: 16px; font-weight: 700; "
+            f"background: transparent; letter-spacing: 0.3px; padding: 8px 12px 4px 12px;"
+        )
+        # Path bar
+        self._path_bar_widget.setStyleSheet(
+            f"background: {c['bg_alt']}; border-bottom: 1px solid {c['border_subtle']};"
+        )
+        # Helper panel
+        self._helper_panel.setStyleSheet(
+            f"background-color: {c['bg_alt']}; border-left: 1px solid {c['border']};"
+        )
+        self._helper_title.setStyleSheet(
+            f"color: {c['text']}; font-size: 13px; font-weight: 700; "
+            f"background: transparent; border-bottom: 1px solid {c['border']}; "
+            f"padding-bottom: 6px;"
+        )
+        self._helper_text.setStyleSheet(
+            f"color: {c['text_secondary']}; font-size: 11px; "
+            f"background: transparent; line-height: 1.5;"
+        )
+        # Footer
+        self._footer_widget.setStyleSheet(
+            f"background-color: {c['bg_alt']}; border-top: 1px solid {c['border']};"
+        )
+        self._badge_dataset.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self._footer_sep1.setStyleSheet(f"color: {c['border']}; background: transparent;")
+        self._badge_gpu.setStyleSheet(
+            f"color: {c['success'] if self._gpu_available else c['text_muted']}; "
+            f"font-size: 11px; background: transparent;"
+        )
+        self._footer_sep2.setStyleSheet(f"color: {c['border']}; background: transparent;")
+        self._badge_autosave.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self.btn_footer_back.setStyleSheet(
+            f"QPushButton {{ padding: 4px 10px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {c['text_muted']}; "
+            f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
+            f"QPushButton:hover {{ color: {c['text']}; border-color: {c['accent']}; }} "
+            f"QPushButton:disabled {{ opacity: 0.4; }}"
+        )
+        self.btn_footer_next.setStyleSheet(
+            f"QPushButton {{ background-color: {c['accent']}; color: white; "
+            f"border: none; border-radius: 6px; padding: 4px 10px; "
+            f"font-weight: 600; font-size: 11px; }} "
+            f"QPushButton:hover {{ background-color: {c['accent_hover']}; }} "
+            f"QPushButton:pressed {{ background-color: {c['accent_subtle']}; }}"
+        )
+        self._update_mode_buttons()
+
     def _toggle_theme(self):
         """Switch between dark and light themes."""
         new_mode = toggle_theme()
@@ -1060,6 +1162,7 @@ class MainWindow(QMainWindow):
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
         # Refresh stepper button styles
         self._switch_nav(self._current_nav)
+        self._refresh_theme_styles()
         self.statusBar().showMessage(f"Switched to {new_mode} theme.")
         self._toast(f"Switched to {new_mode} theme", "info")
 
@@ -1103,6 +1206,8 @@ class MainWindow(QMainWindow):
             set_theme("light")
             QApplication.instance().setStyleSheet(get_stylesheet())
             self.btn_theme.setText("Dark")
+            self._refresh_theme_styles()
+            self._switch_nav(self._current_nav)
         if "simple_mode" in state:
             self._set_simple_mode(bool(state["simple_mode"]))
         if "workers" in state:
