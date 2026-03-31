@@ -145,11 +145,48 @@ def dequantize_from_fp8(
     return fp8_tensor.to(target_dtype) * inv_scale
 
 
+class _FP8MatmulSTE(torch.autograd.Function):
+    """FP8 matmul with Straight-Through Estimator for the backward pass.
+
+    Forward: uses torch._scaled_mm for FP8 throughput (2x vs BF16).
+    Backward: standard float matmul gradients (STE — no derivative needed
+    for _scaled_mm itself, which PyTorch does not implement).
+    """
+
+    @staticmethod
+    def forward(ctx, x_2d, weight, bias, x_fp8, w_fp8, x_inv, w_inv):  # type: ignore[override]
+        ctx.save_for_backward(x_2d, weight, bias)
+        out = torch._scaled_mm(
+            x_fp8, w_fp8.t(),
+            scale_a=x_inv, scale_b=w_inv,
+            out_dtype=x_2d.dtype,
+        )
+        if isinstance(out, tuple):
+            out = out[0]
+        if bias is not None:
+            out = out + bias.to(out.dtype)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):  # type: ignore[override]
+        x_2d, weight, bias = ctx.saved_tensors
+        # Standard linear backward (STE: pretend forward was a plain matmul)
+        grad_input = grad_output @ weight.to(grad_output.dtype)
+        grad_weight = grad_output.t() @ x_2d.to(grad_output.dtype)
+        grad_bias = grad_output.sum(0) if bias is not None else None
+        # Return None for x_fp8, w_fp8, x_inv, w_inv (not differentiable inputs)
+        return grad_input.to(x_2d.dtype), grad_weight.to(weight.dtype), grad_bias, None, None, None, None
+
+
 class FP8LinearWrapper(nn.Module):
     """Drop-in replacement for nn.Linear that uses FP8 matmuls.
 
     Uses torch._scaled_mm (PyTorch 2.4+) for FP8 matrix multiplication
     on Ada/Hopper GPUs. This leverages FP8 tensor cores for 2x throughput.
+
+    The backward pass uses a Straight-Through Estimator (STE): gradients are
+    computed as if the forward were a standard float matmul, since
+    torch._scaled_mm has no registered autograd backward.
 
     Falls back to standard matmul if FP8 is not supported.
     """
@@ -190,22 +227,16 @@ class FP8LinearWrapper(nn.Module):
             x_inv = torch.tensor(1.0 / x_scale, device=x.device, dtype=torch.float32)
             w_inv = torch.tensor(1.0 / w_scale, device=x.device, dtype=torch.float32)
 
-            # FP8 matmul — some PyTorch versions (2.4-2.5) return
-            # (output, amax) tuple instead of a bare tensor.
-            out = torch._scaled_mm(
-                x_fp8, w_fp8.t(),
-                scale_a=x_inv, scale_b=w_inv,
-                out_dtype=x.dtype,
+            # FP8 matmul via STE — forward uses _scaled_mm, backward uses
+            # standard float gradients (torch._scaled_mm has no autograd).
+            out = _FP8MatmulSTE.apply(
+                x, w, self.linear.bias,
+                x_fp8, w_fp8, x_inv, w_inv,
             )
-            if isinstance(out, tuple):
-                out = out[0]
 
             # Restore original batch dimensions
             if len(orig_shape) > 2:
                 out = out.reshape(*orig_shape[:-1], out.shape[-1])
-
-            if self.linear.bias is not None:
-                out = out + self.linear.bias.to(out.dtype)
 
             return out
 
