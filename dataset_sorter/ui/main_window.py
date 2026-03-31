@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
-    QStackedWidget, QFrame, QMenu, QScrollArea,
+    QStackedWidget, QFrame, QMenu, QScrollArea, QComboBox, QInputDialog,
 )
 
 from dataset_sorter.constants import (
@@ -68,6 +68,47 @@ def _get_data_dir() -> Path:
 
 # Persistence file for progress state
 _PROGRESS_FILE = _get_data_dir() / "state.json"
+
+# Profiles directory
+_PROFILES_DIR = _get_data_dir() / "profiles"
+
+# Built-in default profiles (partial TrainingConfig fields)
+_DEFAULT_PROFILES: dict[str, dict] = {
+    "SD 1.5 Quick Test": {
+        "model_type": "sd15_lora",
+        "lora_rank": 16, "lora_alpha": 8,
+        "learning_rate": 1e-4, "text_encoder_lr": 5e-5,
+        "batch_size": 2, "epochs": 5, "resolution": 512,
+        "optimizer": "Adafactor", "mixed_precision": "bf16",
+        "gradient_checkpointing": True, "cache_latents": True,
+    },
+    "SDXL Quality": {
+        "model_type": "sdxl_lora",
+        "lora_rank": 32, "lora_alpha": 16,
+        "learning_rate": 5e-5, "text_encoder_lr": 1e-5,
+        "batch_size": 1, "epochs": 15, "resolution": 1024,
+        "optimizer": "Adafactor", "mixed_precision": "bf16",
+        "gradient_checkpointing": True, "cache_latents": True,
+    },
+    "Flux LoRA": {
+        "model_type": "flux_lora",
+        "lora_rank": 16, "lora_alpha": 8,
+        "learning_rate": 1e-4, "text_encoder_lr": 5e-5,
+        "batch_size": 1, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor", "mixed_precision": "bf16",
+        "gradient_checkpointing": True, "cache_latents": True,
+        "train_text_encoder": False,
+    },
+    "Pony Diffusion": {
+        "model_type": "sdxl_lora",
+        "lora_rank": 32, "lora_alpha": 16,
+        "learning_rate": 1e-4, "text_encoder_lr": 0.0,
+        "batch_size": 1, "epochs": 20, "resolution": 1024,
+        "optimizer": "Adafactor", "mixed_precision": "bf16",
+        "gradient_checkpointing": True, "cache_latents": True,
+        "train_text_encoder": False,
+    },
+}
 
 
 class DragDropLineEdit(QLineEdit):
@@ -147,6 +188,8 @@ class MainWindow(QMainWindow):
         self._selection_connected = False
 
         self._build_ui()
+        self._init_default_profiles()
+        self._refresh_profile_combo()
         self._connect_signals()
         self._setup_shortcuts()
         self._load_progress_state()
@@ -251,7 +294,54 @@ class MainWindow(QMainWindow):
         sep_lbl.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
         header_layout.addWidget(sep_lbl)
 
-        # More... menu (secondary navigation)
+        # ── Profile system ──────────────────────────────────────
+        profile_lbl = QLabel("Profile:")
+        self._profile_lbl = profile_lbl
+        profile_lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; "
+            f"font-weight: 600; background: transparent;"
+        )
+        header_layout.addWidget(profile_lbl)
+
+        self._profile_combo = QComboBox()
+        self._profile_combo.setFixedSize(150, 30)
+        self._profile_combo.setToolTip("Select a training profile to load")
+        self._profile_combo.activated.connect(self._on_profile_selected)
+        header_layout.addWidget(self._profile_combo)
+
+        btn_save_profile = QPushButton("Save")
+        btn_save_profile.setFixedSize(50, 30)
+        btn_save_profile.setToolTip("Save current training settings as a profile")
+        btn_save_profile.setStyleSheet(
+            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {COLORS['accent']}; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['accent']}; }} "
+            f"QPushButton:hover {{ background: {COLORS['accent_subtle']}; }}"
+        )
+        btn_save_profile.clicked.connect(self._save_profile)
+        self._btn_save_profile = btn_save_profile
+        header_layout.addWidget(btn_save_profile)
+
+        btn_del_profile = QPushButton("Del")
+        btn_del_profile.setFixedSize(40, 30)
+        btn_del_profile.setToolTip("Delete selected profile (built-in profiles cannot be deleted)")
+        btn_del_profile.setStyleSheet(
+            f"QPushButton {{ padding: 4px 6px; font-size: 11px; font-weight: 500; "
+            f"border-radius: 6px; color: {COLORS['text_muted']}; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
+            f"QPushButton:hover {{ color: {COLORS['danger']}; border-color: {COLORS['danger']}; }}"
+        )
+        btn_del_profile.clicked.connect(self._delete_selected_profile)
+        self._btn_del_profile = btn_del_profile
+        header_layout.addWidget(btn_del_profile)
+
+        # Separator before More
+        sep_lbl2 = QLabel("|")
+        self._header_sep_lbl2 = sep_lbl2
+        sep_lbl2.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
+        header_layout.addWidget(sep_lbl2)
+
+        # More... button (now opens sub-nav bar)
         self.btn_more = QPushButton("More ▾")
         self.btn_more.setFixedSize(70, 30)
         self.btn_more.setToolTip("Access secondary tools")
@@ -315,6 +405,38 @@ class MainWindow(QMainWindow):
         stepper_layout.addStretch()
 
         outer.addWidget(stepper_widget)
+
+        # ── More sub-navigation bar (hidden until a More page is active) ──
+        more_nav = QWidget()
+        self._more_nav_widget = more_nav
+        more_nav.setFixedHeight(40)
+        more_nav.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border-bottom: 1px solid {COLORS['border']};"
+        )
+        more_nav_layout = QHBoxLayout(more_nav)
+        more_nav_layout.setContentsMargins(16, 4, 16, 4)
+        more_nav_layout.setSpacing(4)
+
+        _more_pages = [
+            ("Batch",    "batch"),
+            ("Compare",  "compare"),
+            ("Merge",    "merge"),
+            ("Library",  "library"),
+            ("Settings", "settings"),
+            ("Help",     "help"),
+        ]
+        self._more_nav_btns: dict[str, QPushButton] = {}
+        for label, nav_id in _more_pages:
+            btn = QPushButton(label)
+            btn.setFixedHeight(28)
+            btn.setStyleSheet(self._more_nav_btn_style("default"))
+            btn.clicked.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
+            more_nav_layout.addWidget(btn)
+            self._more_nav_btns[nav_id] = btn
+        more_nav_layout.addStretch()
+        more_nav.setVisible(False)
+        outer.addWidget(more_nav)
 
         # ── Main area: path bar + content + helper panel ──────────────────
         main_area = QWidget()
@@ -683,7 +805,7 @@ class MainWindow(QMainWindow):
     def _stepper_button_style(self, state: str) -> str:
         """Return stylesheet for a stepper step button.
 
-        state: 'active' | 'done' | 'default'
+        state: 'active' | 'done' | 'default' | 'disabled'
         """
         if state == "active":
             return (
@@ -698,6 +820,15 @@ class MainWindow(QMainWindow):
                 f"color: {COLORS['success']}; border: 1px solid {COLORS['success']}; "
                 f"border-radius: 8px; font-size: 11px; font-weight: 600; padding: 4px 12px; }} "
                 f"QPushButton:hover {{ background-color: {COLORS['success_bg']}; }}"
+            )
+        if state == "disabled":
+            return (
+                f"QPushButton {{ background-color: {COLORS['bg']}; "
+                f"color: {COLORS['text_muted']}; border: 1px dashed {COLORS['border_subtle']}; "
+                f"border-radius: 8px; font-size: 11px; font-weight: 400; padding: 4px 12px; "
+                f"opacity: 0.5; }} "
+                f"QPushButton:hover {{ color: {COLORS['text_muted']}; "
+                f"border-color: {COLORS['border_subtle']}; cursor: not-allowed; }}"
             )
         # default / future
         return (
@@ -725,20 +856,48 @@ class MainWindow(QMainWindow):
             "train": "train",
             "generate": "generate",
         }
+        # Check availability for stepper steps (but not More pages)
+        _stepper_nav_ids = {"dataset", "train", "generate"}
+        if nav_id in _stepper_nav_ids and not self._is_step_available(nav_id):
+            if nav_id == "train":
+                self._toast("Scan a dataset first (Step 1)", "warning")
+            elif nav_id == "generate":
+                pass  # generate is always available
+            return
+
         page = nav_to_page.get(nav_id, 0)
         self._content_stack.setCurrentIndex(page)
         self._current_nav = nav_id
 
-        # Update stepper button styles
+        # Update stepper button styles (active / done / default / disabled)
         active_stepper = nav_to_stepper.get(nav_id)
         for step_id, btn in self._stepper_btns.items():
             nav_target = "train" if step_id == "_train3" else step_id
             if nav_target == active_stepper or step_id == active_stepper:
                 btn.setStyleSheet(self._stepper_button_style("active"))
+            elif not self._is_step_available(step_id):
+                btn.setStyleSheet(self._stepper_button_style("disabled"))
+                # Show why the step is locked
+                if step_id == "train":
+                    btn.setToolTip("Scan a dataset first (Step 1 — Dataset)")
+                elif step_id == "_train3":
+                    btn.setToolTip("Select a model first (Step 2 — Configure)")
             elif self._is_step_done(step_id):
                 btn.setStyleSheet(self._stepper_button_style("done"))
+                btn.setToolTip("")
             else:
                 btn.setStyleSheet(self._stepper_button_style("default"))
+                btn.setToolTip("")
+
+        # More sub-nav bar: visible only when on a More page
+        _more_nav_ids = {"batch", "compare", "merge", "library", "settings", "help"}
+        is_more = nav_id in _more_nav_ids
+        self._more_nav_widget.setVisible(is_more)
+        if is_more:
+            for page_id, btn in self._more_nav_btns.items():
+                btn.setStyleSheet(
+                    self._more_nav_btn_style("active" if page_id == nav_id else "default")
+                )
 
         # Section title: show for secondary sections, hide for main stepper ones
         title = nav_to_title.get(nav_id, "")
@@ -858,29 +1017,192 @@ class MainWindow(QMainWindow):
         self.btn_simple_mode.setStyleSheet(active_style if simple else inactive_style)
         self.btn_advanced_mode.setStyleSheet(inactive_style if simple else active_style)
 
-    # ── More... dropdown menu ──────────────────────────────────────────────
+    # ── More button: show sub-nav bar ─────────────────────────────────────
 
     def _show_more_menu(self):
-        """Show a popup menu with secondary navigation sections."""
-        menu = QMenu(self)
-        actions = [
-            ("Batch Generation",  "batch"),
-            ("A/B Compare",       "compare"),
-            ("Model Merge",       "merge"),
-            ("Library",           "library"),
-            (None, None),  # separator
-            ("Settings",          "settings"),
-            ("Help",              "help"),
-        ]
-        for label, nav_id in actions:
-            if label is None:
-                menu.addSeparator()
-            else:
-                act = menu.addAction(label)
-                act.triggered.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
-        menu.exec(self.btn_more.mapToGlobal(
-            self.btn_more.rect().bottomLeft()
-        ))
+        """Toggle the More sub-navigation bar and navigate to Batch (first More page)."""
+        _more_nav_ids = {"batch", "compare", "merge", "library", "settings", "help"}
+        if self._current_nav not in _more_nav_ids:
+            self._switch_nav("batch")
+        else:
+            # Already on a More page: toggle the sub-nav bar visibility
+            self._more_nav_widget.setVisible(not self._more_nav_widget.isVisible())
+
+    # ── More sub-nav button style ──────────────────────────────────────────
+
+    def _more_nav_btn_style(self, state: str) -> str:
+        """Return stylesheet for a More sub-nav button. state: 'active' | 'default'."""
+        if state == "active":
+            return (
+                f"QPushButton {{ background-color: {COLORS['accent_subtle']}; "
+                f"color: {COLORS['accent']}; border: 1px solid {COLORS['accent']}; "
+                f"border-radius: 6px; font-size: 11px; font-weight: 700; padding: 3px 12px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }}"
+            )
+        return (
+            f"QPushButton {{ background-color: transparent; "
+            f"color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 6px; font-size: 11px; font-weight: 500; padding: 3px 12px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; "
+            f"background-color: {COLORS['surface']}; }}"
+        )
+
+    # ── Stepper availability ───────────────────────────────────────────────
+
+    def _is_step_available(self, step_id: str) -> bool:
+        """Return True if the user can navigate to this workflow step."""
+        if step_id in ("dataset", "generate"):
+            return True
+        if step_id == "train":
+            # Configure: requires a scanned dataset
+            return len(self.entries) > 0
+        if step_id == "_train3":
+            # Train: requires a model to be selected
+            return (
+                hasattr(self, "training_tab")
+                and bool(getattr(self.training_tab, "model_path_input", None))
+                and bool(self.training_tab.model_path_input.text().strip())
+            )
+        return True
+
+    # ── Profile system ─────────────────────────────────────────────────────
+
+    def _init_default_profiles(self):
+        """Write built-in default profiles to disk if they don't exist yet."""
+        try:
+            _PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+            for name, partial in _DEFAULT_PROFILES.items():
+                path = _PROFILES_DIR / f"{name}.json"
+                if not path.exists():
+                    path.write_text(
+                        json.dumps({"name": name, "builtin": True, "config": partial},
+                                   indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+        except OSError as e:
+            log.warning("Could not initialise default profiles: %s", e)
+
+    def _get_profiles(self) -> list[str]:
+        """Return sorted list of profile names (built-in first, then user profiles)."""
+        if not _PROFILES_DIR.exists():
+            return []
+        builtin = sorted(n for n in _DEFAULT_PROFILES)
+        user: list[str] = []
+        for p in sorted(_PROFILES_DIR.glob("*.json")):
+            name = p.stem
+            if name not in builtin:
+                user.append(name)
+        # Return built-ins first (that actually have a file), then user profiles
+        result: list[str] = []
+        for name in builtin:
+            if (_PROFILES_DIR / f"{name}.json").exists():
+                result.append(name)
+        result.extend(user)
+        return result
+
+    def _refresh_profile_combo(self):
+        """Reload the profile dropdown from disk."""
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        self._profile_combo.addItem("— Load Profile —")
+        for name in self._get_profiles():
+            self._profile_combo.addItem(name)
+        self._profile_combo.setCurrentIndex(0)
+        self._profile_combo.blockSignals(False)
+
+    def _on_profile_selected(self, index: int):
+        """Load the profile chosen in the dropdown."""
+        if index <= 0:
+            return
+        name = self._profile_combo.itemText(index)
+        self._load_profile(name)
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.setCurrentIndex(0)
+        self._profile_combo.blockSignals(False)
+
+    def _load_profile(self, name: str):
+        """Load a named profile and apply it to the training tab."""
+        path = _PROFILES_DIR / f"{name}.json"
+        if not path.exists():
+            self._toast(f"Profile '{name}' not found", "error")
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            self._toast(f"Profile load error: {e}", "error")
+            return
+        cfg_data = data.get("config", data)
+        if not hasattr(self, "training_tab"):
+            self._toast("Training tab not ready", "error")
+            return
+        from dataset_sorter.models import TrainingConfig
+        config = TrainingConfig()
+        for key, value in cfg_data.items():
+            if not hasattr(config, key) or value is None:
+                continue
+            try:
+                current = getattr(config, key)
+                if isinstance(current, list) and isinstance(value, list):
+                    setattr(config, key, value)
+                elif isinstance(current, bool):
+                    if isinstance(value, (bool, int, float)):
+                        setattr(config, key, bool(value))
+                else:
+                    setattr(config, key, type(current)(value))
+            except (ValueError, TypeError):
+                pass
+        self.training_tab.apply_config(config)
+        self._switch_nav("train")
+        self._toast(f"Profile '{name}' loaded", "success")
+
+    def _save_profile(self):
+        """Prompt for a name and save the current training config as a profile."""
+        if not hasattr(self, "training_tab"):
+            self._toast("Training tab not ready", "error")
+            return
+        name, ok = QInputDialog.getText(
+            self, "Save Profile", "Profile name:",
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        # Disallow overwriting built-in names
+        if name in _DEFAULT_PROFILES:
+            self._toast(f"'{name}' is a built-in profile — choose a different name", "warning")
+            return
+        from dataclasses import asdict
+        config = self.training_tab.build_config()
+        profile_data = {"name": name, "builtin": False, "config": asdict(config)}
+        try:
+            _PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+            (_PROFILES_DIR / f"{name}.json").write_text(
+                json.dumps(profile_data, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            self._toast(f"Save error: {e}", "error")
+            return
+        self._refresh_profile_combo()
+        self._toast(f"Profile '{name}' saved", "success")
+
+    def _delete_selected_profile(self):
+        """Delete the currently-selected profile (user profiles only)."""
+        idx = self._profile_combo.currentIndex()
+        if idx <= 0:
+            self._toast("Select a profile first", "warning")
+            return
+        name = self._profile_combo.itemText(idx)
+        if name in _DEFAULT_PROFILES:
+            self._toast(f"'{name}' is a built-in profile and cannot be deleted", "warning")
+            return
+        path = _PROFILES_DIR / f"{name}.json"
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            self._toast(f"Delete error: {e}", "error")
+            return
+        self._refresh_profile_combo()
+        self._toast(f"Profile '{name}' deleted", "success")
 
     # ── Helper panel content ───────────────────────────────────────────────
 
@@ -1080,6 +1402,30 @@ class MainWindow(QMainWindow):
             f"color: {c['text_muted']}; font-size: 11px; font-weight: 600; background: transparent;"
         )
         self._header_sep_lbl.setStyleSheet(f"color: {c['border']}; background: transparent;")
+        self._header_sep_lbl2.setStyleSheet(f"color: {c['border']}; background: transparent;")
+        # Profile widgets
+        self._profile_lbl.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        self._btn_save_profile.setStyleSheet(
+            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+            f"border-radius: 6px; color: {c['accent']}; "
+            f"background: {c['surface']}; border: 1px solid {c['accent']}; }} "
+            f"QPushButton:hover {{ background: {c['accent_subtle']}; }}"
+        )
+        self._btn_del_profile.setStyleSheet(
+            f"QPushButton {{ padding: 4px 6px; font-size: 11px; font-weight: 500; "
+            f"border-radius: 6px; color: {c['text_muted']}; "
+            f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
+            f"QPushButton:hover {{ color: {c['danger']}; border-color: {c['danger']}; }}"
+        )
+        # More sub-nav bar
+        self._more_nav_widget.setStyleSheet(
+            f"background-color: {c['bg_alt']}; border-bottom: 1px solid {c['border']};"
+        )
+        for page_id, btn in self._more_nav_btns.items():
+            state = "active" if page_id == getattr(self, "_current_nav", "") else "default"
+            btn.setStyleSheet(self._more_nav_btn_style(state))
         self.btn_more.setStyleSheet(
             f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
             f"border-radius: 6px; color: {c['text_muted']}; "

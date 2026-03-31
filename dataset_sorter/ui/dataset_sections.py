@@ -683,7 +683,7 @@ class SpellCheckSection(QWidget):
                 f"QPushButton {{ background-color: {COLORS['success']}; "
                 f"color: {COLORS['bg']}; border: none; border-radius: 4px; "
                 f"padding: 3px 10px; font-weight: 600; font-size: 11px; }} "
-                f"QPushButton:hover {{ background-color: #5ce0a8; }}"
+                f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
             )
             old_tag = s["tag"]
             new_tag = s["suggestion"]

@@ -63,7 +63,7 @@ class ClickableImageLabel(QLabel):
             self.setStyleSheet(
                 f"QLabel {{ border: 3px solid {COLORS['success']}; "
                 f"border-radius: 12px; padding: 4px; "
-                f"background-color: {COLORS.get('success_bg', '#0a2e1a')}; }}"
+                f"background-color: {COLORS['success_bg']}; }}"
             )
         else:
             self.setStyleSheet(

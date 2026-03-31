@@ -465,7 +465,7 @@ def success_button_style() -> str:
     return (
         f"QPushButton {{ background-color: {COLORS['success']}; color: {COLORS['bg']}; "
         f"border: none; border-radius: 8px; padding: 9px 22px; font-weight: 700; }} "
-        f"QPushButton:hover {{ background-color: #5ce0a8; }}"
+        f"QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}"
     )
 
 def danger_button_style() -> str:
@@ -481,7 +481,7 @@ def security_banner_style() -> str:
     """Return CSS style string for security/status banners with green background and border."""
     return (
         f"background-color: {COLORS['success_bg']}; color: {COLORS['success']}; "
-        f"border: 1px solid #1a4a35; border-radius: 10px; "
+        f"border: 1px solid {COLORS['success']}; border-radius: 10px; "
         f"padding: 10px 18px; font-weight: 500; font-size: 12px;"
     )
 

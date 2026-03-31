@@ -145,8 +145,8 @@ class TrainingTabBuildersMixin:
         self.network_advice_label = QLabel("")
         self.network_advice_label.setWordWrap(True)
         self.network_advice_label.setStyleSheet(
-            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
-            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; padding: 4px 6px; "
+            f"background: {COLORS['surface']}; border-radius: 4px; opacity: 0.9;"
         )
         layout.addWidget(self.network_advice_label)
 
@@ -197,8 +197,8 @@ class TrainingTabBuildersMixin:
         self.ema_advice_label = QLabel("")
         self.ema_advice_label.setWordWrap(True)
         self.ema_advice_label.setStyleSheet(
-            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
-            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; padding: 4px 6px; "
+            f"background: {COLORS['surface']}; border-radius: 4px; opacity: 0.9;"
         )
         g3l.addWidget(self.ema_advice_label, 2, 0, 1, 2)
 
@@ -924,8 +924,8 @@ class TrainingTabBuildersMixin:
         self.optimizer_advice_label = QLabel("")
         self.optimizer_advice_label.setWordWrap(True)
         self.optimizer_advice_label.setStyleSheet(
-            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
-            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; padding: 4px 6px; "
+            f"background: {COLORS['surface']}; border-radius: 4px; opacity: 0.9;"
         )
         layout.addWidget(self.optimizer_advice_label)
 
@@ -1495,8 +1495,8 @@ class TrainingTabBuildersMixin:
         self.precision_advice_label = QLabel("")
         self.precision_advice_label.setWordWrap(True)
         self.precision_advice_label.setStyleSheet(
-            "color: #8899aa; font-size: 11px; padding: 4px 6px; "
-            "background: rgba(255,255,255,0.03); border-radius: 4px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; padding: 4px 6px; "
+            f"background: {COLORS['surface']}; border-radius: 4px; opacity: 0.9;"
         )
         g3l.addWidget(self.precision_advice_label)
 
@@ -1930,7 +1930,7 @@ class TrainingTabBuildersMixin:
         self.rlhf_stats_label = QLabel("No preferences collected yet.")
         self.rlhf_stats_label.setWordWrap(True)
         self.rlhf_stats_label.setStyleSheet(
-            "color: #8b949e; font-size: 11px; background: transparent; padding: 4px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent; padding: 4px;"
         )
         g2l.addWidget(self.rlhf_stats_label, 6, 0, 1, 2)
 
