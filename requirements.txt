@@ -22,3 +22,8 @@ Pillow>=10.0
 
 # Optional speed optimizations
 # liger-kernel>=0.4      # Fused Triton kernels (LayerNorm, RMSNorm, SwiGLU)
+# triton-windows: enables torch.compile + Triton kernels on Windows
+# (official Triton only supports Linux; this community fork adds Windows support)
+# Install: pip install triton-windows
+# Requires: matching PyTorch version (PyTorch 2.11 → triton-windows 3.6)
+# triton-windows>=3.3  ; sys_platform == "win32"

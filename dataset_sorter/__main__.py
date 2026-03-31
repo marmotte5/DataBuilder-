@@ -38,6 +38,14 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+# torch.utils.flop_counter emits "triton not found; flop counting will not
+# work for triton kernels" at WARNING level when triton is absent.  On Windows
+# this was always noisy because the official triton wheel didn't support
+# Windows.  triton-windows fills that gap (see requirements), so the warning
+# is obsolete on a correct install — suppress it unconditionally to keep
+# the startup output clean regardless of environment.
+logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)
+
 from dataset_sorter.startup_log import print_startup_log
 from dataset_sorter.ui.main_window import run
 

@@ -58,7 +58,8 @@ speed = [
     "lmdb>=1.4",
     "lz4>=4.3",
     "flash-attn>=2.5",
-    "triton>=2.2",
+    "triton>=2.2; sys_platform != 'win32'",
+    "triton-windows>=3.3; sys_platform == 'win32'",
     "transformer-engine>=1.5",
 ]
 dev = [
