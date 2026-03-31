@@ -778,12 +778,18 @@ class GenerateWorker(QThread):
         return False
 
     def _load_single_file_custom(self, model_path: str, model_type: str, dtype, kwargs: dict):
-        """Load a single-file checkpoint by loading a base pipeline and swapping weights.
+        """Load a single-file checkpoint without re-downloading the transformer.
 
-        Uses BASE_REPOS to map model types to their HuggingFace base repositories.
-        Loads the full base pipeline from the repo, then swaps the transformer/unet
-        weights with the fine-tuned weights from the .safetensors file. Key prefixes
-        (e.g. 'transformer.') are auto-stripped before loading the state dict.
+        Strategy (fastest first):
+        1. Try local HF cache (local_files_only=True) — zero network if cached.
+        2. snapshot_download skipping transformer weight files (user has them
+           locally) — downloads only VAE, text encoder, tokenizer, configs.
+           Hard-links the user's .safetensors into the snapshot's transformer
+           slot so diffusers loads it directly with no extra copy.
+        3. Full pipeline download as last resort.
+
+        In all cases, after loading the pipeline the transformer weights are
+        swapped from the user's local .safetensors so fine-tuned weights are used.
         """
         import torch
         import diffusers
@@ -814,26 +820,40 @@ class GenerateWorker(QThread):
             )
             return None
 
-        self.progress.emit(15, 100, f"Loading base {model_type} pipeline from {base_repo}...")
+        # ── Phase 1: Try local cache (no network access) ─────────────────────
+        self.progress.emit(15, 100, f"Checking {model_type} cache ({base_repo})...")
+        pipe = self._try_load_pipeline_cached(base_repo, kwargs)
 
-        try:
-            pipe = diffusers.DiffusionPipeline.from_pretrained(
-                base_repo, **kwargs,
+        if pipe is None:
+            # ── Phase 2: Download only non-transformer components ─────────────
+            # The user already has the transformer locally — skip downloading it.
+            # Downloads VAE + text encoder + tokenizer + configs only.
+            pipe = self._download_base_skip_transformer(
+                base_repo, model_type, model_path, dtype, kwargs
             )
-        except Exception as e:
-            self.error.emit(
-                f"Failed to load base pipeline from {base_repo}: {e}\n\n"
-                f"Make sure you have internet access for the first download."
-            )
-            return None
 
-        # Find the trainable component (transformer or unet)
+        if pipe is None:
+            # ── Phase 3: Full fallback download ───────────────────────────────
+            self.progress.emit(17, 100,
+                f"Downloading full {model_type} pipeline from {base_repo} "
+                f"(this may take a while)...")
+            try:
+                pipe = diffusers.DiffusionPipeline.from_pretrained(base_repo, **kwargs)
+            except Exception as e:
+                self.error.emit(
+                    f"Failed to load base pipeline from {base_repo}: {e}\n\n"
+                    f"Make sure you have internet access for the first download, "
+                    f"or point to a diffusers-format model folder."
+                )
+                return None
+
+        # ── Swap transformer weights from user's local file ───────────────────
         model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
         if model_component is None:
             self.error.emit(f"Cannot find transformer/unet in {model_type} pipeline.")
             return None
 
-        self.progress.emit(30, 100, "Loading fine-tuned weights...")
+        self.progress.emit(30, 100, "Loading fine-tuned weights from local file...")
 
         try:
             state_dict = load_file(model_path, device="cpu")
@@ -851,7 +871,6 @@ class GenerateWorker(QThread):
 
         except Exception as e:
             self.error.emit(f"Failed to load weights from {model_path}: {e}")
-            # Free the base pipeline to avoid leaking VRAM
             pipe = None
             gc.collect()
             if torch.cuda.is_available():
@@ -859,6 +878,142 @@ class GenerateWorker(QThread):
             return None
 
         return pipe
+
+    @staticmethod
+    def _try_load_pipeline_cached(base_repo: str, kwargs: dict):
+        """Try loading a pipeline from local HF cache without any network access.
+
+        Returns the pipeline if found in cache, or None if not cached yet.
+        """
+        import diffusers
+        try:
+            pipe = diffusers.DiffusionPipeline.from_pretrained(
+                base_repo, local_files_only=True, **kwargs
+            )
+            log.info("Loaded base pipeline from cache: %s", base_repo)
+            return pipe
+        except Exception:
+            return None
+
+    def _download_base_skip_transformer(
+        self,
+        base_repo: str,
+        model_type: str,
+        model_path: str,
+        dtype,
+        kwargs: dict,
+    ):
+        """Download base pipeline components, skipping the transformer weights.
+
+        Since the user already has the transformer locally as a .safetensors
+        file, we avoid downloading it again (potentially several GB).
+
+        Steps:
+        1. snapshot_download with ignore_patterns to skip transformer weight files.
+           This downloads VAE, text encoder, tokenizer, configs — not the transformer.
+        2. Hard-link (or copy as fallback) the user's .safetensors into the snapshot's
+           transformer slot so diffusers uses the local file directly.
+        3. Load from the local snapshot with local_files_only=True.
+
+        Returns None on failure so the caller can fall back to a full download.
+        """
+        import os
+        import shutil
+        import diffusers
+
+        # Large transformer weight files to skip — config.json is intentionally
+        # kept so diffusers knows the transformer architecture.
+        SKIP_PATTERNS = [
+            "transformer/model*.safetensors",
+            "transformer/diffusion_pytorch_model*.safetensors",
+            "transformer/*.bin",
+            "transformer/*.gguf",
+        ]
+
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            log.debug("huggingface_hub not available; cannot do partial download")
+            return None
+
+        cache_dir = os.environ.get("HF_HOME")
+        self.progress.emit(17, 100,
+            f"Downloading {model_type} components "
+            f"(VAE + text encoder + configs — skipping transformer, using local file)...")
+
+        try:
+            local_snapshot = snapshot_download(
+                base_repo,
+                ignore_patterns=SKIP_PATTERNS,
+                cache_dir=cache_dir,
+            )
+        except Exception as e:
+            log.warning("Partial snapshot_download failed for %s: %s", base_repo, e)
+            return None
+
+        # Link or copy the user's .safetensors into the transformer slot.
+        # diffusers expects the weights at transformer/model.safetensors.
+        transformer_dir = os.path.join(local_snapshot, "transformer")
+        os.makedirs(transformer_dir, exist_ok=True)
+        transformer_weight_file = os.path.join(transformer_dir, "model.safetensors")
+
+        if not os.path.exists(transformer_weight_file):
+            linked = False
+            # Try hard link first (no copy, same-volume only, no special permissions)
+            try:
+                os.link(model_path, transformer_weight_file)
+                linked = True
+                log.info(
+                    "Hard-linked local transformer %s → %s",
+                    model_path, transformer_weight_file,
+                )
+            except OSError:
+                pass
+            # Fallback: symlink (may require elevated permissions on Windows)
+            if not linked:
+                try:
+                    os.symlink(os.path.abspath(model_path), transformer_weight_file)
+                    linked = True
+                    log.info(
+                        "Symlinked local transformer %s → %s",
+                        model_path, transformer_weight_file,
+                    )
+                except OSError:
+                    pass
+            # Last resort: copy the file (slow for large models)
+            if not linked:
+                try:
+                    self.progress.emit(22, 100, "Copying transformer weights to cache...")
+                    shutil.copy2(model_path, transformer_weight_file)
+                    log.info("Copied transformer weights to cache: %s", transformer_weight_file)
+                except Exception as e:
+                    log.warning("Could not link or copy transformer weights: %s", e)
+                    return None
+
+        self.progress.emit(25, 100, f"Loading {model_type} pipeline from local components...")
+
+        try:
+            pipe = diffusers.DiffusionPipeline.from_pretrained(
+                local_snapshot, local_files_only=True, **kwargs
+            )
+            log.info(
+                "Loaded %s pipeline from local snapshot (transformer from user file): %s",
+                model_type, model_path,
+            )
+            return pipe
+        except Exception as e:
+            log.warning(
+                "Pipeline load from partial snapshot failed (%s). "
+                "Falling back to full download.", e,
+            )
+            # Remove any link/copy we created so the full download can take over
+            # cleanly without a stale partial transformer file confusing diffusers.
+            if os.path.exists(transformer_weight_file):
+                try:
+                    os.remove(transformer_weight_file)
+                except OSError:
+                    pass
+            return None
 
     def _load_single_file_fallback(self, model_path: str, dtype, kwargs: dict):
         """Try standard pipeline classes for single-file loading as a last resort.
