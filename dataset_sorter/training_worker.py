@@ -21,14 +21,26 @@ from dataset_sorter.trainer import Trainer
 from dataset_sorter.disk_space import get_vram_snapshot
 
 
+def _get_gpu_temp_c() -> int:
+    """Return GPU temperature in Celsius, or -1 if unavailable."""
+    try:
+        import pynvml  # type: ignore[import]
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        return int(pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU))
+    except Exception:
+        return -1
+
+
 class VRAMMonitor(QThread):
     """Lightweight thread that polls VRAM usage at regular intervals.
 
     Emits vram_update signal every interval_ms milliseconds with current
-    GPU memory stats. Automatically stops when stop() is called.
+    GPU memory stats and temperature. Automatically stops when stop() is called.
     """
 
-    vram_update = pyqtSignal(float, float, float, float)  # allocated_gb, reserved_gb, total_gb, peak_gb
+    # allocated_gb, reserved_gb, total_gb, peak_gb, temp_c (-1 = unavailable)
+    vram_update = pyqtSignal(float, float, float, float, int)
 
     def __init__(self, interval_ms: int = 2000, parent=None):
         super().__init__(parent)
@@ -38,6 +50,7 @@ class VRAMMonitor(QThread):
     def run(self):
         while not self._stop_event.is_set():
             snap = get_vram_snapshot()
+            temp_c = _get_gpu_temp_c()
             # Re-check after the (potentially slow) snapshot call
             # to avoid emitting signals after the parent has been destroyed.
             if snap.total_bytes > 0 and not self._stop_event.is_set():
@@ -45,6 +58,7 @@ class VRAMMonitor(QThread):
                     self.vram_update.emit(
                         snap.allocated_gb, snap.reserved_gb,
                         snap.total_gb, snap.peak_allocated_gb,
+                        temp_c,
                     )
                 except RuntimeError:
                     break  # receiver destroyed, stop monitoring

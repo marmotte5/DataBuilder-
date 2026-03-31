@@ -9,15 +9,19 @@ Tab builder methods live in training_tab_builders.py (mixin).
 Config build/apply/save/load live in training_config_io.py (mixin).
 """
 
+import json
 import logging
+import os
+from dataclasses import asdict
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QFileDialog, QGroupBox, QTabWidget,
     QProgressBar, QSplitter, QMessageBox, QTextEdit, QLineEdit,
+    QFrame,
 )
 
 from dataset_sorter.models import ImageEntry
@@ -179,6 +183,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._training_worker = None
         self._loss_history: list[tuple[int, float]] = []
         self._build_ui()
+        self._restore_autosave()
+
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(30_000)  # 30 s
+        self._autosave_timer.timeout.connect(self._do_autosave)
+        self._autosave_timer.start()
 
     def _build_ui(self):
         """Construct the full training tab layout: paths, presets, config tabs, log, and controls."""
@@ -468,6 +478,67 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         splitter.addWidget(right_widget)
         splitter.setSizes([500, 500])
         main_layout.addWidget(splitter, 1)
+
+        # ── Training error panel (hidden until an error occurs) ──────────
+        self._error_panel = QFrame()
+        self._error_panel.setVisible(False)
+        self._error_panel.setStyleSheet(
+            f"QFrame {{ background-color: {COLORS.get('danger_bg', '#3d1a1a')}; "
+            f"border: 1px solid {COLORS.get('danger', '#f87171')}; border-radius: 8px; "
+            f"padding: 4px; }}"
+        )
+        ep_layout = QVBoxLayout(self._error_panel)
+        ep_layout.setContentsMargins(10, 8, 10, 8)
+        ep_layout.setSpacing(6)
+
+        ep_header = QHBoxLayout()
+        self._error_title = QLabel("Training failed")
+        self._error_title.setStyleSheet(
+            f"color: {COLORS.get('danger', '#f87171')}; font-weight: 700; "
+            f"font-size: 13px; background: transparent;"
+        )
+        ep_header.addWidget(self._error_title, 1)
+        self._btn_error_toggle = QPushButton("Show details ▼")
+        self._btn_error_toggle.setCheckable(True)
+        self._btn_error_toggle.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {COLORS['text_muted']}; "
+            f"border: none; font-size: 11px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; }}"
+        )
+        self._btn_error_toggle.toggled.connect(self._toggle_error_details)
+        ep_header.addWidget(self._btn_error_toggle)
+        btn_dismiss = QPushButton("✕")
+        btn_dismiss.setFixedSize(24, 24)
+        btn_dismiss.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {COLORS['text_muted']}; "
+            f"border: none; font-size: 14px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; }}"
+        )
+        btn_dismiss.clicked.connect(lambda: self._error_panel.setVisible(False))
+        ep_header.addWidget(btn_dismiss)
+        ep_layout.addLayout(ep_header)
+
+        self._error_suggestion = QLabel("")
+        self._error_suggestion.setWordWrap(True)
+        self._error_suggestion.setStyleSheet(
+            f"color: {COLORS.get('success', '#4ade80')}; font-size: 12px; "
+            f"background: transparent;"
+        )
+        ep_layout.addWidget(self._error_suggestion)
+
+        self._error_traceback = QTextEdit()
+        self._error_traceback.setReadOnly(True)
+        self._error_traceback.setVisible(False)
+        self._error_traceback.setMaximumHeight(160)
+        mono = QFont("JetBrains Mono", 8)
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        self._error_traceback.setFont(mono)
+        self._error_traceback.setStyleSheet(
+            f"QTextEdit {{ background-color: {COLORS['bg']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 6px; }}"
+        )
+        ep_layout.addWidget(self._error_traceback)
+        main_layout.addWidget(self._error_panel)
 
         # Bottom row 1: mid-training actions
         action_row = QHBoxLayout()
@@ -927,38 +998,51 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         else:
             self._log("Training resumed.")
 
-    def _on_vram_update(self, allocated_gb, reserved_gb, total_gb, peak_gb):
+    def _on_vram_update(self, allocated_gb, reserved_gb, total_gb, peak_gb, temp_c=-1):
         """Update VRAM usage display from monitor thread."""
         pct = int((allocated_gb / total_gb) * 100) if total_gb > 0 else 0
         self.vram_bar.setValue(pct)
+        temp_str = f"  {temp_c}°C" if temp_c >= 0 else ""
         self.vram_detail_label.setText(
-            f"{allocated_gb:.1f} / {total_gb:.1f} GB  (peak: {peak_gb:.1f})"
+            f"{allocated_gb:.1f} / {total_gb:.1f} GB  (peak: {peak_gb:.1f}){temp_str}"
         )
-        # Color the bar based on usage
-        if pct >= 90:
-            chunk_color = COLORS["danger"]
-        elif pct >= 75:
-            chunk_color = COLORS["warning"]
+        # Color the bar: green <60%, yellow 60-80%, red >80%
+        if pct >= 80:
+            chunk_color = COLORS.get("danger", "#f87171")
+        elif pct >= 60:
+            chunk_color = COLORS.get("warning", "#fbbf24")
         else:
-            chunk_color = COLORS["accent"]
+            chunk_color = COLORS.get("success", "#4ade80")
         self.vram_bar.setStyleSheet(
             f"QProgressBar {{ background-color: {COLORS['bg']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
             f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
             f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
         )
+        # Update footer GPU badge with live VRAM info
+        main_win = self.window()
+        if hasattr(main_win, "_badge_gpu"):
+            temp_footer = f" · {temp_c}°C" if temp_c >= 0 else ""
+            main_win._badge_gpu.setText(
+                f"GPU: {allocated_gb:.1f}/{total_gb:.1f} GB ({pct}%){temp_footer}"
+            )
+            if pct >= 80:
+                badge_color = COLORS.get("danger", "#f87171")
+            elif pct >= 60:
+                badge_color = COLORS.get("warning", "#fbbf24")
+            else:
+                badge_color = COLORS.get("success", "#4ade80")
+            main_win._badge_gpu.setStyleSheet(
+                f"color: {badge_color}; font-size: 11px; background: transparent;"
+            )
 
     def _on_error(self, error_msg: str):
-        """Log a training error and offer a GitHub bug report dialog."""
+        """Log a training error and show inline error panel with suggestions."""
         self._log(f"ERROR: {error_msg}")
+        self._show_error_panel(error_msg)
 
-        # Offer the user a one-click bug report for critical training failures.
-        # We re-construct a lightweight RuntimeError so bug_reporter has an
-        # exception object with a useful __str__ and no stale __traceback__.
         try:
             from dataset_sorter.bug_reporter import show_bug_report_dialog
-            # Build a synthetic exception from the worker's error string so the
-            # dialog has a proper title and the full traceback is in the body.
             synthetic = RuntimeError(error_msg[:200])
             show_bug_report_dialog(
                 error=synthetic,
@@ -967,6 +1051,106 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             )
         except Exception:
             pass  # Bug reporter must never break the training UI
+
+    def _show_error_panel(self, error_msg: str):
+        """Display the inline error panel with a suggestion based on the error message."""
+        lower = error_msg.lower()
+        if "out of memory" in lower or "oom" in lower or "cuda error: out" in lower:
+            suggestion = "Suggestion: Réduisez le batch size ou la résolution, ou activez gradient checkpointing."
+        elif "nan" in lower and ("loss" in lower or "grad" in lower):
+            suggestion = "Suggestion: Réduisez le learning rate (essayez ÷10). Vérifiez vos données."
+        elif "gradscaler" in lower or ("fp16" in lower and "overflow" in lower):
+            suggestion = "Suggestion: Essayez bf16 à la place de fp16. Si l'erreur persiste, désactivez mixed precision."
+        elif "cuda" in lower and "device" in lower:
+            suggestion = "Suggestion: Vérifiez que le bon GPU est sélectionné et que CUDA est bien installé."
+        else:
+            suggestion = ""
+
+        # First line of error as title (truncated)
+        first_line = error_msg.split("\n")[0][:120]
+        self._error_title.setText(f"Erreur training : {first_line}")
+        self._error_suggestion.setText(suggestion)
+        self._error_suggestion.setVisible(bool(suggestion))
+        self._error_traceback.setPlainText(error_msg)
+        self._btn_error_toggle.setChecked(False)
+        self._error_traceback.setVisible(False)
+        self._btn_error_toggle.setText("Show details ▼")
+        self._error_panel.setVisible(True)
+
+    def _toggle_error_details(self, checked: bool):
+        """Show or hide the traceback text area."""
+        self._error_traceback.setVisible(checked)
+        self._btn_error_toggle.setText("Hide details ▲" if checked else "Show details ▼")
+
+    # ── Auto-save ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _autosave_path() -> Path:
+        """Return the path for the auto-saved training config."""
+        env = os.environ.get("DATASET_SORTER_DATA")
+        if env:
+            base = Path(env)
+        else:
+            xdg = os.environ.get("XDG_DATA_HOME")
+            base = Path(xdg) / "dataset_sorter" if xdg else Path.home() / ".local" / "share" / "dataset_sorter"
+        return base / "autosave_config.json"
+
+    def _do_autosave(self):
+        """Save current training config to the autosave file silently."""
+        try:
+            config = self.build_config()
+            data = asdict(config)
+            p = self._autosave_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        except Exception as e:
+            log.debug(f"Autosave failed: {e}")
+            return
+        # Flash the footer badge briefly
+        main_win = self.window()
+        if hasattr(main_win, "_badge_autosave"):
+            badge = main_win._badge_autosave
+            badge.setText("Auto-saved ✓")
+            badge.setStyleSheet(
+                f"color: {COLORS.get('success', '#4ade80')}; font-size: 11px; background: transparent;"
+            )
+            QTimer.singleShot(2000, lambda: self._reset_autosave_badge(badge))
+
+    def _reset_autosave_badge(self, badge):
+        """Restore the autosave badge to its default text and color."""
+        badge.setText("Auto-save: On")
+        badge.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+
+    def _restore_autosave(self):
+        """Restore training config from autosave file if it exists."""
+        try:
+            p = self._autosave_path()
+            if not p.exists():
+                return
+            data = json.loads(p.read_text(encoding="utf-8"))
+            from dataset_sorter.models import TrainingConfig
+            config = TrainingConfig()
+            for key, value in data.items():
+                if hasattr(config, key) and value is not None:
+                    try:
+                        current = getattr(config, key)
+                        if isinstance(current, list) and isinstance(value, list):
+                            setattr(config, key, value)
+                        elif isinstance(current, bool):
+                            if isinstance(value, bool):
+                                setattr(config, key, value)
+                            elif isinstance(value, (int, float)):
+                                setattr(config, key, bool(value))
+                        else:
+                            setattr(config, key, type(current)(value))
+                    except (ValueError, TypeError):
+                        pass
+            self.apply_config(config)
+            log.debug(f"Restored training config from autosave: {p}")
+        except Exception as e:
+            log.debug(f"Could not restore autosave: {e}")
 
     # ── Smart Resume ─────────────────────────────────────────────────
 
@@ -1105,12 +1289,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.vram_bar.setValue(pct)
         self.vram_detail_label.setText(f"Est. {est_gb:.1f} / {total_gpu} GB")
 
-        if pct >= 90:
-            chunk_color = COLORS["danger"]
-        elif pct >= 75:
-            chunk_color = COLORS["warning"]
+        if pct >= 80:
+            chunk_color = COLORS.get("danger", "#f87171")
+        elif pct >= 60:
+            chunk_color = COLORS.get("warning", "#fbbf24")
         else:
-            chunk_color = COLORS["accent"]
+            chunk_color = COLORS.get("success", "#4ade80")
         self.vram_bar.setStyleSheet(
             f"QProgressBar {{ background-color: {COLORS['bg']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
