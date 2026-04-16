@@ -1769,6 +1769,16 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _on_finished(self, success, message):
         """Handle training completion: stop VRAM monitor, reset UI, and log final status."""
+        # Guard against the old-worker-finished-after-new-worker-started race:
+        # if a Stop→Start happens quickly, the OLD worker's finished_training
+        # signal can be queued to the main thread AFTER _disconnect has already
+        # run on it and the NEW worker was assigned. Ignore the signal if it
+        # isn't from the current worker — otherwise we'd null the new worker
+        # and leave the user's Stop/Pause/Save buttons dead.
+        sender = self.sender()
+        if sender is not None and sender is not self._training_worker:
+            log.debug("Ignoring finished_training from stale worker")
+            return
         self._stop_vram_monitor()
         self._set_training_ui(False)
         self.status_label.setText(message)

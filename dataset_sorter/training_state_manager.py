@@ -207,13 +207,32 @@ class TrainingStateManager:
             return None
         candidates = sorted(
             (d for d in ckpt_dir.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime,
+            key=TrainingStateManager._sort_key,
             reverse=True,
         )
         for candidate in candidates:
             if TrainingStateManager.can_resume(candidate):
                 return candidate
         return None
+
+    @staticmethod
+    def _sort_key(ckpt_dir: Path) -> tuple[int, float]:
+        """Sort by global_step from the JSON sidecar first, then mtime.
+
+        mtime alone is unreliable because `touch`, file restoration, or
+        file-system sync tools (rsync, cloud storage) can change mtime
+        order, silently making resume pick an older checkpoint.
+        """
+        try:
+            import json as _json
+            meta = ckpt_dir / "training_state.json"
+            if meta.exists():
+                data = _json.loads(meta.read_text(encoding="utf-8"))
+                step = int(data.get("global_step", 0))
+                return (step, ckpt_dir.stat().st_mtime)
+        except Exception:
+            pass
+        return (0, ckpt_dir.stat().st_mtime)
 
     @staticmethod
     def list_resumable_checkpoints(output_dir: Path) -> list[Path]:
@@ -224,7 +243,7 @@ class TrainingStateManager:
         return sorted(
             [d for d in ckpt_dir.iterdir() if d.is_dir()
              and TrainingStateManager.can_resume(d)],
-            key=lambda d: d.stat().st_mtime,
+            key=TrainingStateManager._sort_key,
             reverse=True,
         )
 

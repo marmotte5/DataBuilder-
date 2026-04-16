@@ -299,6 +299,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(403, "Not an image file")
             return
 
+        # Strict allowlist: only serve paths that were explicitly added
+        # via add_comparison/add_strength_grid. Without this the server
+        # happily served any image file on disk to anyone on localhost.
+        viewer = getattr(self, "viewer", None)
+        if viewer is not None:
+            with viewer._lock:
+                allowed = viewer._allowed_paths
+            if str(p) not in allowed:
+                self.send_error(403, "Path not allowed")
+                return
+
         if not p.is_file():
             self.send_error(404, "File not found")
             return
@@ -344,6 +355,11 @@ class ComparisonViewer:
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        # Allowlist of absolute paths the server is permitted to serve.
+        # Populated by add_comparison/add_strength_grid. Without this, any
+        # process on the host (or a DNS-rebound browser) could request
+        # /image?path=/any/file.png and read arbitrary image files on disk.
+        self._allowed_paths: set[str] = set()
 
     # ── data management ──────────────────────────────────────────────
 
@@ -354,12 +370,16 @@ class ComparisonViewer:
         label: str = "",
     ) -> None:
         """Add a before/after image pair."""
+        _b = str(Path(before_path).resolve())
+        _a = str(Path(after_path).resolve())
         with self._lock:
             self._comparisons.append({
-                "before": str(before_path),
-                "after": str(after_path),
+                "before": _b,
+                "after": _a,
                 "label": label,
             })
+            self._allowed_paths.add(_b)
+            self._allowed_paths.add(_a)
         logger.debug("Added comparison pair: %s", label or "(unlabelled)")
 
     def add_strength_grid(
@@ -368,11 +388,13 @@ class ComparisonViewer:
         prompt: str = "",
     ) -> None:
         """Add a LoRA strength grid. *images_dict* maps strength → image path."""
+        resolved = {str(k): str(Path(v).resolve()) for k, v in images_dict.items()}
         with self._lock:
             self._grids.append({
-                "images": {str(k): str(v) for k, v in images_dict.items()},
+                "images": resolved,
                 "prompt": prompt,
             })
+            self._allowed_paths.update(resolved.values())
         logger.debug("Added strength grid (%d entries, prompt=%r)", len(images_dict), prompt)
 
     def _get_data(self) -> dict:
@@ -405,6 +427,13 @@ class ComparisonViewer:
         if self._server is None:
             return
         self._server.shutdown()
+        # Close the listening socket explicitly — without server_close()
+        # the socket stays in TIME_WAIT and restart() raises
+        # "Address already in use" on quick cycle.
+        try:
+            self._server.server_close()
+        except Exception as exc:
+            logger.debug("server_close failed: %s", exc)
         self._server = None
         if self._thread is not None:
             self._thread.join(timeout=5)

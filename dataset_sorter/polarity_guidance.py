@@ -16,7 +16,15 @@ def compute_polarity_mask(predicted_noise: torch.Tensor, target_noise: torch.Ten
     create gradient discontinuities during backprop.
     """
     diff = (predicted_noise - target_noise).abs()
-    diff_normalized = diff / (diff.max() + 1e-8)
+    # Per-sample normalization: taking the global max across the whole batch
+    # couples samples — a single high-loss outlier would shrink every other
+    # sample's normalized diffs below the threshold, masking out most of the
+    # batch and silently destroying the training signal.
+    if diff.dim() == 4:
+        per_sample_max = diff.amax(dim=(1, 2, 3), keepdim=True)
+    else:
+        per_sample_max = diff.max()
+    diff_normalized = diff / (per_sample_max + 1e-8)
     mask = (diff_normalized > threshold).float()
     # Smooth the mask with average pooling to avoid sharp edges
     if mask.dim() == 4:
