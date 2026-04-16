@@ -225,11 +225,19 @@ class ConceptProber:
 
         try:
             # Try to load a lightweight CLIP model for proper text-image similarity
-            clip_model = CLIPModel.from_pretrained(
-                "openai/clip-vit-base-patch32",
-                torch_dtype=torch.float16,
-            ).to(self.device).eval()
-            clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+            _clip_repo = "openai/clip-vit-base-patch32"
+            try:
+                clip_model = CLIPModel.from_pretrained(
+                    _clip_repo, torch_dtype=torch.float16, local_files_only=True,
+                ).to(self.device).eval()
+                clip_processor = CLIPProcessor.from_pretrained(
+                    _clip_repo, local_files_only=True,
+                )
+            except Exception:
+                clip_model = CLIPModel.from_pretrained(
+                    _clip_repo, torch_dtype=torch.float16,
+                ).to(self.device).eval()
+                clip_processor = CLIPProcessor.from_pretrained(_clip_repo)
 
             # Compute text-image similarity using full CLIP
             inputs = clip_processor(

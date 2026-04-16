@@ -288,12 +288,6 @@ SAVE_PRECISIONS = {
 }
 
 # ── Mixed Precision (training autocast dtype) ─────────────────────────
-# "no" matches accelerate's naming for full fp32 (no mixed precision).
-MIXED_PRECISION_OPTIONS = ["no", "fp16", "bf16"]
-
-# Extended list for hardware that supports FP8 (Ada Lovelace / Hopper+).
-EXTENDED_PRECISION_OPTIONS = ["no", "fp16", "bf16", "fp8"]
-
 # Human-readable labels shown in the UI combo box.
 MIXED_PRECISION_LABELS = {
     "no":   "FP32 — Full precision (no mixed precision)",

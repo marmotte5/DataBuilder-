@@ -19,7 +19,12 @@ from dataset_sorter.models import TrainingConfig
 # Valid values for string fields not in constants
 _MIXED_PRECISIONS = {"bf16", "fp16", "fp32", "fp8", "no"}
 _QUANTIZE_TE_OPTIONS = {"none", "int8", "int4"}
-_DPO_LOSS_TYPES = {"sigmoid", "hinge", "ipo"}
+
+try:
+    from dataset_sorter.training_presets import DPO_LOSS_TYPES as _DPO_PRESETS
+    _DPO_LOSS_TYPES = set(_DPO_PRESETS.keys())
+except ImportError:
+    _DPO_LOSS_TYPES = {"sigmoid", "hinge", "ipo"}
 
 log = logging.getLogger(__name__)
 
