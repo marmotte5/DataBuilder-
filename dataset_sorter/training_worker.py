@@ -81,7 +81,7 @@ class TrainingWorker(QThread):
     paused_changed = pyqtSignal(bool)             # is_paused
     smart_resume_report = pyqtSignal(str)         # analysis report text
     rlhf_candidates_ready = pyqtSignal(list, int) # candidates, round_idx
-    pipeline_report = pyqtSignal(str)             # pre-training integration report
+    pipeline_report = pyqtSignal(str)             # pre/post-training integration report
 
     def __init__(
         self,
@@ -177,6 +177,15 @@ class TrainingWorker(QThread):
             )
 
             log_vram_state("training complete")
+
+            # Emit post-training report with training results
+            try:
+                report = getattr(self.trainer, '_integration_report', None)
+                if report is not None:
+                    self.pipeline_report.emit(report.format_post_training())
+            except (RuntimeError, AttributeError):
+                pass
+
             self.finished_training.emit(True, "Training completed successfully!")
 
         except OSError as e:

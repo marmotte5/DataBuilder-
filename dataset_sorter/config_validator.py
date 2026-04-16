@@ -17,7 +17,7 @@ from dataset_sorter.constants import (
 from dataset_sorter.models import TrainingConfig
 
 # Valid values for string fields not in constants
-_MIXED_PRECISIONS = {"bf16", "fp16", "fp32", "no"}
+_MIXED_PRECISIONS = {"bf16", "fp16", "fp32", "fp8", "no"}
 _QUANTIZE_TE_OPTIONS = {"none", "int8", "int4"}
 _DPO_LOSS_TYPES = {"sigmoid", "hinge", "ipo"}
 

@@ -376,12 +376,15 @@ class ZImageBackend(TrainBackendBase):
         # Strategy 1: Load config from official Z-Image HF repo, instantiate,
         # then load the state dict from the checkpoint.
         for repo in (self._HF_BASE_REPO, self._HF_TURBO_REPO):
+            from diffusers.models import Transformer2DModel
+
+            # 1a: Try direct from_pretrained (works when diffusers version
+            # matches the HF repo's config schema).
             try:
-                from diffusers.models import Transformer2DModel
                 model = Transformer2DModel.from_pretrained(
                     repo, subfolder="transformer",
                     torch_dtype=self.dtype, trust_remote_code=True,
-                    low_cpu_mem_usage=False,  # need full model to load_state_dict
+                    low_cpu_mem_usage=False,
                 )
                 result = model.load_state_dict(state_dict, strict=False)
                 n_missing = len(result.missing_keys)
@@ -396,7 +399,52 @@ class ZImageBackend(TrainBackendBase):
                              repo, n_unexpected)
                 return model.to(dtype=self.dtype)
             except Exception as e:
-                errors.append(f"HF repo {repo}: {e}")
+                errors.append(f"HF repo {repo} (direct): {e}")
+
+            # 1b: Download just the config, strip fields unknown to this
+            # diffusers version (e.g. norm_type), then instantiate manually.
+            try:
+                import inspect
+                config_dict = Transformer2DModel.load_config(
+                    repo, subfolder="transformer",
+                )
+                if isinstance(config_dict, tuple):
+                    config_dict = config_dict[0]
+                config_dict = dict(config_dict)
+                config_dict.pop("_class_name", None)
+                config_dict.pop("_diffusers_version", None)
+                valid_params = set(inspect.signature(
+                    Transformer2DModel.__init__
+                ).parameters.keys()) - {"self"}
+                stripped_keys = [
+                    k for k in list(config_dict) if k not in valid_params
+                ]
+                for k in stripped_keys:
+                    config_dict.pop(k)
+                if stripped_keys:
+                    log.info(
+                        "Stripped unsupported config keys for %s: %s",
+                        repo, stripped_keys,
+                    )
+                model = Transformer2DModel(**config_dict)
+                model = model.to(dtype=self.dtype)
+                result = model.load_state_dict(state_dict, strict=False)
+                n_missing = len(result.missing_keys)
+                n_unexpected = len(result.unexpected_keys)
+                if n_missing > 0:
+                    log.warning(
+                        "Transformer loaded from %s config (patched): "
+                        "%d missing, %d unexpected keys",
+                        repo, n_missing, n_unexpected,
+                    )
+                else:
+                    log.info(
+                        "Transformer loaded via %s config (patched, "
+                        "%d unexpected keys)", repo, n_unexpected,
+                    )
+                return model
+            except Exception as e:
+                errors.append(f"HF repo {repo} (patched config): {e}")
                 continue
 
         # Strategy 2: Try any custom model class that might be registered

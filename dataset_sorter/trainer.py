@@ -1717,15 +1717,44 @@ class Trainer:
 
         # Log training run to history for future recommendations
         # (uses live monitor divergence detection for more accurate history)
+        import time as _time
         _diverged = (
             self._live_monitor.get_report().divergence_detected
             if self._live_monitor else False
         )
+        min_loss = min((l for _, l in self._loss_history), default=0.0)
+        _conv_step = 0
+        for step, loss in self._loss_history:
+            if loss <= min_loss:
+                _conv_step = step
+                break
+        _elapsed = _time.time() - self._training_start_time if self._training_start_time else 0
+        _peak_vram = self._vram_monitor.peak_gb if self._vram_monitor else 0.0
+        _oom = self._vram_monitor._oom_count > 0 if self._vram_monitor else False
+
+        # Populate post-training metrics on the integration report
+        if self._integration_report is not None:
+            self._integration_report.final_loss = self.state.loss
+            self._integration_report.min_loss = min_loss
+            self._integration_report.convergence_step = _conv_step
+            self._integration_report.total_steps = self.state.global_step
+            self._integration_report.training_time_s = _elapsed
+            self._integration_report.peak_vram_gb = _peak_vram
+            self._integration_report.oom_occurred = _oom
+            self._integration_report.divergence_detected = _diverged
+            if self._live_monitor is not None:
+                mon = self._live_monitor.get_report()
+                self._integration_report.plateau_detected = mon.plateau_detected
+                self._integration_report.lr_adjustments = mon.lr_adjustments
+            ds_size = len(self.dataset) if self.dataset else 0
+            if _elapsed > 0 and ds_size > 0:
+                self._integration_report.samples_per_second = (
+                    self.state.global_step * config.batch_size / _elapsed
+                )
+
         if self._training_history is not None:
-            import time as _time
             try:
                 from dataset_sorter.training_history import TrainingRunRecord
-                min_loss = min((l for _, l in self._loss_history), default=0.0)
                 record = TrainingRunRecord(
                     model_type=config.model_type,
                     optimizer=config.optimizer,
@@ -1740,12 +1769,12 @@ class Trainer:
                     vram_gb=config.vram_gb,
                     final_loss=self.state.loss,
                     min_loss=min_loss,
-                    convergence_step=0,
+                    convergence_step=_conv_step,
                     loss_curve=[l for _, l in self._loss_history[-200:]],
                     diverged=_diverged,
-                    oom_occurred=self._vram_monitor._oom_count > 0 if self._vram_monitor else False,
-                    peak_vram_gb=self._vram_monitor.peak_gb if self._vram_monitor else 0.0,
-                    training_time_s=_time.time() - self._training_start_time if self._training_start_time else 0,
+                    oom_occurred=_oom,
+                    peak_vram_gb=_peak_vram,
+                    training_time_s=_elapsed,
                 )
                 self._training_history.log_run(record)
             except Exception as e:

@@ -1586,7 +1586,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     # ── Smart Resume ─────────────────────────────────────────────────
 
     def _on_pipeline_report(self, report: str):
-        """Show pre-training pipeline integration report in the log."""
+        """Show pipeline integration report (pre or post-training) in the log."""
         self._log("")
         self._log(report)
         self._log("")
