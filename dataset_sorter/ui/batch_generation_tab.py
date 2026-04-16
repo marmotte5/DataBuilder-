@@ -448,8 +448,11 @@ class BatchGenerationTab(QWidget):
         rows = sorted(set(idx.row() for idx in self._table.selectedIndexes()), reverse=True)
         for row in rows:
             self._table.removeRow(row)
-            if row < len(self._queue):
-                self._queue.pop(row)
+        # Rebuild _queue from the table AFTER removal — popping by row index
+        # is unsafe because in-place table edits may have desynced _queue.
+        # Without this, subsequent lookups by qi (in _on_image_generated) use
+        # stale prompt data and save images under wrong folder names.
+        self._sync_queue_from_table()
         self._update_count()
 
     def _clear_queue(self):

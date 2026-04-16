@@ -524,6 +524,18 @@ class ModelMergeTab(QWidget):
                 show_toast(self, f"Model {label} not found: {p}", "warning")
                 return
 
+        # Ensure any previous worker (possibly still cancelling) is fully
+        # stopped before creating a new one — otherwise the old worker
+        # leaks with live safetensors file handles when self._worker is
+        # reassigned below.
+        if self._worker is not None:
+            if self._worker.isRunning():
+                if hasattr(self._worker, "cancel"):
+                    self._worker.cancel()
+                self._worker.wait(5000)
+            self._worker.deleteLater()
+            self._worker = None
+
         self._worker = MergeWorker(self)
         self._worker.model_a_path = model_a
         self._worker.model_b_path = model_b

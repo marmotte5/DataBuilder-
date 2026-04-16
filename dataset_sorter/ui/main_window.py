@@ -1665,6 +1665,17 @@ class MainWindow(QMainWindow):
                 if ct._comparison_worker.isRunning():
                     ct._comparison_worker.wait(3000)
 
+        # Stop merge worker — without this, a running merge would continue
+        # writing to the output .safetensors file after QApplication exits,
+        # potentially leaving a corrupt file. Also leaks safetensors handles.
+        if hasattr(self, 'merge_tab'):
+            mt = self.merge_tab
+            if hasattr(mt, '_worker') and mt._worker is not None:
+                if hasattr(mt._worker, 'cancel'):
+                    mt._worker.cancel()
+                if mt._worker.isRunning():
+                    mt._worker.wait(3000)
+
         # Stop library scan worker
         if hasattr(self, 'library_tab'):
             lt = self.library_tab
@@ -2542,10 +2553,11 @@ class MainWindow(QMainWindow):
         self.training_tab.model_path_input.setText(model_path)
         self.training_tab.output_dir_input.setText(output_dir)
 
-        # Switch to training tab
-        parent = self.training_tab.parent()
-        if hasattr(parent, 'setCurrentWidget'):
-            parent.setCurrentWidget(self.training_tab)
+        # Switch to training tab using proper nav flow (updates sidebar
+        # highlight, top bar title, and hides dataset path bar).  Just
+        # calling parent.setCurrentWidget() switches the content stack
+        # but leaves _current_nav="dataset", breaking sidebar/topbar UX.
+        self._switch_nav("train")
 
         # Start training
         self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
