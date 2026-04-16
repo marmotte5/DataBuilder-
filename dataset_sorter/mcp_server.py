@@ -369,16 +369,17 @@ def _handle_train_lora(params: dict) -> dict:
     from dataset_sorter.models import TrainingConfig
     from dataset_sorter.vram_estimator import estimate_vram
 
+    dataset_folder = params["dataset_folder"]
+    output_folder = params["output_folder"]
+    model_path = params["model_path"]
+
     cfg = TrainingConfig(
-        dataset_folder=params["dataset_folder"],
-        output_folder=params["output_folder"],
-        pretrained_model_name_or_path=params["model_path"],
         model_type=params["model_type"],
         max_train_steps=params.get("steps", 1000),
         learning_rate=params.get("learning_rate", 1e-4),
         lora_rank=params.get("lora_rank", 32),
         resolution=params.get("resolution", 1024),
-        train_batch_size=params.get("batch_size", 1),
+        batch_size=params.get("batch_size", 1),
         mixed_precision=params.get("mixed_precision", "bf16"),
     )
     vram = estimate_vram(cfg)
@@ -390,13 +391,14 @@ def _handle_train_lora(params: dict) -> dict:
         ),
         "config": {
             "model_type": cfg.model_type,
-            "dataset_folder": cfg.dataset_folder,
-            "output_folder": cfg.output_folder,
+            "model_path": model_path,
+            "dataset_folder": dataset_folder,
+            "output_folder": output_folder,
             "steps": cfg.max_train_steps,
             "learning_rate": cfg.learning_rate,
             "lora_rank": cfg.lora_rank,
             "resolution": cfg.resolution,
-            "batch_size": cfg.train_batch_size,
+            "batch_size": cfg.batch_size,
             "mixed_precision": cfg.mixed_precision,
         },
         "vram_estimate_gb": vram.get("total_gb"),

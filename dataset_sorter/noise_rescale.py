@@ -75,7 +75,7 @@ def compute_snr(noise_scheduler) -> torch.Tensor:
         SNR values [T] for each timestep
     """
     alphas_cumprod = noise_scheduler.alphas_cumprod
-    snr = alphas_cumprod / (1.0 - alphas_cumprod)
+    snr = alphas_cumprod / (1.0 - alphas_cumprod).clamp(min=1e-8)
     return snr
 
 
@@ -103,7 +103,7 @@ def compute_snr_weights(
     timestep_snr = snr[timesteps]
 
     # min(SNR, gamma) / SNR
-    weights = torch.clamp(timestep_snr, max=gamma) / timestep_snr
+    weights = torch.clamp(timestep_snr, max=gamma) / timestep_snr.clamp(min=1e-8)
 
     return weights
 

@@ -197,6 +197,13 @@ class HiDreamBackend(TrainBackendBase):
         # Concatenate pooled outputs from CLIP encoders
         pooled = torch.cat(pooled_list, dim=-1) if pooled_list else None
 
+        if t5_hidden is not None:
+            t5_hidden = t5_hidden.to(dtype=self.dtype)
+        if pooled is not None:
+            pooled = pooled.to(dtype=self.dtype)
+        if llama_hidden is not None:
+            llama_hidden = llama_hidden.to(dtype=self.dtype)
+
         return (t5_hidden, pooled, llama_hidden)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),

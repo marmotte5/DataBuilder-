@@ -129,6 +129,13 @@ class TrainingWorker(QThread):
 
         atexit.register(_emergency_checkpoint)
 
+    def _emit(self, signal, *args):
+        """Emit a signal, silencing RuntimeError from destroyed receivers."""
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass
+
     def run(self):
         try:
             from dataset_sorter.ui.debug_console import log_vram_state, PerfTimer
@@ -136,7 +143,7 @@ class TrainingWorker(QThread):
             self.trainer = Trainer(self.config)
 
             # Setup (model loading, caching, pipeline integration)
-            self.phase_changed.emit("setup")
+            self._emit(self.phase_changed, "setup")
             log_vram_state("before model setup")
             with PerfTimer("Model setup (load + cache)"):
                 self.trainer.setup(
@@ -151,11 +158,11 @@ class TrainingWorker(QThread):
             # Emit pipeline integration report if available
             report = getattr(self.trainer, '_integration_report', None)
             if report is not None:
-                self.pipeline_report.emit(report.format_pre_training())
+                self._emit(self.pipeline_report, report.format_pre_training())
 
             # Resume from checkpoint if requested
             if self.resume_from is not None:
-                self.phase_changed.emit("resuming")
+                self._emit(self.phase_changed, "resuming")
                 with PerfTimer("Checkpoint resume"):
                     self.trainer.resume_from_checkpoint(self.resume_from)
                 log_vram_state("after checkpoint resume")
@@ -164,10 +171,10 @@ class TrainingWorker(QThread):
                 analysis = getattr(self.trainer, '_smart_resume_analysis', None)
                 if analysis is not None:
                     from dataset_sorter.smart_resume import format_analysis_report
-                    self.smart_resume_report.emit(format_analysis_report(analysis))
+                    self._emit(self.smart_resume_report, format_analysis_report(analysis))
 
             # Train (with RLHF collection monitoring)
-            self.phase_changed.emit("training")
+            self._emit(self.phase_changed, "training")
             log_vram_state("training start")
 
             self.trainer.train(
@@ -179,36 +186,33 @@ class TrainingWorker(QThread):
             log_vram_state("training complete")
 
             # Emit post-training report with training results
-            try:
-                report = getattr(self.trainer, '_integration_report', None)
-                if report is not None:
-                    self.pipeline_report.emit(report.format_post_training())
-            except (RuntimeError, AttributeError):
-                pass
+            report = getattr(self.trainer, '_integration_report', None)
+            if report is not None:
+                self._emit(self.pipeline_report, report.format_post_training())
 
-            self.finished_training.emit(True, "Training completed successfully!")
+            self._emit(self.finished_training, True, "Training completed successfully!")
 
         except OSError as e:
             from dataset_sorter.ui.debug_console import log_categorized_error
             import sys
             log_categorized_error(e, "training", sys.exc_info()[2])
             if "c10" in str(e).lower() or "1114" in str(e):
-                self.error.emit(
+                self._emit(self.error,
                     "PyTorch DLL failed to load (c10.dll). "
                     "Run update.bat to reinstall PyTorch, or install "
                     "Visual C++ Redistributable (x64) and update NVIDIA drivers."
                 )
             else:
-                self.error.emit(f"{e}\n\n{traceback.format_exc()}")
-            self.finished_training.emit(False, str(e))
+                self._emit(self.error, f"{e}\n\n{traceback.format_exc()}")
+            self._emit(self.finished_training, False, str(e))
         except Exception as e:
             from dataset_sorter.ui.debug_console import log_categorized_error
             import sys
             log_categorized_error(e, "training", sys.exc_info()[2])
             log.error("Training failed: %s", e, exc_info=True)
             tb = traceback.format_exc()
-            self.error.emit(f"{e}\n\n{tb}")
-            self.finished_training.emit(False, str(e))
+            self._emit(self.error, f"{e}\n\n{tb}")
+            self._emit(self.finished_training, False, str(e))
 
         finally:
             if self.trainer:
@@ -220,7 +224,7 @@ class TrainingWorker(QThread):
                     # Clear reference so partially-initialised trainers
                     # don't linger and leak GPU memory.
                     self.trainer = None
-            self.phase_changed.emit("idle")
+            self._emit(self.phase_changed, "idle")
 
     def stop(self):
         """Signal trainer to stop gracefully."""
@@ -234,14 +238,14 @@ class TrainingWorker(QThread):
         t = self.trainer
         if t:
             t.pause()
-            self.paused_changed.emit(True)
+            self._emit(self.paused_changed, True)
 
     def resume(self):
         """Resume paused training."""
         t = self.trainer
         if t:
             t.resume()
-            self.paused_changed.emit(False)
+            self._emit(self.paused_changed, False)
 
     def request_save(self):
         """Request an immediate checkpoint save."""
@@ -274,10 +278,7 @@ class TrainingWorker(QThread):
         from dataset_sorter.dpo_trainer import generate_candidate_pairs
 
         t.pause()
-        try:
-            self.phase_changed.emit("rlhf_collecting")
-        except RuntimeError:
-            pass  # receiver destroyed
+        self._emit(self.phase_changed, "rlhf_collecting")
 
         try:
             # Snapshot config fields under lock to avoid race with main thread
@@ -294,14 +295,14 @@ class TrainingWorker(QThread):
                 cfg_scale=cfg_scale,
             )
             if candidates:
-                self.rlhf_candidates_ready.emit(candidates, round_idx)
+                self._emit(self.rlhf_candidates_ready, candidates, round_idx)
             else:
                 # No candidates generated — resume training to avoid a
                 # permanent hang (the UI never gets the signal to resume).
                 log.warning("RLHF: no candidates generated, resuming training")
                 t.resume()
         except Exception as e:
-            self.error.emit(f"RLHF candidate generation failed: {e}")
+            self._emit(self.error, f"RLHF candidate generation failed: {e}")
             t.resume()
 
     def apply_rlhf_preferences(self, selections: list[dict]):
@@ -352,7 +353,7 @@ class TrainingWorker(QThread):
         with self._config_lock:
             self.config.rlhf_dpo_rounds += 1
         total = t.total_steps
-        self.progress.emit(
+        self._emit(self.progress,
             step, total,
             f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
         )
@@ -376,7 +377,7 @@ class TrainingWorker(QThread):
         if t:
             log.info("RLHF collection cancelled by user, resuming training")
             t.resume()
-            self.phase_changed.emit("training")
+            self._emit(self.phase_changed, "training")
 
     @property
     def is_paused(self) -> bool:

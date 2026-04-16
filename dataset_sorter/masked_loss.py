@@ -66,7 +66,7 @@ def compute_masked_loss(
     # Normalize by mask area (avoid division by zero)
     mask_sum = mask.sum()
     if mask_sum < 1.0:
-        return masked_loss.sum()  # Fallback if mask is essentially empty
+        return masked_loss.mean()  # Fallback if mask is essentially empty
 
     if reduction == "mean":
         return masked_loss.sum() / mask_sum
