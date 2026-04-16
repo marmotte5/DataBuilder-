@@ -45,6 +45,15 @@ class IntegrationReport:
     divergence_detected: bool = False
     plateau_detected: bool = False
     lr_adjustments: list[str] = field(default_factory=list)
+    # Post-training
+    final_loss: float = 0.0
+    min_loss: float = 0.0
+    convergence_step: int = 0
+    total_steps: int = 0
+    training_time_s: float = 0.0
+    peak_vram_gb: float = 0.0
+    oom_occurred: bool = False
+    samples_per_second: float = 0.0
 
     def format_pre_training(self) -> str:
         """Format pre-training report as human-readable string."""
@@ -78,6 +87,40 @@ class IntegrationReport:
             lines.append(f"\nAuto-Enabled Optimizations:")
             for opt in self.speed_opts_enabled:
                 lines.append(f"  + {opt}")
+
+        return "\n".join(lines)
+
+    def format_post_training(self) -> str:
+        """Format post-training report as human-readable string."""
+        lines = ["Post-Training Report", "=" * 40]
+
+        if self.total_steps > 0:
+            lines.append(f"Total steps: {self.total_steps}")
+        if self.final_loss > 0:
+            lines.append(f"Final loss: {self.final_loss:.6f}")
+        if self.min_loss > 0:
+            lines.append(f"Min loss: {self.min_loss:.6f} (step {self.convergence_step})")
+        if self.training_time_s > 0:
+            mins, secs = divmod(int(self.training_time_s), 60)
+            hours, mins = divmod(mins, 60)
+            if hours:
+                lines.append(f"Training time: {hours}h {mins}m {secs}s")
+            else:
+                lines.append(f"Training time: {mins}m {secs}s")
+        if self.samples_per_second > 0:
+            lines.append(f"Throughput: {self.samples_per_second:.1f} samples/s")
+        if self.peak_vram_gb > 0:
+            lines.append(f"Peak VRAM: {self.peak_vram_gb:.2f} GB")
+        if self.oom_occurred:
+            lines.append("WARNING: OOM event(s) occurred during training")
+        if self.divergence_detected:
+            lines.append("WARNING: Loss divergence was detected")
+        if self.plateau_detected:
+            lines.append("INFO: Loss plateau was detected")
+        if self.lr_adjustments:
+            lines.append(f"LR adjustments: {len(self.lr_adjustments)}")
+            for adj in self.lr_adjustments:
+                lines.append(f"  - {adj}")
 
         return "\n".join(lines)
 

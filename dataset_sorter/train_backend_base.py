@@ -923,6 +923,14 @@ class TrainBackendBase(ABC):
         is_single = self._is_single_file(model_path)
 
         if not is_single:
+            # For HF repo IDs, try local cache first to avoid network round-trips
+            if not Path(model_path).exists():
+                try:
+                    return pipeline_cls.from_pretrained(
+                        model_path, local_files_only=True, **kwargs
+                    )
+                except Exception:
+                    pass
             return pipeline_cls.from_pretrained(model_path, **kwargs)
 
         errors = []
@@ -987,7 +995,17 @@ class TrainBackendBase(ABC):
         log.info("Loading base pipeline from %s and swapping weights from %s",
                  base_repo, checkpoint_path)
 
-        pipe = load_cls.from_pretrained(base_repo, **load_kwargs)
+        # Try local HF cache first to avoid unnecessary network downloads.
+        # Many users already have the base model cached from a previous run.
+        pipe = None
+        try:
+            pipe = load_cls.from_pretrained(
+                base_repo, local_files_only=True, **load_kwargs
+            )
+            log.info("Loaded base pipeline from local cache (no download needed)")
+        except Exception:
+            log.info("Base pipeline not in local cache, downloading from %s...", base_repo)
+            pipe = load_cls.from_pretrained(base_repo, **load_kwargs)
 
         # Load checkpoint weights
         if checkpoint_path.endswith(".safetensors"):
