@@ -302,6 +302,16 @@ class SafetensorsMMapDataset(Dataset):
             if single.exists():
                 shard_files = [single]
 
+        if not shard_files:
+            # Fail loudly instead of silently — training on an empty
+            # mmap dataset would silently return empty batches and ruin
+            # the entire run.
+            raise FileNotFoundError(
+                f"SafetensorsMMapDataset.open(): no cache shards found in "
+                f"{self.cache_path}. Expected cache.safetensors or "
+                f"cache_*.safetensors. Run build_safetensors_cache() first."
+            )
+
         for sf in shard_files:
             handle = safe_open(str(sf), framework="pt", device="cpu")
             self._handles[sf.stem] = handle
