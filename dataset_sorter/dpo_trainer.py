@@ -218,11 +218,20 @@ def compute_image_log_probs(
 
     # Flow-matching schedulers use sigma-based interpolation instead of
     # DDPM-style add_noise (which requires alphas_cumprod).
-    if hasattr(backend.noise_scheduler, 'add_noise'):
+    is_flow = getattr(backend, 'prediction_type', 'epsilon') == 'flow'
+    if hasattr(backend.noise_scheduler, 'add_noise') and not is_flow:
         noisy_latents = backend.noise_scheduler.add_noise(latents, noise, timesteps)
     else:
-        # Flow matching: noisy = (1 - t) * latents + t * noise
-        t = timesteps.float() / backend.noise_scheduler.config.num_train_timesteps
+        # Flow matching: noisy = (1 - t) * latents + t * noise.
+        # Detect whether timesteps are already continuous [0, 1] or
+        # integer [0, num_train_timesteps]. Previously we always divided
+        # by num_train_timesteps, producing t ∈ [0, 0.001] for callers
+        # passing continuous timesteps → nearly-clean latents and no
+        # learning signal.
+        t = timesteps.float()
+        if t.max() > 1.0:
+            num_ts = getattr(backend.noise_scheduler.config, 'num_train_timesteps', 1000)
+            t = t / num_ts
         while t.dim() < latents.dim():
             t = t.unsqueeze(-1)
         noisy_latents = (1 - t) * latents + t * noise
@@ -271,9 +280,20 @@ def compute_image_log_probs(
     # Weight by SNR to get a proper variational bound estimate.
     # Without SNR weighting, log-probs are dominated by the random timestep
     # (high-noise timesteps always have high MSE regardless of image quality).
-    # SNR(t) = alpha_t^2 / sigma_t^2 normalizes across timesteps.
     snr_weights = torch.ones_like(per_sample_mse)
-    if hasattr(backend.noise_scheduler, 'alphas_cumprod'):
+    if is_flow:
+        # Flow-matching SNR analogue: with x_t = (1-t)*x + t*eps,
+        # alpha_t = 1 - t, sigma_t = t, so SNR(t) = (1-t)^2 / t^2.
+        # Compute a per-sample scalar weight so per_sample_mse * snr_weights
+        # stays shape-compatible.
+        t_flat = timesteps.float()
+        if t_flat.max() > 1.0:
+            num_ts = getattr(backend.noise_scheduler.config, 'num_train_timesteps', 1000)
+            t_flat = t_flat / num_ts
+        t_flat = t_flat.clamp(min=0.01, max=0.99)
+        snr = ((1.0 - t_flat) ** 2) / (t_flat ** 2)
+        snr_weights = snr.clamp(min=0.1, max=10.0)
+    elif hasattr(backend.noise_scheduler, 'alphas_cumprod'):
         alphas_cumprod = backend.noise_scheduler.alphas_cumprod.to(
             device=timesteps.device, dtype=torch.float32,
         )
