@@ -744,7 +744,7 @@ class GenerateWorker(QThread):
         # Base model repos for all architectures
         BASE_REPOS = {
             "zimage":   "Tongyi-MAI/Z-Image",
-            "flux2":    "black-forest-labs/FLUX.1-dev",
+            "flux2":    "black-forest-labs/FLUX.2-dev",
             "chroma":   "lodestone-horizon/chroma",
             "hidream":  "HiDream-ai/HiDream-I1-Full",
             "sd3":      "stabilityai/stable-diffusion-3-medium-diffusers",
@@ -1298,45 +1298,102 @@ class GenerateWorker(QThread):
         override_lora_path = p.get("lora_path", "")
         override_lora_weight = p.get("lora_weight", 1.0)
 
-        # Hold the inference lock for the ENTIRE generation (not just
-        # setup) so concurrent calls can't race on the shared pipeline's
-        # scheduler/adapter state during inference.
-        self._inference_lock.acquire()
-        _override_adapter = None
-        _prev_active_adapters = None
-        _prev_adapter_weights = None
+        # Reset the stop flag at the start of every blocking generation so
+        # a prior cancellation (e.g., user stopped a previous batch/comparison
+        # run) doesn't cause this run to immediately break out and return
+        # no images — a silent no-op that was confusing users.
+        self._stop_requested = False
+
+        # Hold the inference lock via context manager to GUARANTEE it is
+        # released no matter what happens — including exceptions during
+        # kwargs setup, adapter operations, or anywhere in the loop body.
+        # Previous manual acquire/release path could leak the lock if any
+        # exception occurred outside the per-iteration try/except.
+        results = []
+        with self._inference_lock:
+            _override_adapter = None
+            _prev_active_adapters = None
+            try:
+                _load_scheduler(pipe_ref, scheduler_name, model_type)
+                active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+
+                # Apply per-call LoRA override. Snapshot previously-active
+                # adapters so we can restore them after this call completes
+                # (otherwise base LoRAs would stay disabled).
+                if override_lora_path and Path(override_lora_path).exists():
+                    try:
+                        if hasattr(pipe_ref, "get_active_adapters"):
+                            _prev_active_adapters = list(pipe_ref.get_active_adapters() or [])
+                        elif hasattr(pipe_ref, "get_list_adapters"):
+                            _prev_active_adapters = list(pipe_ref.get_list_adapters() or [])
+
+                        _override_adapter = f"_override_{id(pipe_ref)}"
+                        p_lora = Path(override_lora_path)
+                        load_kwargs = {"adapter_name": _override_adapter}
+                        if p_lora.is_file():
+                            load_kwargs["weight_name"] = p_lora.name
+                            load_dir = str(p_lora.parent)
+                        else:
+                            load_dir = str(p_lora)
+                        pipe_ref.load_lora_weights(load_dir, **load_kwargs)
+                        pipe_ref.set_adapters([_override_adapter], [override_lora_weight])
+                    except Exception as e:
+                        log.warning(f"Failed to apply per-call LoRA override {override_lora_path}: {e}")
+                        _override_adapter = None
+
+                results = self._do_generate_blocking_loop(
+                    active_pipe, pipe_mode,
+                    total=total,
+                    positive_prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    scheduler_name=scheduler_name,
+                    steps=steps, cfg_scale=cfg_scale,
+                    width=width, height=height, seed=seed, clip_skip=clip_skip,
+                    init_image=init_image, mask_image=mask_image, strength=strength,
+                    model_type=model_type,
+                )
+            finally:
+                # Cleanup the per-call LoRA override under the lock so the
+                # pipeline is left in a clean state for the next caller.
+                if _override_adapter is not None:
+                    try:
+                        if hasattr(pipe_ref, "delete_adapters"):
+                            pipe_ref.delete_adapters([_override_adapter])
+                        elif hasattr(pipe_ref, "unload_lora_weights"):
+                            pipe_ref.unload_lora_weights()
+                            _prev_active_adapters = None
+                    except Exception as e:
+                        log.debug(f"Could not delete override LoRA adapter: {e}")
+                    if _prev_active_adapters:
+                        try:
+                            pipe_ref.set_adapters(
+                                _prev_active_adapters,
+                                [1.0] * len(_prev_active_adapters),
+                            )
+                        except Exception as e:
+                            log.debug(f"Could not restore prior LoRA adapters: {e}")
+
         try:
-            _load_scheduler(pipe_ref, scheduler_name, model_type)
-            active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
-
-            # Apply per-call LoRA override. Snapshot previously-active
-            # adapters so we can restore them after this call completes
-            # (otherwise base LoRAs would stay disabled).
-            if override_lora_path and Path(override_lora_path).exists():
-                try:
-                    # Snapshot current adapter state for restore after
-                    if hasattr(pipe_ref, "get_active_adapters"):
-                        _prev_active_adapters = list(pipe_ref.get_active_adapters() or [])
-                    elif hasattr(pipe_ref, "get_list_adapters"):
-                        _prev_active_adapters = list(pipe_ref.get_list_adapters() or [])
-
-                    _override_adapter = f"_override_{id(pipe_ref)}"
-                    p_lora = Path(override_lora_path)
-                    load_kwargs = {"adapter_name": _override_adapter}
-                    if p_lora.is_file():
-                        load_kwargs["weight_name"] = p_lora.name
-                        load_dir = str(p_lora.parent)
-                    else:
-                        load_dir = str(p_lora)
-                    pipe_ref.load_lora_weights(load_dir, **load_kwargs)
-                    pipe_ref.set_adapters([_override_adapter], [override_lora_weight])
-                except Exception as e:
-                    log.warning(f"Failed to apply per-call LoRA override {override_lora_path}: {e}")
-                    _override_adapter = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
         except Exception:
-            self._inference_lock.release()
-            raise
+            pass
 
+        return results
+
+    def _do_generate_blocking_loop(
+        self, active_pipe, pipe_mode, *, total, positive_prompt, negative_prompt,
+        scheduler_name, steps, cfg_scale, width, height, seed, clip_skip,
+        init_image, mask_image, strength, model_type,
+    ) -> list[tuple]:
+        """Inner generation loop for _do_generate_blocking.
+
+        Extracted into a method so the outer context manager handles all
+        lock lifecycle + cleanup, keeping the main entry point simple.
+        """
+        import torch
         results = []
         for i in range(total):
             if self._stop_requested:
@@ -1430,40 +1487,5 @@ class GenerateWorker(QThread):
                         torch.mps.empty_cache()
                 except Exception:
                     pass
-        # Remove the per-call LoRA override and restore prior adapter
-        # state so the next call sees base LoRAs re-enabled.
-        if _override_adapter is not None:
-            try:
-                if hasattr(pipe_ref, "delete_adapters"):
-                    pipe_ref.delete_adapters([_override_adapter])
-                elif hasattr(pipe_ref, "unload_lora_weights"):
-                    # Fallback for older diffusers — wipes all LoRAs
-                    pipe_ref.unload_lora_weights()
-                    _prev_active_adapters = None  # Can't restore after unload_all
-            except Exception as e:
-                log.debug(f"Could not delete override LoRA adapter: {e}")
-            # Re-enable adapters that were active before the override
-            if _prev_active_adapters:
-                try:
-                    # Restore with default weight 1.0 — we don't track the
-                    # original weights since the typical flow just uses
-                    # adapter-name-only configuration
-                    pipe_ref.set_adapters(
-                        _prev_active_adapters,
-                        [1.0] * len(_prev_active_adapters),
-                    )
-                except Exception as e:
-                    log.debug(f"Could not restore prior LoRA adapters: {e}")
-
-        # Release the inference lock held for the whole generation
-        self._inference_lock.release()
-
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                torch.mps.empty_cache()
-        except Exception:
-            pass
 
         return results

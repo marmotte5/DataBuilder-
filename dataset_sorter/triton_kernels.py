@@ -302,11 +302,13 @@ class FusedAdamW:
                     n_elements = p.numel()
                     grid = ((n_elements + BLOCK_SIZE - 1) // BLOCK_SIZE,)
 
-                    # Flatten for Triton (contiguous 1D view)
-                    p_flat = p.data.view(-1)
-                    g_flat = grad.view(-1)
-                    m_flat = state["exp_avg"].view(-1)
-                    v_flat = state["exp_avg_sq"].view(-1)
+                    # Flatten for Triton. Use .reshape(-1) instead of
+                    # .view(-1) so non-contiguous tensors (e.g., channels_last
+                    # memory format on SDXL UNet conv weights) don't crash.
+                    p_flat = p.data.reshape(-1)
+                    g_flat = grad.reshape(-1)
+                    m_flat = state["exp_avg"].reshape(-1)
+                    v_flat = state["exp_avg_sq"].reshape(-1)
 
                     _fused_adamw_kernel[grid](
                         p_flat, g_flat, m_flat, v_flat,
@@ -480,8 +482,8 @@ def fused_grad_clip_and_step(
                 n = p.grad.numel()
                 grid = ((n + BLOCK_SIZE - 1) // BLOCK_SIZE,)
                 _fused_grad_clip_kernel[grid](
-                    p.grad.data.view(-1),
-                    p.data.view(-1),
+                    p.grad.data.reshape(-1),
+                    p.data.reshape(-1),
                     clip_scale, 0.0, 0.0,  # wd and lr handled by optimizer
                     n,
                     BLOCK_SIZE=BLOCK_SIZE,

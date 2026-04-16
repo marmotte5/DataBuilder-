@@ -270,6 +270,19 @@ class CachedTrainDataset(Dataset):
         vae.eval()
         vae.requires_grad_(False)
 
+        # Capture a VAE identity signature used in the disk cache key so
+        # stale latents from a different VAE (different scaling_factor,
+        # shift_factor, or latent channel count) aren't silently reused.
+        _vae_sig_parts = [
+            str(getattr(vae.config, 'scaling_factor', 0.18215)),
+            str(getattr(vae.config, 'shift_factor', 0.0)),
+            str(getattr(vae.config, 'latent_channels', 4)),
+            str(dtype).replace('torch.', ''),
+        ]
+        self._vae_cache_sig = hashlib.md5(
+            "|".join(_vae_sig_parts).encode()
+        ).hexdigest()[:8]
+
         if to_disk and self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -817,13 +830,18 @@ class CachedTrainDataset(Dataset):
     def _latent_disk_path(self, idx: int) -> Path:
         """Generate disk cache path for a latent.
 
-        Includes bucket resolution in the hash so latents are invalidated
-        when bucket assignments change between runs.
+        Key includes image path, bucket resolution, and a VAE signature
+        (scaling_factor, shift_factor, latent channels, dtype) so that
+        switching VAE / model / dtype invalidates stale latents instead
+        of silently reusing them with wrong scaling.
         """
         key = str(self.image_paths[idx])
         if self._bucket_assignments is not None and idx < len(self._bucket_assignments):
             w, h = self._bucket_assignments[idx]
             key += f"_{w}x{h}"
+        vae_sig = getattr(self, '_vae_cache_sig', None)
+        if vae_sig:
+            key += f"_vae={vae_sig}"
         img_hash = hashlib.md5(key.encode()).hexdigest()
         return self.cache_dir / f"latent_{img_hash}.pt"
 

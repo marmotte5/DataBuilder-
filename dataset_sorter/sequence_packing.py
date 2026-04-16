@@ -117,7 +117,9 @@ class SequencePacker:
         seq_len = h * w
 
         # Reshape: (B, C, H, W) → (B, H*W, C) → (1, B*H*W, C)
-        packed = latents.reshape(b, c, seq_len).permute(0, 2, 1).reshape(1, b * seq_len, c)
+        # Force contiguous first — channels_last memory format makes the
+        # initial reshape raise "view size is not compatible" otherwise.
+        packed = latents.contiguous().reshape(b, c, seq_len).permute(0, 2, 1).contiguous().reshape(1, b * seq_len, c)
 
         cu_seqlens = torch.arange(
             0, (b + 1) * seq_len, seq_len,
