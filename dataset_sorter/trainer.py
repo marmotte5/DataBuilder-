@@ -1027,7 +1027,7 @@ class Trainer:
         base_lr = config.learning_rate
         plus_ratio = getattr(config, "lora_plus_ratio", 0.0)
 
-        if plus_ratio > 0 and config.is_lora:
+        if plus_ratio > 0 and config.model_type.endswith("_lora"):
             # Split UNet LoRA params into A (low LR) and B (high LR) groups
             lora_a_params = []
             lora_b_params = []
@@ -2779,18 +2779,22 @@ class Trainer:
 
         # Auto-apply adjustments if configured
         if config.smart_resume_auto_apply and analysis.adjustments:
+            # Snapshot the OLD LR before mutating config — otherwise the
+            # ratio calculation below uses the already-updated value and
+            # silently becomes 1.0 (no-op).
+            old_lr = config.learning_rate
             apply_adjustments_to_config(config, analysis.adjustments)
 
             # Update scheduler + optimizer base LRs if changed
             if "learning_rate" in analysis.adjustments:
                 new_lr = analysis.adjustments["learning_rate"]
                 # Scale each param group proportionally (preserves TE LR ratio)
-                if self.scheduler is not None and hasattr(self.scheduler, "base_lrs"):
+                if self.scheduler is not None and hasattr(self.scheduler, "base_lrs") and old_lr > 0:
+                    ratio = new_lr / old_lr
                     for i, (pg, base_lr) in enumerate(
                         zip(self.optimizer.param_groups, self.scheduler.base_lrs)
                     ):
                         if base_lr > 0:
-                            ratio = new_lr / config.learning_rate
                             pg["lr"] = base_lr * ratio
                             self.scheduler.base_lrs[i] = base_lr * ratio
                         else:

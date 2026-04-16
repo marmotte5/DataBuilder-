@@ -100,7 +100,13 @@ class FluxBackend(TrainBackendBase):
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
             clip_l_hidden = out_1.hidden_states[-2]
-            pooled = out_1.text_embeds
+            # FluxPipeline uses CLIPTextModel whose output exposes
+            # pooler_output, not text_embeds (which only exists on
+            # CLIPTextModelWithProjection). Fall back across both for
+            # compatibility with custom CLIP replacements.
+            pooled = getattr(out_1, "pooler_output", None)
+            if pooled is None:
+                pooled = getattr(out_1, "text_embeds", None)
 
         # T5-XXL
         tokens_2 = self.tokenizer_2(

@@ -437,7 +437,8 @@ class TrainingConfigIOMixin:
                 break
         self.sample_inf_steps_spin.setValue(config.sample_steps)
         self.cfg_spin.setValue(config.sample_cfg_scale)
-        self.seed_spin.setValue(config.sample_seed)
+        # QSpinBox is 32-bit signed — mask large seeds from older configs
+        self.seed_spin.setValue(config.sample_seed & 0x7FFFFFFF if config.sample_seed >= 0 else -1)
         self.num_samples_spin.setValue(config.num_sample_images)
 
         if config.sample_prompts:
