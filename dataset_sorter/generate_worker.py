@@ -1292,12 +1292,36 @@ class GenerateWorker(QThread):
         mask_image = p.get("mask_image", self.mask_image)
         strength = p.get("strength", self.strength)
 
+        # Per-call LoRA override (used by comparison tab for per-side LoRAs).
+        # Applied temporarily then removed after generation so successive
+        # calls with different LoRAs don't accumulate adapters on the pipe.
+        override_lora_path = p.get("lora_path", "")
+        override_lora_weight = p.get("lora_weight", 1.0)
+
         # Serialize scheduler mutation + inference to prevent concurrent
         # threads (batch worker, comparison worker, main generate) from
         # racing on the shared pipeline's scheduler state.
+        _override_adapter = None
         with self._inference_lock:
             _load_scheduler(pipe_ref, scheduler_name, model_type)
             active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
+
+            # Apply per-call LoRA override
+            if override_lora_path and Path(override_lora_path).exists():
+                try:
+                    _override_adapter = f"_override_{id(pipe_ref)}"
+                    p_lora = Path(override_lora_path)
+                    load_kwargs = {"adapter_name": _override_adapter}
+                    if p_lora.is_file():
+                        load_kwargs["weight_name"] = p_lora.name
+                        load_dir = str(p_lora.parent)
+                    else:
+                        load_dir = str(p_lora)
+                    pipe_ref.load_lora_weights(load_dir, **load_kwargs)
+                    pipe_ref.set_adapters([_override_adapter], [override_lora_weight])
+                except Exception as e:
+                    log.warning(f"Failed to apply per-call LoRA override {override_lora_path}: {e}")
+                    _override_adapter = None
 
         results = []
         for i in range(total):
@@ -1392,6 +1416,15 @@ class GenerateWorker(QThread):
                         torch.mps.empty_cache()
                 except Exception:
                     pass
+        # Remove the per-call LoRA override so the next call starts clean.
+        # Without this, successive comparison-tab calls would accumulate
+        # duplicate adapters on the pipeline.
+        if _override_adapter is not None:
+            try:
+                pipe_ref.delete_adapters([_override_adapter])
+            except Exception as e:
+                log.debug(f"Could not delete override LoRA adapter: {e}")
+
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
