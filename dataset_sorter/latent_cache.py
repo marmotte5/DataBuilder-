@@ -59,24 +59,49 @@ class LatentDiskCache:
         return None
 
     def put(self, key: str, tensor: torch.Tensor) -> None:
-        """Persist *tensor* to disk under *key*.  Always saves to CPU."""
+        """Persist *tensor* to disk under *key*.  Always saves to CPU.
+
+        Writes atomically via a .tmp file + rename so a concurrent
+        reader or a process kill can't observe a truncated .pt file.
+        """
         path = self._path(key)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
         try:
-            torch.save(tensor.cpu(), path)
+            torch.save(tensor.cpu(), tmp_path)
+            import os as _os
+            _os.replace(tmp_path, path)
         except Exception as e:
             logger.warning("Failed to cache %s: %s", key, e)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def has(self, key: str) -> bool:
         """Return True if *key* is present in the cache (no integrity check)."""
         return self._path(key).exists()
 
     def clear(self) -> int:
-        """Delete all cached files.  Returns number of files removed."""
+        """Delete all cached files.  Returns number of files removed.
+
+        Per-file errors (permission denied, file open by another process
+        on Windows) are logged and skipped instead of raising, so a
+        partial clear leaves the cache in a consistent state.
+        """
         count = 0
+        failed = 0
         for f in self.cache_dir.glob("*.pt"):
-            f.unlink()
-            count += 1
-        logger.info("Cleared %d cached files from %s", count, self.cache_dir)
+            try:
+                f.unlink(missing_ok=True)
+                count += 1
+            except OSError as e:
+                logger.warning("Could not delete %s: %s", f, e)
+                failed += 1
+        logger.info(
+            "Cleared %d cached files from %s%s",
+            count, self.cache_dir,
+            f" ({failed} failed)" if failed else "",
+        )
         return count
 
     def size_mb(self) -> float:

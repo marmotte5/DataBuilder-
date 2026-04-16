@@ -74,7 +74,7 @@ def quantize_model(model: Any, level: str) -> Any:
         return model
 
     try:
-        from optimum.quanto import quantize, freeze
+        from optimum.quanto import quantize
         from optimum.quanto import qint8, qint4
 
         qtype_map = {"int8": qint8, "int4": qint4}
@@ -84,9 +84,13 @@ def quantize_model(model: Any, level: str) -> Any:
 
         qtype = qtype_map[level]
         log.info("Quantizing model weights to %s via optimum.quanto …", level.upper())
+        # Do NOT call freeze() here: freeze() bakes weights to their
+        # quantized form and removes the fake-quant scaffolding that
+        # lets gradients flow through during training. Callers that
+        # want inference-only should call freeze() explicitly after
+        # this function returns.
         quantize(model, weights=qtype)
-        freeze(model)
-        log.info("Model quantization complete (%s).", level.upper())
+        log.info("Model quantization complete (%s, still trainable).", level.upper())
 
     except Exception as exc:
         log.error(

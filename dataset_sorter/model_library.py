@@ -32,7 +32,7 @@ import json
 import logging
 import struct
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -105,7 +105,6 @@ class ModelLibrary:
         "hyper_sd":     "#FF5722",   # Deep orange
         "deepfloyd":    "#607D8B",   # Blue grey
         "playground":   "#00BCD4",   # Cyan
-        "kolors":       "#FF7043",   # Deep orange variant
         "unknown":      "#95A5A6",   # Grey
     }
 
@@ -184,9 +183,9 @@ class ModelLibrary:
         updated = 0
         for abs_path, filepath in found.items():
             try:
-                mtime_iso = datetime.utcfromtimestamp(filepath.stat().st_mtime).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                )
+                mtime_iso = datetime.fromtimestamp(
+                    filepath.stat().st_mtime, tz=timezone.utc,
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
             except OSError:
                 continue
 
@@ -217,7 +216,9 @@ class ModelLibrary:
         """Extract metadata from a model file without loading tensor data."""
         stat = filepath.stat()
         file_size_mb = round(stat.st_size / (1024 * 1024), 2)
-        date_modified = datetime.utcfromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_modified = datetime.fromtimestamp(
+            stat.st_mtime, tz=timezone.utc,
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         entry = ModelEntry(
             path=str(filepath.resolve()),
@@ -750,10 +751,13 @@ class ModelLibrary:
         """Detect LoRA variant: lora, dora, lokr, loha."""
         # CivitAI metadata sometimes records network_module
         net_module = metadata.get("ss_network_module", "").lower()
-        if "loha" in net_module or "lycoris" in net_module and "hadamard" in net_module:
-            return "loha"
+        # Check lokr BEFORE loha, because "lycoris.lokr" also contains
+        # the substring "lycoris" which would incorrectly route to loha
+        # without the explicit ordering.
         if "lokr" in net_module or "kronecker" in net_module:
             return "lokr"
+        if "loha" in net_module or ("lycoris" in net_module and "hadamard" in net_module):
+            return "loha"
         if "dora" in net_module:
             return "dora"
         if net_module:

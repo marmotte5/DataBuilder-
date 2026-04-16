@@ -196,8 +196,10 @@ def _preprocess_wd(image_path: Path, size: int = 448):
     offset = ((size - img.width) // 2, (size - img.height) // 2)
     canvas.paste(img, offset)
 
-    # WD models expect BGR float32 input
-    arr = np.array(canvas, dtype=np.float32)[..., ::-1]  # RGB → BGR
+    # WD models expect BGR float32 input. Make contiguous after the
+    # [::-1] stride flip — many ONNX Runtime builds reject non-contiguous
+    # inputs and raise InvalidArgument, breaking all WD tagging.
+    arr = np.ascontiguousarray(np.array(canvas, dtype=np.float32)[..., ::-1])
     return arr[np.newaxis]  # (H,W,C) → (1,H,W,C)
 
 
@@ -339,6 +341,12 @@ def caption_image_blip(
     processor, model, device = _get_blip_pipeline(model_id)
     img = Image.open(image_path).convert("RGB")
     inputs = processor(images=img, return_tensors="pt").to(device)
+    # Cast pixel values to the model's dtype to avoid the fp16/fp32 mismatch
+    # that crashes BLIP on CUDA. The processor returns fp32 but a fp16 model
+    # raises "Input type (float) and weight type (Half) should be the same".
+    model_dtype = next(model.parameters()).dtype
+    if "pixel_values" in inputs and inputs["pixel_values"].dtype != model_dtype:
+        inputs["pixel_values"] = inputs["pixel_values"].to(dtype=model_dtype)
     with torch.no_grad():
         ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     caption = processor.decode(ids[0], skip_special_tokens=True).strip()
@@ -407,6 +415,10 @@ def caption_image_blip2(
     processor, model, device = _get_blip2_pipeline(model_id)
     img = Image.open(image_path).convert("RGB")
     inputs = processor(images=img, return_tensors="pt").to(device)
+    # See _blip_caption for why this cast is necessary
+    model_dtype = next(model.parameters()).dtype
+    if "pixel_values" in inputs and inputs["pixel_values"].dtype != model_dtype:
+        inputs["pixel_values"] = inputs["pixel_values"].to(dtype=model_dtype)
     with torch.no_grad():
         ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     caption = processor.decode(ids[0], skip_special_tokens=True).strip()

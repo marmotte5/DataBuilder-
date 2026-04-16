@@ -270,19 +270,29 @@ class QuickTrainer:
         pipe.load_lora_weights(str(lora_path))
 
         saved: list[Path] = []
-        for i, prompt in enumerate(prompts):
-            logger.info("Generating sample %d/%d: %s", i + 1, len(prompts), prompt)
-            gen = torch.Generator(device="cpu").manual_seed(42 + i)
-            result = pipe(
-                prompt,
-                generator=gen,
-                num_inference_steps=20,
-                height=self._resolution,
-                width=self._resolution,
-            )
-            out = samples_dir / f"sample_{i:03d}.png"
-            result.images[0].save(out)
-            saved.append(out)
+        try:
+            for i, prompt in enumerate(prompts):
+                logger.info("Generating sample %d/%d: %s", i + 1, len(prompts), prompt)
+                gen = torch.Generator(device="cpu").manual_seed(42 + i)
+                result = pipe(
+                    prompt,
+                    generator=gen,
+                    num_inference_steps=20,
+                    height=self._resolution,
+                    width=self._resolution,
+                )
+                out = samples_dir / f"sample_{i:03d}.png"
+                result.images[0].save(out)
+                saved.append(out)
+        finally:
+            # Explicitly free the pipeline — without this the whole model
+            # (~12GB for SDXL) stays resident on GPU after quick_train
+            # returns, blocking further training runs from using the VRAM.
+            del pipe
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         logger.info("Saved %d sample(s) to %s", len(saved), samples_dir)
         return saved

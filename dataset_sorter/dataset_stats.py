@@ -115,7 +115,10 @@ def compute_dataset_stats(folder: str | Path, max_caption_preview: int = 5) -> d
                     w, h = im.size
                 widths.append(w)
                 heights.append(h)
-                ar_buckets[_bucket_ar(w / h)] += 1
+                # Guard against h==0 (malformed PNG) — would otherwise
+                # raise ZeroDivisionError and abort the whole scan.
+                if h > 0:
+                    ar_buckets[_bucket_ar(w / h)] += 1
             except Exception as exc:
                 log.debug("Cannot read %s: %s", img_path.name, exc)
                 failed_reads.append(img_path.name)

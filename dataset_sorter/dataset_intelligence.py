@@ -134,6 +134,10 @@ def _image_size(path: Path) -> tuple[int, int] | None:
 
 
 def _classify_aspect(w: int, h: int) -> str:
+    # Guard against h==0 (malformed PNG/WebP) — would otherwise raise
+    # ZeroDivisionError and abort the whole analyze_dataset run.
+    if h == 0:
+        return "square"
     ratio = w / h
     if ratio < 0.9:
         return "portrait"

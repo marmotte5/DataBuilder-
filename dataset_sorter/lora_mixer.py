@@ -356,6 +356,8 @@ class LoRAMixer:
 
             # Determine max rank
             ranks = [e[5][down_key].shape[0] for e in self._loras if down_key in e[5]]
+            if not ranks:
+                continue  # No LoRA contains this down_key — skip entirely
             max_rank = max(ranks)
 
             # Accumulate full delta W = up @ down (weighted)
@@ -364,6 +366,11 @@ class LoRAMixer:
 
             for entry in self._loras:
                 _, w, _, _, _, norm = entry
+                # Skip entries missing this layer — LoRAs often have
+                # asymmetric layer coverage. Without this check the old
+                # code raised KeyError on the first missing layer.
+                if down_key not in norm or up_key not in norm:
+                    continue
                 down = norm[down_key]  # (rank, in)
                 up = norm[up_key]      # (out, rank)
 

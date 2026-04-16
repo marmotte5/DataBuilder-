@@ -167,7 +167,10 @@ def train_lora(
     if lora_alpha is None:
         lora_alpha = max(1, lora_rank // 2)
 
-    model_type_key = f"{model_type}_lora" if network_type == "lora" else f"{model_type}_full"
+    # DoRA is a LoRA variant — both share the _lora backend key; the
+    # network_type field on the config selects between them. Only "full"
+    # routes to the full-finetune backend.
+    model_type_key = f"{model_type}_full" if network_type == "full" else f"{model_type}_lora"
 
     # For LoRA training: freeze the text encoder and enable TE output caching.
     # The default in TrainingConfig is train_text_encoder=True (for full finetune),

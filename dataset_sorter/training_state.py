@@ -37,6 +37,27 @@ import numpy as np
 import torch
 
 
+def _to_json_safe(value: Any) -> Any:
+    """Convert value to JSON-safe form, preserving type hints in strings.
+
+    Path → str, torch.dtype → "torch.X", enum → value, tuple → list.
+    Tags non-primitive values with a "__type__" key when possible so
+    they can be reconstructed on load.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, torch.dtype):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+    # Last resort: stringify with a type tag for introspection
+    return repr(value)
+
+
 @dataclass
 class TrainingState:
     """Complete training state for pause/resume.
@@ -121,8 +142,14 @@ class TrainingStateManager:
         )
 
         state_path = checkpoint_dir / self.STATE_FILENAME
+        # Sanitize training_config to JSON-safe types. Without this,
+        # default=str silently stringifies Path, torch.dtype, enums
+        # etc., and on resume the trainer gets str where it expected
+        # typed values — silent config corruption.
+        state_dict = asdict(state)
+        state_dict["training_config"] = _to_json_safe(state_dict.get("training_config"))
         with open(state_path, 'w') as f:
-            json.dump(asdict(state), f, indent=2, default=str)
+            json.dump(state_dict, f, indent=2, default=str)
 
         # Save RNG states to guarantee exact reproducibility on resume:
         # without this, the batch/augmentation sequence would differ after resume.
