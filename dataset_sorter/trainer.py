@@ -1437,7 +1437,12 @@ class Trainer:
                             else:
                                 if self.grad_scaler is not None:
                                     self.grad_scaler.unscale_(self.optimizer)
-                                torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
+                                grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
+                                if (self._tb_logger is not None and self._tb_logger.available
+                                        and self.state.global_step % 10 == 0):
+                                    self._tb_logger.log_scalar(
+                                        "train/grad_norm", grad_norm.item(), self.state.global_step,
+                                    )
 
                                 # VJP approximation: reduce gradient compute (Feb 2026)
                                 if vjp_scaler is not None:
@@ -1632,9 +1637,13 @@ class Trainer:
                     if config.max_train_steps > 0 and self.state.global_step >= config.max_train_steps:
                         break
 
-            # Log epoch summary to debug console
+            # Log epoch summary to debug console and TensorBoard
             _epoch_elapsed = time.perf_counter() - _epoch_t0
             _epoch_avg_loss = (_epoch_loss_sum / _epoch_loss_count) if _epoch_loss_count > 0 else 0.0
+            if self._tb_logger is not None and self._tb_logger.available:
+                self._tb_logger.log_scalar(
+                    "train/epoch_avg_loss", _epoch_avg_loss, epoch + 1,
+                )
             try:
                 from dataset_sorter.ui.debug_console import log_worker_event, log_vram_state
                 log_worker_event(
@@ -1780,8 +1789,26 @@ class Trainer:
             except Exception as e:
                 log.debug(f"Failed to log training history: {e}")
 
-        # Close TensorBoard logger
+        # Log final metrics to TensorBoard before closing
         if self._tb_logger is not None:
+            if self._tb_logger.available:
+                self._tb_logger.log_hyperparams(
+                    {
+                        "model_type": config.model_type,
+                        "optimizer": config.optimizer,
+                        "learning_rate": config.learning_rate,
+                        "batch_size": config.batch_size,
+                        "resolution": config.resolution,
+                        "lora_rank": config.lora_rank,
+                        "epochs": config.epochs,
+                        "network_type": config.network_type,
+                    },
+                    metrics={
+                        "hparam/final_loss": self.state.loss,
+                        "hparam/min_loss": min_loss,
+                        "hparam/total_steps": self.state.global_step,
+                    },
+                )
             self._tb_logger.close()
             self._tb_logger = None
 

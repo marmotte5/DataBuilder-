@@ -302,11 +302,18 @@ def _get_blip_pipeline(model_id: str = "Salesforce/blip-image-captioning-large")
 
     log.info("Loading BLIP model %s …", model_id)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    processor = BlipProcessor.from_pretrained(model_id)
-    model = BlipForConditionalGeneration.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-    ).to(device)
+    _dtype = torch.float16 if device == "cuda" else torch.float32
+    try:
+        processor = BlipProcessor.from_pretrained(model_id, local_files_only=True)
+        model = BlipForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype=_dtype, local_files_only=True,
+        ).to(device)
+        log.info("BLIP loaded from local cache")
+    except Exception:
+        processor = BlipProcessor.from_pretrained(model_id)
+        model = BlipForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype=_dtype,
+        ).to(device)
     model.eval()
     _blip_cache = (processor, model, device)
     log.info("BLIP loaded on %s", device)
@@ -376,11 +383,17 @@ def _get_blip2_pipeline(model_id: str = "Salesforce/blip2-opt-2.7b") -> tuple:
     log.info("Loading BLIP-2 model %s …", model_id)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
-    processor = Blip2Processor.from_pretrained(model_id)
-    model = Blip2ForConditionalGeneration.from_pretrained(
-        model_id,
-        torch_dtype=dtype,
-    ).to(device)
+    try:
+        processor = Blip2Processor.from_pretrained(model_id, local_files_only=True)
+        model = Blip2ForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype=dtype, local_files_only=True,
+        ).to(device)
+        log.info("BLIP-2 loaded from local cache")
+    except Exception:
+        processor = Blip2Processor.from_pretrained(model_id)
+        model = Blip2ForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype=dtype,
+        ).to(device)
     model.eval()
     _blip2_cache = (processor, model, device)
     log.info("BLIP-2 loaded on %s", device)

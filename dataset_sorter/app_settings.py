@@ -67,7 +67,7 @@ class AppSettings:
     # Scanned at startup for .safetensors / .ckpt files to populate model
     # path autocompleters in the training and generation tabs.
     model_scan_dirs: list[str] = field(default_factory=lambda: [
-        str(Path("H:/modèles")),
+        str(Path.home() / "Models"),
         str(Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))),
     ])
     # LoRA output dirs to scan (added automatically when a training completes)

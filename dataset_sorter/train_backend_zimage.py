@@ -284,15 +284,18 @@ class ZImageBackend(TrainBackendBase):
             for repo, subfolder in te_candidates:
                 try:
                     sf_kwargs = {"subfolder": subfolder} if subfolder else {}
-                    # Use AutoModel (not AutoModelForCausalLM) for consistency
-                    # with the Qwen3Model path above — we only need hidden
-                    # states, not the LM head, and this avoids loading extra
-                    # weights and potential hidden_states index mismatches.
                     from transformers import AutoModel
-                    self.text_encoder = AutoModel.from_pretrained(
-                        repo, torch_dtype=self.dtype,
-                        trust_remote_code=True, **te_kwargs, **sf_kwargs,
-                    )
+                    try:
+                        self.text_encoder = AutoModel.from_pretrained(
+                            repo, torch_dtype=self.dtype,
+                            trust_remote_code=True, local_files_only=True,
+                            **te_kwargs, **sf_kwargs,
+                        )
+                    except Exception:
+                        self.text_encoder = AutoModel.from_pretrained(
+                            repo, torch_dtype=self.dtype,
+                            trust_remote_code=True, **te_kwargs, **sf_kwargs,
+                        )
                     log.info("Loaded Qwen3 text encoder from %s", repo)
                     break
                 except Exception:
@@ -313,9 +316,15 @@ class ZImageBackend(TrainBackendBase):
         if self.tokenizer is None:
             for candidate in tokenizer_candidates:
                 try:
-                    self.tokenizer = AutoTokenizer.from_pretrained(
-                        candidate, trust_remote_code=True,
-                    )
+                    try:
+                        self.tokenizer = AutoTokenizer.from_pretrained(
+                            candidate, trust_remote_code=True,
+                            local_files_only=True,
+                        )
+                    except Exception:
+                        self.tokenizer = AutoTokenizer.from_pretrained(
+                            candidate, trust_remote_code=True,
+                        )
                     log.info("Loaded tokenizer from %s", candidate)
                     break
                 except Exception:
@@ -345,10 +354,16 @@ class ZImageBackend(TrainBackendBase):
         # If VAE wasn't in the checkpoint, load from the official Z-Image repo.
         if self.vae is None:
             try:
-                self.vae = AutoencoderKL.from_pretrained(
-                    self._HF_BASE_REPO, subfolder="vae",
-                    torch_dtype=self.dtype,
-                )
+                try:
+                    self.vae = AutoencoderKL.from_pretrained(
+                        self._HF_BASE_REPO, subfolder="vae",
+                        torch_dtype=self.dtype, local_files_only=True,
+                    )
+                except Exception:
+                    self.vae = AutoencoderKL.from_pretrained(
+                        self._HF_BASE_REPO, subfolder="vae",
+                        torch_dtype=self.dtype,
+                    )
                 log.info("Loaded VAE from %s", self._HF_BASE_REPO)
             except Exception as e:
                 log.warning("Could not load VAE from %s: %s", self._HF_BASE_REPO, e)
