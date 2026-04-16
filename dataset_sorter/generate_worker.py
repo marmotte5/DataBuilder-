@@ -1434,7 +1434,12 @@ class GenerateWorker(QThread):
         # state so the next call sees base LoRAs re-enabled.
         if _override_adapter is not None:
             try:
-                pipe_ref.delete_adapters([_override_adapter])
+                if hasattr(pipe_ref, "delete_adapters"):
+                    pipe_ref.delete_adapters([_override_adapter])
+                elif hasattr(pipe_ref, "unload_lora_weights"):
+                    # Fallback for older diffusers — wipes all LoRAs
+                    pipe_ref.unload_lora_weights()
+                    _prev_active_adapters = None  # Can't restore after unload_all
             except Exception as e:
                 log.debug(f"Could not delete override LoRA adapter: {e}")
             # Re-enable adapters that were active before the override
