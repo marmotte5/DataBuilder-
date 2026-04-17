@@ -843,6 +843,16 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         key = self.preset_combo.currentData()
         if not key:
             return
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Apply Preset?",
+            f"Apply preset '{TRAINING_PRESETS[key]['label']}'?\n\n"
+            "This will overwrite your current training settings.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         config = self.build_config()
         config = apply_preset(config, key)
         self.apply_config(config)
@@ -1147,6 +1157,19 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             return
 
         config = self.build_config()
+
+        # ── Config validation ──
+        from dataset_sorter.config_validator import validate_config, format_validation_errors
+        validation_errors = validate_config(config)
+        real_errors = [e for e in validation_errors if e.severity == "error"]
+        if real_errors:
+            self._log("ERROR: Invalid training configuration:")
+            self._log(format_validation_errors(validation_errors))
+            return
+        warnings = [e for e in validation_errors if e.severity == "warning"]
+        if warnings:
+            for w in warnings:
+                self._log(f"WARNING: {w.field}: {w.message}")
 
         # ── Disk space check ──
         from dataset_sorter.disk_space import check_disk_space_for_training

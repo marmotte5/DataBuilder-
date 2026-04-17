@@ -268,6 +268,10 @@ class TagPanel(QWidget):
         selection model entirely, the new model (if different) is also blocked
         and reconnected to _on_selection before signals are re-enabled.
         """
+        self.filter_input.blockSignals(True)
+        self.filter_input.clear()
+        self.filter_input.blockSignals(False)
+
         sel = self.table.selectionModel()
         if sel:
             sel.blockSignals(True)

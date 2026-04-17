@@ -156,6 +156,12 @@ class TrainingTabBuildersMixin:
         self.train_model_combo.currentIndexChanged.connect(self._update_lora_visibility)
         self.rank_spin.valueChanged.connect(self._update_network_advice)
         self.dora_check.stateChanged.connect(self._update_network_advice)
+        self.dora_check.stateChanged.connect(
+            lambda checked: self.rslora_check.setChecked(False) if checked else None
+        )
+        self.rslora_check.stateChanged.connect(
+            lambda checked: self.dora_check.setChecked(False) if checked else None
+        )
 
         # EMA
         g3 = self._group("EMA")
