@@ -123,6 +123,37 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             f"Valid options: {', '.join(sorted(_QUANTIZE_TE_OPTIONS))}",
         ))
 
+    if config.quantize_unet and config.quantize_unet not in _QUANTIZE_TE_OPTIONS:
+        errors.append(ConfigValidationError(
+            "quantize_unet",
+            f"Unknown quantize option '{config.quantize_unet}'. "
+            f"Valid options: {', '.join(sorted(_QUANTIZE_TE_OPTIONS))}",
+        ))
+
+    _TIMESTEP_BIAS_STRATEGIES = {"none", "earlier", "later", "range"}
+    if config.timestep_bias_strategy and config.timestep_bias_strategy not in _TIMESTEP_BIAS_STRATEGIES:
+        errors.append(ConfigValidationError(
+            "timestep_bias_strategy",
+            f"Unknown timestep bias strategy '{config.timestep_bias_strategy}'. "
+            f"Valid: {', '.join(sorted(_TIMESTEP_BIAS_STRATEGIES))}",
+        ))
+
+    _SNR_GAMMA_MODES = {"fixed", "learnable"}
+    if config.snr_gamma_mode and config.snr_gamma_mode not in _SNR_GAMMA_MODES:
+        errors.append(ConfigValidationError(
+            "snr_gamma_mode",
+            f"Unknown SNR gamma mode '{config.snr_gamma_mode}'. "
+            f"Valid: {', '.join(sorted(_SNR_GAMMA_MODES))}",
+        ))
+
+    _COMPILE_MODES = {"default", "reduce-overhead", "max-autotune"}
+    if config.compile_mode and config.compile_mode not in _COMPILE_MODES:
+        errors.append(ConfigValidationError(
+            "compile_mode",
+            f"Unknown compile mode '{config.compile_mode}'. "
+            f"Valid: {', '.join(sorted(_COMPILE_MODES))}",
+        ))
+
     if config.dpo_loss_type and config.dpo_loss_type not in _DPO_LOSS_TYPES:
         errors.append(ConfigValidationError(
             "dpo_loss_type",

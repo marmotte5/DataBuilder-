@@ -146,6 +146,12 @@ def _apply_optimizer_settings(
         config.learning_rate = 0.02  # Muon uses ~2x larger LR than AdamW
         config.weight_decay = 0.0    # Muon uses decoupled WD internally
         config.lr_scheduler = "cosine"
+    elif optimizer == "Marmotte":
+        config.lr_scheduler = "cosine"
+        if ("sdxl" in model_type or "pony" in model_type or "zimage" in model_type) and is_lora:
+            config.fused_backward_pass = True
+    elif optimizer in ("GaLoreAdamW", "GaLoreAdamW8bit"):
+        config.weight_decay = 0.01
 
     # Schedule-free optimizers don't need a scheduler
     if optimizer in ("Prodigy", "DAdaptAdam", "AdamWScheduleFree"):

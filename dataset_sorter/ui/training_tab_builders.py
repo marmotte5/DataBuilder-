@@ -5,6 +5,7 @@ sub-tab (Model, Optimizer, Dataset, Advanced, Sampling, ControlNet, DPO).
 These are used as a mixin so the main TrainingTab class stays small.
 """
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -40,6 +41,20 @@ def _param_label(text: str, hint: str) -> QWidget:
     vb.addWidget(lbl)
     vb.addWidget(sub)
     return w
+
+
+def _help_icon(tooltip: str) -> QLabel:
+    """Return a small '?' label with a rich tooltip for inline help."""
+    lbl = QLabel("?")
+    lbl.setFixedSize(18, 18)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setStyleSheet(
+        f"QLabel {{ color: {COLORS['accent']}; font-size: 11px; font-weight: 700; "
+        f"border: 1px solid {COLORS['accent']}; border-radius: 9px; "
+        f"background: {COLORS.get('accent_subtle', COLORS['surface'])}; }}"
+    )
+    lbl.setToolTip(tooltip)
+    return lbl
 
 
 class TrainingTabBuildersMixin:
@@ -103,14 +118,32 @@ class TrainingTabBuildersMixin:
         self.train_network_combo.setToolTip("LoRA variant. Standard LoRA is recommended; LoCon adds conv layers.")
         g2l.addWidget(self.train_network_combo, 0, 1)
 
-        g2l.addWidget(_param_label("Rank", "Network complexity (16-64 typical)"), 1, 0)
+        _rank_row = QHBoxLayout()
+        _rank_row.addWidget(_param_label("Rank", "Network complexity (16-64 typical)"))
+        _rank_row.addWidget(_help_icon(
+            "LoRA rank controls the number of trainable parameters.\n\n"
+            "Low (4-16): Faster, less VRAM, good for simple concepts\n"
+            "Medium (32-64): Balanced, good for characters/styles\n"
+            "High (128+): More capacity, more VRAM, rarely needed"
+        ))
+        _rank_row.addStretch()
+        g2l.addLayout(_rank_row, 1, 0)
         self.rank_spin = QSpinBox()
         self.rank_spin.setRange(1, 256)
         self.rank_spin.setValue(32)
         self.rank_spin.setToolTip("LoRA rank (dimension). Higher = more capacity but more VRAM. 16-64 typical.")
         g2l.addWidget(self.rank_spin, 1, 1)
 
-        g2l.addWidget(QLabel("Alpha"), 2, 0)
+        _alpha_row = QHBoxLayout()
+        _alpha_row.addWidget(QLabel("Alpha"))
+        _alpha_row.addWidget(_help_icon(
+            "Alpha scales the LoRA's effect on the model.\n\n"
+            "Common: alpha = rank/2 (conservative)\n"
+            "Equal to rank: full-strength LoRA\n"
+            "Higher alpha = stronger effect per training step"
+        ))
+        _alpha_row.addStretch()
+        g2l.addLayout(_alpha_row, 2, 0)
         self.alpha_spin = QSpinBox()
         self.alpha_spin.setRange(1, 256)
         self.alpha_spin.setValue(16)
@@ -811,7 +844,17 @@ class TrainingTabBuildersMixin:
         self.train_optimizer_combo.setToolTip("Optimizer algorithm. Adafactor is memory-efficient; AdamW8bit for speed; Prodigy for auto-LR.")
         g1l.addWidget(self.train_optimizer_combo, 0, 1)
 
-        g1l.addWidget(_param_label("Learning Rate", "Too high = unstable, too low = slow"), 1, 0)
+        _lr_row = QHBoxLayout()
+        _lr_row.addWidget(_param_label("Learning Rate", "Too high = unstable, too low = slow"))
+        _lr_row.addWidget(_help_icon(
+            "Learning rate controls how fast the model learns.\n\n"
+            "LoRA: 1e-4 (0.0001) is a safe starting point\n"
+            "Full finetune: 1e-6 (0.000001) typical\n"
+            "Prodigy/D-Adaptation: set to 1.0 (auto-tunes)\n"
+            "Too high → garbled images. Too low → no learning."
+        ))
+        _lr_row.addStretch()
+        g1l.addLayout(_lr_row, 1, 0)
         self.lr_spin = QDoubleSpinBox()
         self.lr_spin.setRange(1e-8, 10.0)
         self.lr_spin.setDecimals(8)
