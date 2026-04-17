@@ -695,6 +695,11 @@ class TrainBackendBase(ABC):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None  # Clear after use
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         # Adaptive per-sample weights (set by trainer's tag weighter).
         # Must be applied BEFORE .mean() so each sample gets its own
         # weight. Applying after .mean() collapses to weights.mean()
@@ -704,10 +709,6 @@ class TrainBackendBase(ABC):
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample losses before reduction for adaptive tag weighting
-        # and curriculum learning (they need per-sample signals, not batch mean).
-        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 
@@ -751,6 +752,7 @@ class TrainBackendBase(ABC):
         if self._timestep_ema_sampler is not None:
             # Convert discrete timesteps to [0,1] range for flow matching
             discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
+            discrete_ts = self._apply_timestep_bias(discrete_ts)
             t = discrete_ts.float() / timestep_scale
         else:
             t = self._sample_flow_timesteps(batch_size)
@@ -845,6 +847,11 @@ class TrainBackendBase(ABC):
                 loss = loss * sample_weight
             self._token_weight_mask = None  # Consumed
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         # Adaptive per-sample weights (set by trainer's tag weighter).
         # Must be applied BEFORE .mean() so each sample gets its own
         # weight. Applying after .mean() collapses to weights.mean()
@@ -854,10 +861,6 @@ class TrainBackendBase(ABC):
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample losses before reduction for adaptive tag weighting
-        # and curriculum learning (they need per-sample signals, not batch mean).
-        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 
