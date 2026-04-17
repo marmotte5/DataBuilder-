@@ -854,17 +854,19 @@ def stochastic_round_to_bf16(tensor: torch.Tensor) -> torch.Tensor:
     # The difference between the original and truncated value
     residual = tensor - truncated
 
-    # Get the ULP size at each value (next representable bf16 - current bf16)
-    # For bf16, we can compute this by adding 1 ULP
-    next_bf16 = torch.nextafter(bf16_val, torch.tensor(float('inf'), device=tensor.device, dtype=torch.bfloat16))
-    ulp = (next_bf16.float() - truncated).abs().clamp(min=1e-38)
+    # Get the ULP size in both directions (asymmetric at power-of-2 boundaries)
+    _inf = torch.tensor(float('inf'), device=tensor.device, dtype=torch.bfloat16)
+    _ninf = torch.tensor(float('-inf'), device=tensor.device, dtype=torch.bfloat16)
+    next_up = torch.nextafter(bf16_val, _inf)
+    next_dn = torch.nextafter(bf16_val, _ninf)
+    ulp_up = (next_up.float() - truncated).abs().clamp(min=1e-38)
+    ulp_dn = (truncated - next_dn.float()).abs().clamp(min=1e-38)
 
-    # Probability of rounding up = |residual| / ulp
+    ulp = torch.where(residual >= 0, ulp_up, ulp_dn)
     prob = (residual.abs() / ulp).clamp(0, 1)
 
-    # Stochastic decision: round up with probability `prob`
     round_up = torch.rand_like(prob) < prob
-    correction = torch.where(residual >= 0, ulp, -ulp)
+    correction = torch.where(residual >= 0, ulp_up, -ulp_dn)
 
     result = truncated + torch.where(round_up, correction, torch.zeros_like(correction))
     return result.to(torch.bfloat16)

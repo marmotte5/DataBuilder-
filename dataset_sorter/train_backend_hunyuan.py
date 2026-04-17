@@ -116,7 +116,9 @@ class HunyuanDiTBackend(TrainBackendBase):
 
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
-            clip_hidden = out_1.hidden_states[-2]
+            skip = max(self.config.clip_skip, 1)
+            skip = min(skip, len(out_1.hidden_states) - 2)
+            clip_hidden = out_1.hidden_states[-(skip + 1)]
             pooled = out_1.text_embeds
 
         # mT5
