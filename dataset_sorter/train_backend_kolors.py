@@ -130,7 +130,7 @@ class KolorsBackend(TrainBackendBase):
             pooled = last_layer[-1, :, :].clone()
             del out, last_layer  # Free ChatGLM hidden states from VRAM
 
-        return (encoder_hidden, pooled)
+        return (encoder_hidden.to(dtype=self.dtype), pooled.to(dtype=self.dtype))
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:

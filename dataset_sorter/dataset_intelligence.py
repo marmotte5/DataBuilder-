@@ -320,6 +320,8 @@ def crop_coordinates(
     cx_px = int(center[0] * w)
     cy_px = int(center[1] * h)
 
+    if target_ratio <= 0:
+        return None
     current_ratio = w / h
     if current_ratio > target_ratio:
         # wider than target — crop width

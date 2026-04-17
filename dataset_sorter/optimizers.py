@@ -372,11 +372,11 @@ class Marmotte(Optimizer):
         # Clamp to prevent blowup: max norm per column = 2 * grad_scale
         max_norm = grad_scale.item() * 2.0
         for i in range(k):
-            u_norm = U[:, i].norm()
-            if u_norm > max_norm:
+            u_norm = U[:, i].norm().item()
+            if u_norm > max_norm and u_norm > 0:
                 U[:, i].mul_(max_norm / u_norm)
-            v_norm = V[:, i].norm()
-            if v_norm > max_norm:
+            v_norm = V[:, i].norm().item()
+            if v_norm > max_norm and v_norm > 0:
                 V[:, i].mul_(max_norm / v_norm)
 
     @classmethod

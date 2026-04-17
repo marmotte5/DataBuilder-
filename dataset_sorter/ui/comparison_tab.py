@@ -628,9 +628,9 @@ class ComparisonTab(QWidget):
         self._side_a.cfg_spin.setValue(cb)
         self._side_b.cfg_spin.setValue(ca)
         # Swap seeds
-        sa, sb = self._side_a.seed_spin.value(), self._side_b.seed_spin.value()
-        self._side_a.seed_spin.setValue(sb)
-        self._side_b.seed_spin.setValue(sa)
+        seed_a, seed_b = self._side_a.seed_spin.value(), self._side_b.seed_spin.value()
+        self._side_a.seed_spin.setValue(seed_b)
+        self._side_b.seed_spin.setValue(seed_a)
         # Swap negatives
         na, nb = self._side_a.negative_edit.text(), self._side_b.negative_edit.text()
         self._side_a.negative_edit.setText(nb)

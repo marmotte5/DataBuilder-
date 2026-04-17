@@ -194,6 +194,7 @@ class QuickTrainer:
         try:
             import torch  # noqa: PLC0415
             from dataset_sorter.trainer import Trainer  # noqa: PLC0415
+            from dataset_sorter.models import TrainingConfig  # noqa: PLC0415
         except ImportError as exc:
             raise RuntimeError(
                 f"Training dependencies not available: {exc}"
@@ -201,21 +202,36 @@ class QuickTrainer:
 
         t0 = time.monotonic()
 
-        def _hook(step: int, loss: float) -> None:
+        def _loss_hook(step: int, loss: float, lr: float) -> None:
             elapsed = time.monotonic() - t0
             eta = (elapsed / max(step, 1)) * (steps - step)
             if on_progress is not None:
                 on_progress(step, steps, float(loss), eta)
 
-        trainer = Trainer(
+        cfg = TrainingConfig(
             model_type=self._config["model_type"],
-            model_path=self._config["base_model"],
-            images=[str(p) for p in self._images],
-            captions=self._load_captions(),
-            output_dir=str(self.output_dir),
-            config=self._config,
+            max_train_steps=steps,
+            batch_size=self._config.get("batch_size", 1),
+            gradient_accumulation=self._config.get("gradient_accumulation", 1),
+            learning_rate=self._config.get("learning_rate", 1e-4),
+            optimizer=self._config.get("optimizer", "Adafactor"),
+            lr_scheduler=self._config.get("lr_scheduler", "constant"),
+            network_type=self._config.get("network_type", "lora"),
+            lora_rank=self._config.get("lora_rank", 4),
+            lora_alpha=self._config.get("lora_alpha", 4),
+            mixed_precision=self._config.get("mixed_precision", "bf16"),
+            gradient_checkpointing=self._config.get("gradient_checkpointing", True),
+            cache_latents=self._config.get("cache_latents", True),
+            resolution=self._config.get("resolution", 1024),
         )
-        trainer.train(progress_callback=_hook)
+        trainer = Trainer(cfg)
+        trainer.setup(
+            model_path=self._config["base_model"],
+            image_paths=self._images,
+            captions=self._load_captions(),
+            output_dir=self.output_dir,
+        )
+        trainer.train(loss_fn=_loss_hook)
 
         elapsed = time.monotonic() - t0
         lora_path = self.output_dir / "lora.safetensors"

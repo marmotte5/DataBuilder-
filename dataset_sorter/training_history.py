@@ -314,7 +314,10 @@ class TrainingHistory:
             for row in rows:
                 d = dict(row)
                 curve = d.pop("loss_curve_json", None)
-                d["loss_curve_len"] = len(json.loads(curve)) if curve else 0
+                try:
+                    d["loss_curve_len"] = len(json.loads(curve)) if curve else 0
+                except (json.JSONDecodeError, TypeError):
+                    d["loss_curve_len"] = 0
                 # Human-readable timestamp
                 if d.get("timestamp"):
                     d["timestamp"] = datetime.datetime.fromtimestamp(
@@ -360,7 +363,10 @@ class TrainingHistory:
             writer.writeheader()
             for row in rows:
                 # loss_curve_json is a list[float] (loss values, no step info)
-                curve: list[float] = json.loads(row["loss_curve_json"]) if row["loss_curve_json"] else []
+                try:
+                    curve: list[float] = json.loads(row["loss_curve_json"]) if row["loss_curve_json"] else []
+                except (json.JSONDecodeError, TypeError):
+                    curve = []
                 for step_idx, loss_val in enumerate(curve):
                     writer.writerow({
                         "run_id": row["id"],

@@ -775,7 +775,8 @@ class FusedBackwardPass:
 
                 if self._grads_received >= self._total_hooked:
                     # All gradients ready — compute global norm and clip
-                    total_norm = torch.stack(list(self._grad_norms_sq.values())).sum().sqrt().item()
+                    norms = list(self._grad_norms_sq.values())
+                    total_norm = torch.stack(norms).sum().sqrt().item() if norms else 0.0
                     clip_coef = self.max_grad_norm / max(total_norm, self.max_grad_norm)
                     if clip_coef < 1.0:
                         for pp in self._grad_norms_sq:
