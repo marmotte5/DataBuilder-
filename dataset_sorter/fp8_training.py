@@ -72,9 +72,10 @@ class FP8ScalingTracker:
         # scale history, just skip this observation and use existing history.
         if not math.isfinite(amax):
             if name in history and history[name]:
-                amax = max(history[name])  # Reuse last valid amax
+                fp8_max = 448.0 if is_forward else 57344.0
+                return fp8_max / (max(history[name]) * 1.1)
             else:
-                return 1.0  # No valid history, use identity scale
+                return 1.0
 
         if name not in history:
             history[name] = []

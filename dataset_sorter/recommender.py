@@ -271,7 +271,7 @@ def recommend(
             config.train_text_encoder_2 = False
             config.text_encoder_lr = config.learning_rate * 0.05 if vram_gb >= 96 else 0.0
     elif is_sd3 or is_sd35:
-        config.train_text_encoder = vram_gb >= 24 if is_lora else vram_gb >= 24
+        config.train_text_encoder = vram_gb >= 16 if is_lora else vram_gb >= 24
         config.train_text_encoder_2 = False
         config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
     elif is_zimage:

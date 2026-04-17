@@ -250,7 +250,7 @@ class HiDreamBackend(TrainBackendBase):
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             noise_pred = self.unet(
                 hidden_states=noisy_latents,
-                timestep=timesteps,
+                timestep=t,
                 **fwd_kwargs,
             ).sample
 
