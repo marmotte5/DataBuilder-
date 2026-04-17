@@ -104,15 +104,14 @@ def estimate_vram(config) -> dict:
     breakdown["Text encoder"] = round(te_gb, 1)
 
     # 4. LoRA adapter weights
+    lora_gb = 0.0
     if is_lora:
         # LoRA adds ~rank/dim * model_params — use base (bf16) size, not
         # precision-adjusted model_gb, since adapter size depends on param count
         lora_gb = base_model_gb * (config.lora_rank / 1024) * 0.5
         if config.use_dora:
             lora_gb *= 1.3  # DoRA has extra magnitude vector
-        breakdown["LoRA adapter"] = round(lora_gb, 2)
-    else:
-        breakdown["LoRA adapter"] = 0.0
+    breakdown["LoRA adapter"] = round(lora_gb, 2)
 
     # 5. Optimizer states
     opt = config.optimizer
