@@ -1449,7 +1449,7 @@ class GenerateWorker(QThread):
                     (width, height), Image.Resampling.LANCZOS,
                 )
                 kwargs["image"] = init_img
-                kwargs["strength"] = strength
+                kwargs["strength"] = max(0.01, min(1.0, strength))
 
                 if pipe_mode == "inpaint" and mask_image is not None:
                     mask = mask_image.convert("L").resize(
@@ -1704,7 +1704,7 @@ class GenerateWorker(QThread):
                     (width, height), Image.Resampling.LANCZOS,
                 )
                 kwargs["image"] = init_img
-                kwargs["strength"] = strength
+                kwargs["strength"] = max(0.01, min(1.0, strength))
                 if pipe_mode == "inpaint" and mask_image is not None:
                     mask = mask_image.convert("L").resize(
                         (width, height), Image.Resampling.LANCZOS,
