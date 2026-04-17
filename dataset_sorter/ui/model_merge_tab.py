@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QDoubleSpinBox, QComboBox,
     QFileDialog, QGroupBox, QCheckBox, QProgressBar,
-    QSlider,
+    QSlider, QMessageBox,
 )
 
 from dataset_sorter.ui.theme import (
@@ -514,6 +514,16 @@ class ModelMergeTab(QWidget):
         if method == "add_difference" and not self._model_c_edit.text().strip():
             show_toast(self, "Add Difference requires Model C", "warning")
             return
+
+        if Path(output).exists():
+            reply = QMessageBox.warning(
+                self, "File Exists",
+                f"Output file already exists:\n{output}\n\nOverwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
 
         check_models = [(model_a, "A"), (model_b, "B")]
         if method == "add_difference":

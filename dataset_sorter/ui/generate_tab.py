@@ -996,6 +996,7 @@ class GenerateTab(QWidget):
         if self._worker:
             self._worker.stop()
         self.btn_stop.setEnabled(False)
+        self.status_label.setText("Stopping after current image completes...")
 
     def _on_taylorseer_toggled(self, state):
         """Toggle TaylorSeer cache on the loaded pipeline."""

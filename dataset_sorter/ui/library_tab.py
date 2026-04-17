@@ -1175,6 +1175,10 @@ class LibraryTab(QWidget):
             else:
                 path.unlink()
             log.info("Deleted: %s", item.path)
+            meta = self._get_all_user_meta()
+            if item.path in meta:
+                del meta[item.path]
+                self._save_all_user_meta(meta)
         except Exception as exc:
             log.warning("Failed to delete %s: %s", item.path, exc)
             QMessageBox.critical(self, "Delete Failed", f"Could not delete:\n{exc}")

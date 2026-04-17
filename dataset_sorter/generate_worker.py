@@ -1133,6 +1133,7 @@ class GenerateWorker(QThread):
 
             if not path or not Path(path).exists():
                 log.warning(f"LoRA path not found: {path}")
+                self._emit(self.error, f"LoRA not found: {path}")
                 continue
 
             try:
