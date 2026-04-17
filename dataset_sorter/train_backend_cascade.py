@@ -105,7 +105,9 @@ class StableCascadeBackend(TrainBackendBase):
 
         with self._te_no_grad():
             out = self.text_encoder(tokens, output_hidden_states=True)
-            hidden_states = out.hidden_states[-2]
+            skip = max(self.config.clip_skip, 1)
+            skip = min(skip, len(out.hidden_states) - 2)
+            hidden_states = out.hidden_states[-(skip + 1)]
             pooled = out.text_embeds
 
         return (hidden_states, pooled)

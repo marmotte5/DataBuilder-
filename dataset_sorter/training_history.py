@@ -232,7 +232,7 @@ class TrainingHistory:
             (model_type, vram_gb),
         ).fetchone()
         if row and row["total"] > 0:
-            return row["ooms"] / row["total"]
+            return (row["ooms"] or 0) / row["total"]
         return 0.0
 
     def get_summary(self) -> str:
