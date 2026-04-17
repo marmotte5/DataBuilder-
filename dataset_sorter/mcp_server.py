@@ -515,8 +515,7 @@ def _handle_tag_images(params: dict) -> dict:
 
     if tagger == "wd14":
         try:
-            from dataset_sorter.auto_tagger import AutoTagger
-            auto_tagger = AutoTagger(threshold=threshold)
+            from dataset_sorter.auto_tagger import tag_image
             tagged = 0
             skipped = 0
             for img_path in images:
@@ -524,10 +523,11 @@ def _handle_tag_images(params: dict) -> dict:
                 if txt_path.exists() and not overwrite:
                     skipped += 1
                     continue
-                tags = auto_tagger.tag(str(img_path))
-                caption = ", ".join(tags)
-                if prepend_text:
-                    caption = f"{prepend_text}, {caption}"
+                caption = tag_image(
+                    img_path, model_key="wd-vit-v3",
+                    threshold_general=threshold,
+                    trigger_word=prepend_text or "",
+                )
                 txt_path.write_text(caption, encoding="utf-8")
                 tagged += 1
             return {"status": "ok", "tagger": "wd14", "tagged": tagged, "skipped": skipped, "total": len(images)}
