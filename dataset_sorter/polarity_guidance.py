@@ -20,8 +20,9 @@ def compute_polarity_mask(predicted_noise: torch.Tensor, target_noise: torch.Ten
     # couples samples — a single high-loss outlier would shrink every other
     # sample's normalized diffs below the threshold, masking out most of the
     # batch and silently destroying the training signal.
-    if diff.dim() == 4:
-        per_sample_max = diff.amax(dim=(1, 2, 3), keepdim=True)
+    if diff.dim() >= 2:
+        reduce_dims = tuple(range(1, diff.dim()))
+        per_sample_max = diff.amax(dim=reduce_dims, keepdim=True)
     else:
         per_sample_max = diff.max()
     diff_normalized = diff / (per_sample_max + 1e-8)

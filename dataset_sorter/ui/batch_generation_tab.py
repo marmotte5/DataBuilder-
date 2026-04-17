@@ -672,6 +672,10 @@ class BatchGenerationTab(QWidget):
         self._worker.default_width = res[0]
         self._worker.default_height = res[1]
         self._worker.default_negative = self._default_neg.text().strip()
+        if self._generate_worker is not None:
+            self._worker.default_scheduler = getattr(
+                self._generate_worker, 'scheduler_name', 'euler_a'
+            )
 
         # Connect signals
         self._worker.image_generated.connect(self._on_image_generated)

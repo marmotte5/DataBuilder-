@@ -742,25 +742,25 @@ class Trainer:
         snr_mode = getattr(config, "snr_gamma_mode", "fixed")
         if snr_mode == "learnable" and config.min_snr_gamma > 0:
             # Compute initial min-SNR-5 values using the noise scheduler.
-            # Fall back to uniform ones(1000) if the scheduler lacks alphas_cumprod.
-            num_timesteps = 1000
-            initial_weights = torch.ones(num_timesteps, dtype=torch.float32, device=self.device)
+            # Match vector size to actual scheduler timesteps to avoid IndexError.
             scheduler = getattr(self.backend, "noise_scheduler", None)
+            num_timesteps = getattr(
+                getattr(scheduler, "config", None), "num_train_timesteps", 1000
+            )
+            initial_weights = torch.ones(num_timesteps, dtype=torch.float32, device=self.device)
             if scheduler is not None and hasattr(scheduler, "alphas_cumprod"):
                 alphas = scheduler.alphas_cumprod.to(self.device, dtype=torch.float32)
-                # Clamp to the actual scheduler length in case it differs from 1000
                 n = min(num_timesteps, len(alphas))
                 sqrt_alpha = alphas[:n] ** 0.5
                 sqrt_one_minus = (1.0 - alphas[:n]).clamp(min=1e-8) ** 0.5
                 snr = (sqrt_alpha / sqrt_one_minus) ** 2
                 clamped = snr.clamp(max=config.min_snr_gamma)
-                # Epsilon prediction: weight = min(SNR, γ) / SNR
                 initial_weights[:n] = (clamped / snr.clamp(min=1e-8)).clamp(0.01, 10.0)
             self._snr_weights = torch.nn.Parameter(initial_weights)
             log.info(
-                "Learnable SNR gamma enabled: 1000-timestep weight vector initialised "
+                "Learnable SNR gamma enabled: %d-timestep weight vector initialised "
                 "from min-SNR-%d values, will be optimized jointly with model params.",
-                config.min_snr_gamma,
+                num_timesteps, config.min_snr_gamma,
             )
 
         # ── 9. Build parameter groups (separate LR for text encoders) ──
@@ -2681,9 +2681,12 @@ class Trainer:
                 # Fast-forward the fresh scheduler to match restored global_step
                 # so the LR schedule is approximately correct even without the
                 # exact internal state (e.g. warmup position, cosine phase).
-                for _ in range(self.state.global_step):
-                    self.scheduler.step()
-                log.info(f"Fast-forwarded scheduler to step {self.state.global_step}")
+                try:
+                    for _ in range(self.state.global_step):
+                        self.scheduler.step()
+                    log.info(f"Fast-forwarded scheduler to step {self.state.global_step}")
+                except Exception as ff_err:
+                    log.warning(f"Scheduler fast-forward failed: {ff_err}")
 
         # Restore GradScaler state
         if self.grad_scaler is not None and "grad_scaler" in state:
