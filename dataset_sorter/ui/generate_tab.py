@@ -720,7 +720,10 @@ class GenerateTab(QWidget):
         """Collect all non-empty LoRA adapter entries as a list of dicts."""
         adapters = []
         for i in range(self.lora_container.count()):
-            widget = self.lora_container.itemAt(i).widget()
+            item = self.lora_container.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if isinstance(widget, LoRAEntry):
                 data = widget.get_data()
                 if data["path"]:

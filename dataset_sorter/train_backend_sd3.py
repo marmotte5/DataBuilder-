@@ -106,7 +106,9 @@ class SD3Backend(TrainBackendBase):
 
         with self._te_no_grad():
             out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
-            clip_l_hidden = out_1.hidden_states[-2]
+            skip = max(self.config.clip_skip, 1)
+            skip = min(skip, len(out_1.hidden_states) - 2)
+            clip_l_hidden = out_1.hidden_states[-(skip + 1)]
             clip_l_pooled = out_1.text_embeds
 
         # OpenCLIP-G

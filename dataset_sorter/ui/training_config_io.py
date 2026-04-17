@@ -66,7 +66,7 @@ class TrainingConfigIOMixin:
         config.lora_rank = self.rank_spin.value()
         config.lora_alpha = self.alpha_spin.value()
         config.conv_rank = self.conv_rank_spin.value()
-        config.conv_alpha = self.conv_rank_spin.value() // 2 if self.conv_rank_spin.value() > 0 else 0
+        config.conv_alpha = self.conv_alpha_spin.value() if hasattr(self, 'conv_alpha_spin') else (self.conv_rank_spin.value() // 2 if self.conv_rank_spin.value() > 0 else 0)
         config.use_dora = self.dora_check.isChecked()
         config.use_rslora = self.rslora_check.isChecked()
         config.lora_init = self.lora_init_combo.currentData() or "default"

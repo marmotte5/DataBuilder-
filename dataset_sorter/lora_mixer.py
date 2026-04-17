@@ -378,6 +378,8 @@ class LoRAMixer:
                 down_2d = down.flatten(1) if down.ndim > 2 else down
                 up_2d = up.flatten(1) if up.ndim > 2 else up
 
+                if down.shape[0] == 0:
+                    continue
                 alpha_val = norm.get(alpha_key, torch.tensor(float(down.shape[0]))).item()
                 scale = alpha_val / down.shape[0]
 
@@ -386,7 +388,9 @@ class LoRAMixer:
 
                 alpha_acc += alpha_val * w
 
-            delta_acc = delta_acc / total_weight  # normalize
+            if delta_acc is None:
+                continue
+            delta_acc = delta_acc / total_weight
             alpha_acc /= total_weight
 
             # Re-decompose with truncated SVD
