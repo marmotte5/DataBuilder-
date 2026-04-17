@@ -111,6 +111,28 @@ GEN_PRECISIONS = {
 
 
 
+def _error_hint(msg: str) -> str:
+    """Return a user-friendly recovery hint for common generation errors."""
+    low = msg.lower()
+    if "out of memory" in low or "oom" in low or "cuda out of memory" in low:
+        return ("Reduce resolution, disable TaylorSeer, or try fp16/bf16 precision. "
+                "Close other GPU apps to free VRAM.")
+    if "no module named" in low:
+        mod = msg.split("'")[1] if "'" in msg else "the missing package"
+        return f"Install the missing dependency: pip install {mod}"
+    if "lora not found" in low or "no such file" in low:
+        return "Check that the file path exists and the file has not been moved."
+    if "connection" in low or "timeout" in low or "resolve" in low:
+        return "Check your internet connection. For HuggingFace models, try a local path instead."
+    if "safetensors" in low and ("corrupt" in low or "invalid" in low):
+        return "The model file may be corrupted. Re-download it."
+    if "dtype" in low or "expected" in low and "got" in low:
+        return "Try a different precision setting (bf16 vs fp16 vs fp32)."
+    if "pipeline" in low or "not supported" in low:
+        return "Check that the model type selection matches the actual model architecture."
+    return ""
+
+
 def _pil_to_qpixmap(pil_image, max_w=512, max_h=512) -> QPixmap:
     """Convert PIL.Image to QPixmap for display."""
     img = pil_image.convert("RGB")
@@ -217,6 +239,16 @@ class GenerateTab(QWidget):
         left.setContentsMargins(4, 4, 4, 4)
         left.setSpacing(8)
 
+        # Model status banner
+        self._model_banner = QLabel("No model loaded")
+        self._model_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._model_banner.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 6px;"
+        )
+        left.addWidget(self._model_banner)
+
         # -- Model group --
         model_grp = QGroupBox("Model")
         mg = QGridLayout(model_grp)
@@ -236,16 +268,23 @@ class GenerateTab(QWidget):
         btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
+        btn_copy_model = QPushButton("📋")
+        btn_copy_model.setFixedWidth(28)
+        btn_copy_model.setToolTip("Copy model path to clipboard")
+        btn_copy_model.clicked.connect(
+            lambda: QApplication.clipboard().setText(self.model_path_edit.text())
+        )
+        mg.addWidget(btn_copy_model, 0, 4)
         self._btn_scan_gen = QPushButton("⟳")
         self._btn_scan_gen.setFixedWidth(28)
         self._btn_scan_gen.setToolTip("Scan for local model files")
         self._btn_scan_gen.clicked.connect(self._start_model_scan)
-        mg.addWidget(self._btn_scan_gen, 0, 4)
+        mg.addWidget(self._btn_scan_gen, 0, 5)
         self._lbl_model_status = QLabel("No model")
         self._lbl_model_status.setStyleSheet(
             f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
         )
-        mg.addWidget(self._lbl_model_status, 0, 5)
+        mg.addWidget(self._lbl_model_status, 0, 6)
         self.model_path_edit.textChanged.connect(self._update_model_status)
 
         mg.addWidget(QLabel("Model type:"), 1, 0)
@@ -535,6 +574,13 @@ class GenerateTab(QWidget):
         btn_browse_output.setToolTip("Choose output folder for generated images")
         btn_browse_output.clicked.connect(self._browse_output_folder)
         save_layout.addWidget(btn_browse_output, 1, 2)
+        btn_copy_output = QPushButton("📋")
+        btn_copy_output.setFixedWidth(28)
+        btn_copy_output.setToolTip("Copy output path to clipboard")
+        btn_copy_output.clicked.connect(
+            lambda: QApplication.clipboard().setText(self.output_folder_edit.text())
+        )
+        save_layout.addWidget(btn_copy_output, 1, 3)
 
         btn_open_output = QPushButton("Open Folder")
         btn_open_output.setToolTip("Open the output folder in your file manager")
@@ -893,6 +939,12 @@ class GenerateTab(QWidget):
         """Handle successful model load: update status and enable generation."""
         self.status_label.setText(message)
         self.model_status.setText(message)
+        self._model_banner.setText(f"Model loaded: {self.model_path_edit.text().split('/')[-1]}")
+        self._model_banner.setStyleSheet(
+            f"background-color: {COLORS.get('success_bg', '#1a3d1a')}; "
+            f"color: {COLORS.get('success', '#4ade80')}; font-size: 11px; font-weight: 600; "
+            f"border: 1px solid {COLORS.get('success', '#4ade80')}; border-radius: 6px; padding: 6px;"
+        )
         self.btn_load.setEnabled(True)
         self.btn_unload.setEnabled(True)
         self.btn_generate.setEnabled(True)
@@ -913,6 +965,12 @@ class GenerateTab(QWidget):
                 self._worker.wait(5000)
             self._worker = None
         self.model_status.setText("No model loaded")
+        self._model_banner.setText("No model loaded")
+        self._model_banner.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 6px;"
+        )
         self.status_label.setText("Model unloaded.")
         self.btn_unload.setEnabled(False)
         self.btn_generate.setEnabled(False)
@@ -1031,8 +1089,12 @@ class GenerateTab(QWidget):
         self.status_label.setText(message)
 
     def _on_error(self, message: str):
-        """Display an error message and re-enable controls after a failure."""
-        self.status_label.setText(f"Error: {message}")
+        """Display an error message with recovery hints, and re-enable controls."""
+        hint = _error_hint(message)
+        display = f"Error: {message}"
+        if hint:
+            display += f"\n\nHint: {hint}"
+        self.status_label.setText(display)
         self.btn_load.setEnabled(True)
         self.btn_generate.setEnabled(self._worker is not None and self._worker.is_loaded)
         self.btn_stop.setEnabled(False)

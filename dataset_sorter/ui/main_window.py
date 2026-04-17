@@ -273,7 +273,10 @@ class MainWindow(QMainWindow):
         self.btn_simple_mode.setFixedSize(72, 30)
         self.btn_simple_mode.setCheckable(True)
         self.btn_simple_mode.setChecked(True)
-        self.btn_simple_mode.setToolTip("Simple mode: show only essential parameters")
+        self.btn_simple_mode.setToolTip(
+            "Simple mode: Model + Optimizer + Dataset tabs only.\n"
+            "Best for quick LoRA training with sensible defaults."
+        )
         self.btn_simple_mode.clicked.connect(lambda: self._set_simple_mode(True))
         header_layout.addWidget(self.btn_simple_mode)
 
@@ -281,7 +284,11 @@ class MainWindow(QMainWindow):
         self.btn_advanced_mode.setFixedSize(80, 30)
         self.btn_advanced_mode.setCheckable(True)
         self.btn_advanced_mode.setChecked(False)
-        self.btn_advanced_mode.setToolTip("Advanced mode: show all parameters")
+        self.btn_advanced_mode.setToolTip(
+            "Advanced mode: All tabs including Advanced settings,\n"
+            "ControlNet, DPO, RLHF, noise scheduling, and more.\n"
+            "For experienced users who want full control."
+        )
         self.btn_advanced_mode.clicked.connect(lambda: self._set_simple_mode(False))
         header_layout.addWidget(self.btn_advanced_mode)
 
@@ -518,7 +525,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.clicked.connect(self._cancel_operation)
         path_bar.addWidget(self.btn_cancel)
 
-        self.btn_scan = QPushButton("Scan")
+        self.btn_scan = QPushButton("Scan  [Ctrl+R]")
         self.btn_scan.setToolTip("Read all images and tags (Ctrl+R)")
         self.btn_scan.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.btn_scan.clicked.connect(self._start_scan)
@@ -609,7 +616,7 @@ class MainWindow(QMainWindow):
         action_bar = QHBoxLayout()
         action_bar.setSpacing(8)
 
-        self.btn_dry = QPushButton("Preview Export")
+        self.btn_dry = QPushButton("Preview Export  [Ctrl+D]")
         self.btn_dry.setToolTip("Preview bucket organization (Ctrl+D)")
         self.btn_dry.clicked.connect(self._dry_run)
         action_bar.addWidget(self.btn_dry)
@@ -633,7 +640,7 @@ class MainWindow(QMainWindow):
         self.btn_import.clicked.connect(self._import_project)
         action_bar.addWidget(self.btn_import)
 
-        self.btn_export = QPushButton("Export Project")
+        self.btn_export = QPushButton("Export Project  [Ctrl+E]")
         self.btn_export.setToolTip("Export organized dataset (Ctrl+E)")
         self.btn_export.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_export.clicked.connect(self._start_export)
@@ -1340,6 +1347,7 @@ class MainWindow(QMainWindow):
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
+        self.training_tab.config_modified.connect(self._on_config_modified)
 
         # Generate worker → batch/comparison/merge tabs
         self.generate_tab.worker_ready.connect(self._on_generate_worker_ready)
@@ -1369,6 +1377,12 @@ class MainWindow(QMainWindow):
     def _on_library_use_merge(self, path: str):
         """Load a model from library into the merge tab's Model A slot."""
         self.merge_tab.load_model_path(path)
+
+    def _on_config_modified(self, modified: bool):
+        """Update the Train stepper button to show unsaved changes indicator."""
+        btn = self._stepper_btns.get("train")
+        if btn:
+            btn.setText("2. Configure *" if modified else "2. Configure")
 
     def _on_generate_worker_ready(self, worker):
         """Pass the loaded GenerateWorker to batch and comparison tabs."""
@@ -1520,6 +1534,8 @@ class MainWindow(QMainWindow):
 
     def _save_progress_state(self):
         """Save current session state for persistence across restarts."""
+        import base64
+        geo_bytes = self.saveGeometry()
         state = {
             "source_dir": self.source_input.text(),
             "output_dir": self.output_input.text(),
@@ -1529,6 +1545,7 @@ class MainWindow(QMainWindow):
             "deleted_tags": sorted(self.deleted_tags),
             "workers": self.workers_spinner.value(),
             "simple_mode": self._simple_mode,
+            "window_geometry": base64.b64encode(bytes(geo_bytes)).decode("ascii"),
         }
         try:
             _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1562,6 +1579,14 @@ class MainWindow(QMainWindow):
             self._set_simple_mode(bool(state["simple_mode"]))
         if "workers" in state:
             self.workers_spinner.setValue(state["workers"])
+        if state.get("window_geometry"):
+            import base64
+            from PyQt6.QtCore import QByteArray
+            try:
+                geo_data = base64.b64decode(state["window_geometry"])
+                self.restoreGeometry(QByteArray(geo_data))
+            except Exception:
+                pass
 
         raw_overrides = state.get("manual_overrides", {})
         if isinstance(raw_overrides, dict):
@@ -1619,6 +1644,19 @@ class MainWindow(QMainWindow):
                 "Unsaved progress will be lost.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        if (hasattr(self, "training_tab")
+                and getattr(self.training_tab, "_unsaved_changes", False)):
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Training Config",
+                "Training configuration has unsaved changes.\n\n"
+                "Quit anyway? (Config is auto-saved every 30 seconds.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
@@ -1714,6 +1752,10 @@ class MainWindow(QMainWindow):
         self.btn_dry.setEnabled(enabled)
         self.btn_export.setEnabled(enabled)
         self.btn_cancel.setVisible(not enabled)
+        if enabled:
+            QApplication.restoreOverrideCursor()
+        else:
+            QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
 
     # -- Cancel --
 

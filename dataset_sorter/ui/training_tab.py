@@ -18,7 +18,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer, QThread
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QFileDialog, QGroupBox, QTabWidget,
     QProgressBar, QSplitter, QMessageBox, QTextEdit, QLineEdit,
     QFrame, QCompleter,
@@ -283,6 +283,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     # Emitted when user clicks Apply Recommendations (config only, no training)
     request_recommendations = pyqtSignal()
 
+    config_modified = pyqtSignal(bool)
+
     def __init__(self, parent=None):
         """Initialize the training tab with default state and build the UI."""
         super().__init__(parent)
@@ -290,6 +292,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._loss_history: list[tuple[int, float]] = []
         self._scan_worker: _ModelScanWorker | None = None
         self._scanned_models: list = []  # list[ModelInfo]
+        self._unsaved_changes = False
         self._build_ui()
         self._restore_autosave()
 
@@ -300,6 +303,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         # Kick off async model scan after a short delay (avoids blocking startup)
         QTimer.singleShot(1500, self._start_model_scan)
+        # Auto-detect GPU VRAM and select closest tier
+        QTimer.singleShot(500, self._auto_detect_vram)
 
     def _build_ui(self):
         """Construct the full training tab layout: paths, presets, config tabs, log, and controls."""
@@ -343,6 +348,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._btn_scan_models.setFixedWidth(28)
         self._btn_scan_models.clicked.connect(self._start_model_scan)
         _model_btn_layout.addWidget(self._btn_scan_models)
+        _btn_copy_model = QPushButton("📋")
+        _btn_copy_model.setFixedWidth(28)
+        _btn_copy_model.setToolTip("Copy model path to clipboard")
+        _btn_copy_model.clicked.connect(
+            lambda: QApplication.clipboard().setText(self.model_path_input.text())
+        )
+        _model_btn_layout.addWidget(_btn_copy_model)
         paths_grid.addWidget(_model_btn_widget, 0, 2)
 
         paths_grid.addWidget(self._muted("Output Dir"), 1, 0)
@@ -350,10 +362,22 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.output_dir_input.setPlaceholderText("Training output directory...")
         self.output_dir_input.setToolTip("Directory where checkpoints, logs, and samples will be saved")
         paths_grid.addWidget(self.output_dir_input, 1, 1)
+        _out_btn_widget = QWidget()
+        _out_btn_layout = QHBoxLayout(_out_btn_widget)
+        _out_btn_layout.setContentsMargins(0, 0, 0, 0)
+        _out_btn_layout.setSpacing(4)
         btn_out = QPushButton("Browse")
         btn_out.setToolTip("Browse for training output directory")
         btn_out.clicked.connect(self._browse_output)
-        paths_grid.addWidget(btn_out, 1, 2)
+        _out_btn_layout.addWidget(btn_out)
+        _btn_copy_out = QPushButton("📋")
+        _btn_copy_out.setFixedWidth(28)
+        _btn_copy_out.setToolTip("Copy output path to clipboard")
+        _btn_copy_out.clicked.connect(
+            lambda: QApplication.clipboard().setText(self.output_dir_input.text())
+        )
+        _out_btn_layout.addWidget(_btn_copy_out)
+        paths_grid.addWidget(_out_btn_widget, 1, 2)
 
         paths_grid.addWidget(self._muted("Output Name"), 2, 0)
         self.output_name_input = QLineEdit()
@@ -780,6 +804,17 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         main_layout.addLayout(action_row)
 
+        # Config validation status
+        self._validation_label = QLabel("")
+        self._validation_label.setWordWrap(True)
+        self._validation_label.setVisible(False)
+        self._validation_label.setStyleSheet(
+            f"color: {COLORS.get('danger', '#f87171')}; font-size: 11px; "
+            f"padding: 4px 8px; background: {COLORS.get('danger_bg', '#3d1a1a')}; "
+            f"border: 1px solid {COLORS.get('danger', '#f87171')}; border-radius: 6px;"
+        )
+        main_layout.addWidget(self._validation_label)
+
         # Bottom row 2: Train / Pause / Resume / Stop
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -811,18 +846,105 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.btn_stop.clicked.connect(self._stop_training)
         btn_row.addWidget(self.btn_stop)
 
-        self.btn_train = QPushButton("Start Training")
-        self.btn_train.setToolTip("Validate settings and begin training on the current dataset")
+        self.btn_train = QPushButton("Start Training  [Ctrl+Enter]")
+        self.btn_train.setToolTip("Validate settings and begin training on the current dataset (Ctrl+Enter)")
         self.btn_train.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_train.clicked.connect(self._start_training)
         btn_row.addWidget(self.btn_train)
 
         main_layout.addLayout(btn_row)
 
+        # Keyboard shortcut: Ctrl+Enter to start training
+        from PyQt6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence("Ctrl+Return"), self, self._start_training)
+
         # Wire up VRAM estimator to config widgets (all widgets built by now)
         QTimer.singleShot(0, self.connect_vram_estimator)
 
+        # Debounced real-time validation
+        self._validation_timer = QTimer(self)
+        self._validation_timer.setSingleShot(True)
+        self._validation_timer.setInterval(500)
+        self._validation_timer.timeout.connect(self._run_live_validation)
+        QTimer.singleShot(0, self._wire_validation_signals)
+
+    def _wire_validation_signals(self):
+        """Connect key config widgets to trigger live validation and change tracking."""
+        trigger = lambda *_a: self._validation_timer.start()
+        mark = lambda *_a: self._mark_modified()
+        for w in [self.model_path_input, self.output_dir_input]:
+            w.textChanged.connect(trigger)
+            w.textChanged.connect(mark)
+        for w in [self.train_model_combo, self.train_vram_combo]:
+            w.currentIndexChanged.connect(trigger)
+            w.currentIndexChanged.connect(mark)
+        for w in [self.resolution_spin, self.rank_spin, self.alpha_spin]:
+            w.valueChanged.connect(trigger)
+            w.valueChanged.connect(mark)
+
+    def _mark_modified(self):
+        """Flag config as modified and emit signal for UI indicators."""
+        if not self._unsaved_changes:
+            self._unsaved_changes = True
+            self.config_modified.emit(True)
+
+    def clear_modified(self):
+        """Clear the unsaved changes flag (called after save/train start)."""
+        self._unsaved_changes = False
+        self.config_modified.emit(False)
+
+    def _run_live_validation(self):
+        """Validate current config and update the inline validation label."""
+        try:
+            config = self.build_config()
+        except Exception:
+            return
+        from dataset_sorter.config_validator import validate_config
+        errors = validate_config(config)
+        real_errors = [e for e in errors if e.severity == "error"]
+        warnings = [e for e in errors if e.severity == "warning"]
+        if real_errors:
+            msgs = [f"{e.field}: {e.message}" for e in real_errors[:3]]
+            self._validation_label.setText("  |  ".join(msgs))
+            self._validation_label.setStyleSheet(
+                f"color: {COLORS.get('danger', '#f87171')}; font-size: 11px; "
+                f"padding: 4px 8px; background: {COLORS.get('danger_bg', '#3d1a1a')}; "
+                f"border: 1px solid {COLORS.get('danger', '#f87171')}; border-radius: 6px;"
+            )
+            self._validation_label.setVisible(True)
+        elif warnings:
+            msgs = [f"{w.field}: {w.message}" for w in warnings[:3]]
+            self._validation_label.setText("  |  ".join(msgs))
+            self._validation_label.setStyleSheet(
+                f"color: {COLORS.get('warning', '#fbbf24')}; font-size: 11px; "
+                f"padding: 4px 8px; background: {COLORS.get('warning_bg', '#3d2e0a')}; "
+                f"border: 1px solid {COLORS.get('warning', '#fbbf24')}; border-radius: 6px;"
+            )
+            self._validation_label.setVisible(True)
+        else:
+            self._validation_label.setVisible(False)
+
     # ── Helpers ────────────────────────────────────────────────────────
+
+    def _auto_detect_vram(self):
+        """Auto-detect GPU VRAM and select the closest VRAM tier combo entry."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                from dataset_sorter.constants import VRAM_TIERS
+                best_idx = 0
+                best_diff = abs(VRAM_TIERS[0] - vram_gb)
+                for i, tier in enumerate(VRAM_TIERS):
+                    diff = abs(tier - vram_gb)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_idx = i
+                self.train_vram_combo.setCurrentIndex(best_idx)
+                log.info("Auto-detected GPU VRAM: %.1f GB → selected %d GB tier",
+                         vram_gb, VRAM_TIERS[best_idx])
+        except Exception:
+            pass
 
     def _browse_to_line_edit(self, line_edit: QLineEdit):
         """Open a directory picker dialog and write the selected path into the given QLineEdit."""
