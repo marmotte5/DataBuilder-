@@ -305,6 +305,23 @@ def get_stylesheet() -> str:
         background-color: {c['accent']}; border-radius: 6px;
     }}
 
+    /* --- List Widget --- */
+    QListWidget, QListView {{
+        background-color: {c['bg_alt']}; color: {c['text']};
+        border: 1px solid {c['border']}; border-radius: 8px;
+        padding: 4px;
+        outline: none;
+    }}
+    QListWidget::item, QListView::item {{
+        padding: 8px 12px; border-radius: 6px; border: none;
+    }}
+    QListWidget::item:selected, QListView::item:selected {{
+        background-color: {c['accent_subtle']}; color: {c['text']};
+    }}
+    QListWidget::item:hover:!selected, QListView::item:hover:!selected {{
+        background-color: {c['surface_hover']};
+    }}
+
     /* --- Text Edit --- */
     QTextEdit {{
         background-color: {c['input_bg']}; color: {c['text']};

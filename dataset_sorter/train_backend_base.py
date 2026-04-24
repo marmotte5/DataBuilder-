@@ -378,15 +378,16 @@ class TrainBackendBase(ABC):
         # modules after compile, causing graph breaks on every linear layer which
         # negates compile's benefit and adds overhead.
         _skip_compile = getattr(config, "fp8_training", False)
+        _compile_mode = getattr(config, "compile_mode", "default") or "default"
         if config.torch_compile and not self._compiled and not _skip_compile:
             try:
                 self.unet = torch.compile(
                     self.unet,
-                    mode="reduce-overhead",
+                    mode=_compile_mode,
                     fullgraph=False,
                 )
                 self._compiled = True
-                log.info("torch.compile() applied to UNet (reduce-overhead)")
+                log.info("torch.compile() applied to UNet (mode=%s)", _compile_mode)
             except Exception as e:
                 log.warning(f"torch.compile() failed: {e}")
         elif config.torch_compile and _skip_compile:

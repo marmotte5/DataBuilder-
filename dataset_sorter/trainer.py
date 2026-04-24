@@ -154,6 +154,18 @@ class Trainer:
                 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
                 log.info("MPS detected: set PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to prevent OOM")
 
+        # CUDA allocator: enable expandable segments to reduce fragmentation.
+        # This lets the allocator grow/shrink virtual memory regions instead of
+        # requesting fixed-size blocks, which prevents OOM from fragmented VRAM
+        # on long training runs with varying tensor sizes.
+        if self.device.type == "cuda":
+            import os
+            _alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
+            if "expandable_segments" not in _alloc_conf:
+                _new = f"{_alloc_conf},expandable_segments:True" if _alloc_conf else "expandable_segments:True"
+                os.environ["PYTORCH_CUDA_ALLOC_CONF"] = _new
+                log.debug("CUDA allocator: enabled expandable_segments for reduced fragmentation")
+
         # Detect hardware capabilities once and log summary
         from dataset_sorter.hardware_detect import detect_hardware, log_hardware_summary
         self._hw = detect_hardware()
@@ -230,6 +242,12 @@ class Trainer:
             # Fallback: use bf16 if supported, else fp16
             self.dtype = torch.bfloat16 if (_is_cuda and torch.cuda.is_bf16_supported()) else torch.float16
 
+        # Auto-speed: detect hardware and enable optimal settings when user
+        # hasn't explicitly configured them.  Runs before any TF32/compile
+        # checks so those branches see the auto-applied values.
+        if config.auto_speed_opts and _is_cuda:
+            self._apply_auto_speed_opts(config)
+
         # TF32 toggle (NVIDIA Ampere+, SM 8.0+).
         # TF32 accelerates fp32 matrix multiplications without changing the training dtype.
         if config.enable_tf32:
@@ -238,6 +256,7 @@ class Trainer:
                 if _cc_major >= 8:
                     torch.backends.cuda.matmul.allow_tf32 = True
                     torch.backends.cudnn.allow_tf32 = True
+                    torch.set_float32_matmul_precision("high")
                     log.info("TF32 matmul enabled (NVIDIA Ampere+ SM %d.x).", _cc_major)
                 else:
                     log.warning(
@@ -323,6 +342,81 @@ class Trainer:
         self._integration_report: Optional[IntegrationReport] = None
         self._live_monitor: Optional[LiveTrainingMonitor] = None
         self._tag_weights: dict[str, float] = {}  # Per-tag importance weights
+
+    @staticmethod
+    def _apply_auto_speed_opts(config: "TrainingConfig"):
+        """Auto-enable optimal speed settings based on detected GPU hardware.
+
+        Only touches settings the user left at their defaults — explicit user
+        choices are never overridden.
+        """
+        if not torch.cuda.is_available():
+            return
+
+        props = torch.cuda.get_device_properties(0)
+        cc = (props.major, props.minor)
+        vram_gb = props.total_mem / (1024 ** 3)
+        _auto = []
+
+        # Ampere+ (SM 8.0): enable TF32 and matmul precision
+        if cc >= (8, 0):
+            if not config.enable_tf32:
+                config.enable_tf32 = True
+                _auto.append("enable_tf32")
+            if not config.cudnn_benchmark:
+                config.cudnn_benchmark = True
+                _auto.append("cudnn_benchmark")
+
+        # SDPA is always beneficial on PyTorch 2.0+
+        if not config.sdpa:
+            config.sdpa = True
+            _auto.append("sdpa")
+
+        # torch.compile: auto-enable with optimal mode for the hardware
+        if not config.torch_compile:
+            config.torch_compile = True
+            if cc >= (9, 0):
+                config.compile_mode = "max-autotune"
+            elif cc >= (8, 0):
+                config.compile_mode = "reduce-overhead"
+            else:
+                config.compile_mode = "default"
+            _auto.append(f"torch_compile(mode={config.compile_mode})")
+
+        # Regional compile for DiT-family models (many repeated blocks)
+        _dit_types = (
+            "flux", "flux2", "sd3", "sd35", "chroma", "pixart",
+            "auraflow", "sana", "hidream", "zimage",
+        )
+        _base_type = config.model_type.replace("_lora", "").replace("_full", "")
+        if not config.regional_compile and _base_type in _dit_types:
+            config.regional_compile = True
+            _auto.append("regional_compile")
+
+        # Ada/Hopper (SM 8.9+): auto-enable FP8 if VRAM >= 16GB
+        if cc >= (8, 9) and vram_gb >= 16.0:
+            if not config.fp8_training:
+                config.fp8_training = True
+                _auto.append("fp8_training")
+
+        # Triton fused kernels (beneficial when Triton is available)
+        if not config.triton_fused_loss:
+            config.triton_fused_loss = True
+            _auto.append("triton_fused_loss")
+        if not config.triton_fused_flow:
+            config.triton_fused_flow = True
+            _auto.append("triton_fused_flow")
+
+        # Async data loading
+        if not config.async_dataload:
+            config.async_dataload = True
+            _auto.append("async_dataload")
+
+        if _auto:
+            log.info(
+                "auto_speed_opts: enabled [%s] for %s (SM %d.%d, %.1f GB VRAM)",
+                ", ".join(_auto), props.name, cc[0], cc[1], vram_gb,
+            )
 
     def setup(
         self,
@@ -526,22 +620,40 @@ class Trainer:
         # (1-3 GB each on Flux) and fights for the same module.
         _already_compiled = getattr(self.backend, "_compiled", False)
         if config.torch_compile and self.backend.unet is not None and not _already_compiled:
-            try:
-                _mode = getattr(config, "compile_mode", "default") or "default"
-                log.info(f"torch.compile: mode={_mode!r} — first step will be slow (JIT warmup)")
-                self.backend.unet = torch.compile(
-                    self.backend.unet,
-                    mode=_mode,
-                    fullgraph=False,
-                )
-                self.backend._compiled = True
-                log.info("torch.compile applied to UNet/transformer")
-            except Exception as exc:
-                log.warning(
-                    "torch.compile failed (%s) — continuing without it. "
-                    "Upgrade to PyTorch 2.0+ for JIT support.",
-                    exc,
-                )
+            _mode = getattr(config, "compile_mode", "default") or "default"
+
+            # Regional compile: compile each transformer block individually.
+            # Faster warmup and lower memory than compiling the whole model,
+            # and PyTorch reuses compiled graphs across identical block types.
+            if getattr(config, "regional_compile", False):
+                try:
+                    from dataset_sorter.speed_optimizations import apply_regional_compile
+                    _n = apply_regional_compile(self.backend.unet, mode=_mode)
+                    if _n > 0:
+                        self.backend._compiled = True
+                        log.info("Regional compile: %d blocks compiled (mode=%s)", _n, _mode)
+                    else:
+                        log.info("Regional compile: no repeated blocks found, falling back to full compile")
+                except Exception as exc:
+                    log.warning("Regional compile failed (%s), falling back to full compile", exc)
+
+            # Full model compile (default, or fallback from regional)
+            if not getattr(self.backend, "_compiled", False):
+                try:
+                    log.info(f"torch.compile: mode={_mode!r} — first step will be slow (JIT warmup)")
+                    self.backend.unet = torch.compile(
+                        self.backend.unet,
+                        mode=_mode,
+                        fullgraph=False,
+                    )
+                    self.backend._compiled = True
+                    log.info("torch.compile applied to UNet/transformer")
+                except Exception as exc:
+                    log.warning(
+                        "torch.compile failed (%s) — continuing without it. "
+                        "Upgrade to PyTorch 2.0+ for JIT support.",
+                        exc,
+                    )
         elif config.torch_compile and _already_compiled:
             log.info("torch.compile already applied by backend — skipping second compile")
 

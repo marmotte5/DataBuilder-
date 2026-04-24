@@ -1018,3 +1018,79 @@ def _get_parent_module(model: nn.Module, name: str) -> nn.Module:
     if len(parts) == 1:
         return model
     return dict(model.named_modules())[parts[0]]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. REGIONAL TORCH.COMPILE FOR REPEATED TRANSFORMER BLOCKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_BLOCK_PATTERNS = (
+    "transformerblock", "basicblock", "resnetblock",
+    "attentionblock", "jointblock", "ditblock",
+    "crossattn", "singleblock", "flux_single",
+    "fluxsingleblock", "fluxjointblock",
+)
+
+
+def apply_regional_compile(
+    model: nn.Module,
+    mode: str = "reduce-overhead",
+    fullgraph: bool = False,
+) -> int:
+    """Compile individual repeated transformer blocks instead of the whole model.
+
+    PyTorch's torch.compile works per-graph. When applied to the whole model,
+    the JIT must trace a single massive graph with all layers, which:
+    - Takes much longer to warmup (minutes for 40+ block models)
+    - Uses more memory for the Dynamo cache
+    - Can hit graph break issues with dynamic dispatch (LoRA, FP8 wrappers)
+
+    Regional compilation compiles each block independently. Since repeated blocks
+    (e.g. the 19 JointTransformerBlocks in Flux) share the same architecture,
+    PyTorch reuses the compiled graph across all instances — giving the same
+    speedup with faster warmup and lower memory overhead.
+
+    Returns the number of blocks compiled.
+    """
+    blocks_by_type: dict[str, list[tuple[str, nn.Module]]] = {}
+
+    for name, module in model.named_modules():
+        class_name = module.__class__.__name__.lower()
+        if any(pat in class_name for pat in _BLOCK_PATTERNS):
+            key = module.__class__.__name__
+            if key not in blocks_by_type:
+                blocks_by_type[key] = []
+            blocks_by_type[key].append((name, module))
+
+    if not blocks_by_type:
+        log.debug("regional_compile: no repeated blocks found")
+        return 0
+
+    compiled = 0
+    module_dict = dict(model.named_modules())
+
+    for block_type, instances in blocks_by_type.items():
+        if len(instances) < 2:
+            continue
+
+        for name, block in instances:
+            try:
+                compiled_block = torch.compile(
+                    block, mode=mode, fullgraph=fullgraph,
+                )
+                parent_name = name.rsplit(".", 1)[0] if "." in name else ""
+                attr_name = name.rsplit(".", 1)[-1] if "." in name else name
+                parent = module_dict.get(parent_name, model)
+                setattr(parent, attr_name, compiled_block)
+                compiled += 1
+            except Exception as e:
+                log.debug("regional_compile: failed on %s: %s", name, e)
+                break
+
+        if compiled > 0:
+            log.info(
+                "regional_compile: compiled %d/%d %s blocks (mode=%s)",
+                compiled, len(instances), block_type, mode,
+            )
+
+    return compiled
