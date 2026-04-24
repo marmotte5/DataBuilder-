@@ -59,13 +59,21 @@ class _SideConfig(QGroupBox):
     def __init__(self, label: str, color: str, parent=None):
         super().__init__(f"Side {label}", parent)
         self._label = label
+        self._color = color
+        self._apply_group_style()
+
+    def _apply_group_style(self):
         self.setStyleSheet(
-            f"QGroupBox {{ border: 2px solid {color}; border-radius: 8px; "
+            f"QGroupBox {{ border: 2px solid {self._color}; border-radius: 8px; "
             f"margin-top: 12px; padding-top: 12px; font-weight: 700; "
-            f"color: {color}; background: transparent; }} "
+            f"color: {self._color}; background: transparent; }} "
             f"QGroupBox::title {{ subcontrol-origin: margin; left: 12px; "
             f"padding: 0 6px; }}"
         )
+
+    def refresh_theme(self, color: str):
+        self._color = color
+        self._apply_group_style()
 
         layout = QGridLayout(self)
         layout.setSpacing(6)
@@ -345,13 +353,13 @@ class ComparisonTab(QWidget):
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
         )
         side_a_layout = QVBoxLayout(side_a_frame)
-        lbl_a = QLabel("Side A")
-        lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_a.setStyleSheet(
+        self._lbl_a = QLabel("Side A")
+        self._lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_a.setStyleSheet(
             f"font-weight: 700; color: {COLORS['accent']}; "
             f"border: none; background: transparent;"
         )
-        side_a_layout.addWidget(lbl_a)
+        side_a_layout.addWidget(self._lbl_a)
         self._image_a = QLabel()
         self._image_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_a.setMinimumSize(400, 400)
@@ -375,13 +383,13 @@ class ComparisonTab(QWidget):
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
         )
         side_b_layout = QVBoxLayout(side_b_frame)
-        lbl_b = QLabel("Side B")
-        lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_b.setStyleSheet(
+        self._lbl_b = QLabel("Side B")
+        self._lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_b.setStyleSheet(
             f"font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
             f"border: none; background: transparent;"
         )
-        side_b_layout.addWidget(lbl_b)
+        side_b_layout.addWidget(self._lbl_b)
         self._image_b = QLabel()
         self._image_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_b.setMinimumSize(400, 400)
@@ -730,6 +738,10 @@ class ComparisonTab(QWidget):
         self._btn_compare.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self._btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
         self._status.setStyleSheet(MUTED_LABEL_STYLE)
+        # Side config panels
+        self._side_a.refresh_theme(COLORS["accent"])
+        self._side_b.refresh_theme(COLORS.get("success", "#22c55e"))
+        # Side display frames
         self._side_a_frame.setStyleSheet(
             f"QFrame {{ border: 2px solid {COLORS['accent']}; "
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
@@ -737,6 +749,14 @@ class ComparisonTab(QWidget):
         self._side_b_frame.setStyleSheet(
             f"QFrame {{ border: 2px solid {COLORS.get('success', '#22c55e')}; "
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
+        )
+        self._lbl_a.setStyleSheet(
+            f"font-weight: 700; color: {COLORS['accent']}; "
+            f"border: none; background: transparent;"
+        )
+        self._lbl_b.setStyleSheet(
+            f"font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
+            f"border: none; background: transparent;"
         )
         self._info_a.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "

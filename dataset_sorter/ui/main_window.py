@@ -2175,7 +2175,8 @@ class MainWindow(QMainWindow):
         # Refresh sub-panels/tabs that have inline styles
         for attr in ('override_panel', 'image_tab', 'preview_tab',
                      'help_tab', 'reco_tab', 'library_tab',
-                     'batch_tab', 'comparison_tab', 'merge_tab'):
+                     'batch_tab', 'comparison_tab', 'merge_tab',
+                     'generate_tab', 'training_tab', 'dataset_tab'):
             widget = getattr(self, attr, None)
             if widget is not None and hasattr(widget, 'refresh_theme'):
                 widget.refresh_theme()

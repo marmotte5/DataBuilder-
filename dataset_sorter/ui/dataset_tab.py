@@ -190,3 +190,15 @@ class DatasetTab(QWidget):
     def get_augmentation_state(self) -> dict:
         """Return the current augmentation configuration as a dictionary."""
         return self.augmentation_section.get_state()
+
+    def refresh_theme(self):
+        """Force repaint of custom-painted child widgets after theme change."""
+        for section in (self.caption_section, self.token_section,
+                        self.histogram_section, self.spellcheck_section,
+                        self.augmentation_section, self.duplicate_section,
+                        self.concept_section, self.specificity_section,
+                        self.importance_section):
+            if hasattr(section, 'refresh_theme'):
+                section.refresh_theme()
+            else:
+                section.update()
