@@ -74,6 +74,23 @@ _KNOWN_ARCHITECTURES = [
     ("Other / Auto-detect", ""),
 ]
 
+_PIPELINE_CLASS_TO_ARCH: dict[str, str] = {
+    "StableDiffusionPipeline": "sd15",
+    "StableDiffusionImg2ImgPipeline": "sd15",
+    "StableDiffusionInpaintPipeline": "sd15",
+    "StableDiffusionXLPipeline": "sdxl",
+    "StableDiffusionXLImg2ImgPipeline": "sdxl",
+    "StableDiffusion3Pipeline": "sd3",
+    "FluxPipeline": "flux",
+    "PixArtSigmaPipeline": "pixart",
+    "StableCascadeDecoderPipeline": "cascade",
+    "StableCascadeCombinedPipeline": "cascade",
+    "KolorsPipeline": "kolors",
+    "AuraFlowPipeline": "auraflow",
+    "SanaPipeline": "sana",
+    "HunyuanDiTPipeline": "hunyuan",
+}
+
 
 class WelcomeDialog(QDialog):
     """Unified project picker: create, open recent, or browse."""
@@ -171,11 +188,20 @@ class WelcomeDialog(QDialog):
         self._arch_combo.setCurrentIndex(0)
         form.addRow("Architecture", self._arch_combo)
 
+        model_row = QHBoxLayout()
         self._base_model_edit = QLineEdit()
         self._base_model_edit.setPlaceholderText(
             "HuggingFace ID or local path (can be set later)"
         )
-        form.addRow("Base model", self._base_model_edit)
+        model_row.addWidget(self._base_model_edit, 1)
+        _browse_model_btn = QPushButton("Browse…")
+        _browse_model_btn.setToolTip(
+            "Browse for a local model checkpoint (.safetensors, .ckpt)\n"
+            "or a diffusers model folder on disk."
+        )
+        _browse_model_btn.clicked.connect(self._browse_base_model)
+        model_row.addWidget(_browse_model_btn)
+        form.addRow("Base model", model_row)
 
         # Optional dataset import — lets the user copy an existing image
         # folder into the new project's dataset/ at creation time. If left
@@ -656,6 +682,182 @@ class WelcomeDialog(QDialog):
                 self.settings.save()
                 self._populate_recent()
             return
+
+    # ── Model browsing & architecture detection ─────────────────────
+
+    def _browse_base_model(self) -> None:
+        """Open a file/folder picker and auto-detect model architecture."""
+        menu = QMenu(self)
+        file_act = menu.addAction("Select checkpoint file…")
+        folder_act = menu.addAction("Select model folder (diffusers)…")
+        sender = self.sender()
+        chosen = menu.exec(sender.mapToGlobal(sender.rect().bottomLeft()))
+        if chosen is None:
+            return
+
+        if chosen == file_act:
+            path_str, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select model checkpoint",
+                str(Path.home()),
+                "Model files (*.safetensors *.ckpt *.bin);;All files (*)",
+            )
+            if not path_str:
+                return
+            selected = Path(path_str)
+        elif chosen == folder_act:
+            path_str = QFileDialog.getExistingDirectory(
+                self, "Select model folder", str(Path.home()),
+            )
+            if not path_str:
+                return
+            selected = Path(path_str)
+        else:
+            return
+
+        self._base_model_edit.setText(str(selected))
+
+        detected = self._detect_model_architecture(selected)
+        if detected:
+            self._confirm_and_set_architecture(detected, selected.name)
+        else:
+            QMessageBox.information(
+                self,
+                "Architecture not detected",
+                "Could not auto-detect the model type.\n"
+                "Please select the architecture manually above.",
+            )
+
+    def _confirm_and_set_architecture(self, detected: str, filename: str) -> None:
+        """Show detected architecture and let the user confirm or change it."""
+        label = None
+        combo_idx = -1
+        for i, (lbl, val) in enumerate(_KNOWN_ARCHITECTURES):
+            if val == detected:
+                label = lbl
+                combo_idx = i
+                break
+        if label is None or combo_idx < 0:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Model type detected",
+            f"Detected architecture: {label}\n"
+            f"File: {filename}\n\n"
+            f"Set the Architecture field to \"{label}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._arch_combo.setCurrentIndex(combo_idx)
+
+    @staticmethod
+    def _detect_model_architecture(path: Path) -> str | None:
+        """Best-effort architecture detection from a model path."""
+        import json as _json
+
+        if path.is_dir():
+            index_file = path / "model_index.json"
+            if index_file.exists():
+                try:
+                    data = _json.loads(index_file.read_text(encoding="utf-8"))
+                    class_name = data.get("_class_name", "")
+                    return _PIPELINE_CLASS_TO_ARCH.get(class_name)
+                except (OSError, ValueError):
+                    pass
+            return None
+
+        if path.suffix.lower() == ".safetensors":
+            return WelcomeDialog._detect_from_safetensors(path)
+
+        return None
+
+    @staticmethod
+    def _detect_from_safetensors(path: Path) -> str | None:
+        """Read safetensors header and detect architecture from tensor names."""
+        import json as _json
+        import struct
+
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(8)
+                if len(raw) < 8:
+                    return None
+                header_size = struct.unpack("<Q", raw)[0]
+                if header_size > 100_000_000:
+                    return None
+                header_bytes = f.read(header_size)
+            header = _json.loads(header_bytes)
+        except (OSError, ValueError):
+            return None
+
+        metadata = header.get("__metadata__", {})
+        if isinstance(metadata, dict):
+            detected = WelcomeDialog._detect_from_metadata(metadata)
+            if detected:
+                return detected
+
+        keys = set(header.keys()) - {"__metadata__"}
+        return WelcomeDialog._detect_from_keys(keys)
+
+    @staticmethod
+    def _detect_from_metadata(metadata: dict) -> str | None:
+        """Try to detect architecture from safetensors metadata fields."""
+        arch_spec = metadata.get("modelspec.architecture", "").lower()
+        if arch_spec:
+            for pattern, arch in (
+                ("stable-diffusion-xl", "sdxl"),
+                ("sdxl", "sdxl"),
+                ("stable-diffusion-v1", "sd15"),
+                ("sd-1", "sd15"),
+                ("stable-diffusion-v2", "sd2"),
+                ("stable-diffusion-3", "sd3"),
+                ("flux", "flux"),
+            ):
+                if pattern in arch_spec:
+                    return arch
+
+        base_ver = metadata.get("ss_base_model_version", "").lower()
+        if base_ver:
+            for pattern, arch in (
+                ("sdxl", "sdxl"),
+                ("sd_v1", "sd15"),
+                ("v1-5", "sd15"),
+                ("sd_v2", "sd2"),
+            ):
+                if pattern in base_ver:
+                    return arch
+
+        return None
+
+    @staticmethod
+    def _detect_from_keys(keys: set[str]) -> str | None:
+        """Detect architecture from safetensors tensor key patterns."""
+
+        def has(prefix: str) -> bool:
+            return any(
+                k.startswith(prefix) or k.startswith(f"transformer.{prefix}")
+                for k in keys
+            )
+
+        if has("double_blocks.") and has("single_blocks."):
+            return "flux"
+        if has("double_layers.") and has("single_layers."):
+            return "auraflow"
+        if has("joint_transformer_blocks."):
+            return "sd3"
+        if has("adaln_single."):
+            return "pixart"
+        if has("mlp_t5."):
+            return "hunyuan"
+        if has("clip_txt_pooled_mapper."):
+            return "cascade"
+        if any(k.startswith("conditioner.embedders.1.") for k in keys):
+            return "sdxl"
+        if any(k.startswith("model.diffusion_model.") for k in keys):
+            return "sd15"
+
+        return None
 
     def _do_browse_existing(self) -> None:
         path_str = self._browse_path_edit.text().strip()

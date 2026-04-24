@@ -70,7 +70,7 @@ _LIGHT_COLORS = {
     # Text — dark for readability
     "text":            "#1a1c2b",
     "text_secondary":  "#555970",
-    "text_muted":      "#8b8fa3",
+    "text_muted":      "#6b7280",
 
     # Accent — same indigo-violet
     "accent":          "#6366f1",

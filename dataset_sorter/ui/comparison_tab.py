@@ -339,7 +339,7 @@ class ComparisonTab(QWidget):
         comparison_area = QHBoxLayout()
 
         # Side A display
-        side_a_frame = QFrame()
+        self._side_a_frame = side_a_frame = QFrame()
         side_a_frame.setStyleSheet(
             f"QFrame {{ border: 2px solid {COLORS['accent']}; "
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
@@ -369,7 +369,7 @@ class ComparisonTab(QWidget):
         comparison_area.addWidget(side_a_frame, 1)
 
         # Side B display
-        side_b_frame = QFrame()
+        self._side_b_frame = side_b_frame = QFrame()
         side_b_frame.setStyleSheet(
             f"QFrame {{ border: 2px solid {COLORS.get('success', '#22c55e')}; "
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
@@ -721,3 +721,28 @@ class ComparisonTab(QWidget):
         combined.paste(img_a, (0, 0))
         combined.paste(img_b, (img_a.width + gap, 0))
         return combined
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import (
+            COLORS, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE, MUTED_LABEL_STYLE,
+        )
+        self._btn_compare.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self._btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._status.setStyleSheet(MUTED_LABEL_STYLE)
+        self._side_a_frame.setStyleSheet(
+            f"QFrame {{ border: 2px solid {COLORS['accent']}; "
+            f"border-radius: 12px; background: {COLORS['surface']}; }}"
+        )
+        self._side_b_frame.setStyleSheet(
+            f"QFrame {{ border: 2px solid {COLORS.get('success', '#22c55e')}; "
+            f"border-radius: 12px; background: {COLORS['surface']}; }}"
+        )
+        self._info_a.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent;"
+        )
+        self._info_b.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent;"
+        )

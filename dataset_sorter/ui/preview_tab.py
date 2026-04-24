@@ -103,3 +103,13 @@ class PreviewTab(QWidget):
             w = child.widget()
             if w:
                 w.deleteLater()
+
+    def refresh_theme(self):
+        """Re-apply inline styles after a theme change."""
+        from dataset_sorter.ui.theme import COLORS
+        self.info_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 13px; "
+            f"padding: 10px 14px; background: {COLORS['surface']}; "
+            f"border-radius: 10px; border: 1px solid {COLORS['border']}; "
+            f"border-left: 3px solid {COLORS['accent']};"
+        )

@@ -51,6 +51,10 @@ class CollapsibleSection(QWidget):
     def content_layout(self) -> QVBoxLayout:
         return self._content_layout
 
+    def refresh_theme(self):
+        from dataset_sorter.ui.theme import CARD_STYLE
+        self._content.setStyleSheet(CARD_STYLE)
+
 
 class OverridePanel(QWidget):
     """Central panel: overrides, deletion, tag editing, config."""
@@ -106,7 +110,9 @@ class OverridePanel(QWidget):
         layout.addLayout(stats_row)
 
         # ── Bucket Override (collapsed by default) ──
+        self._sections: list[CollapsibleSection] = []
         sec_override = CollapsibleSection("Bucket Override", expanded=False)
+        self._sections.append(sec_override)
         cl = sec_override.content_layout()
         row = QHBoxLayout()
         self.override_spinner = QSpinBox()
@@ -132,6 +138,7 @@ class OverridePanel(QWidget):
 
         # ── Tag Deletion (expanded by default) ──
         sec_del = CollapsibleSection("Tag Deletion", expanded=True)
+        self._sections.append(sec_del)
         cl = sec_del.content_layout()
         dr = QHBoxLayout()
         bd = QPushButton("Delete Selected")
@@ -156,6 +163,7 @@ class OverridePanel(QWidget):
 
         # ── Tag Editor (expanded by default) ──
         sec_edit = CollapsibleSection("Tag Editor", expanded=True)
+        self._sections.append(sec_edit)
         cl = sec_edit.content_layout()
 
         # Rename
@@ -207,6 +215,7 @@ class OverridePanel(QWidget):
 
         # ── Bucket Names & Config (collapsed by default) ──
         sec_config = CollapsibleSection("Export & Config", expanded=False)
+        self._sections.append(sec_config)
         cl = sec_config.content_layout()
 
         bnr = QHBoxLayout()
@@ -285,3 +294,28 @@ class OverridePanel(QWidget):
         self.stat_images._value_label.setText(str(n_images))
         self.stat_txt._value_label.setText(str(n_txt))
         self.stat_tags._value_label.setText(str(n_tags))
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import COLORS, MUTED_LABEL_STYLE
+        for sec in self._sections:
+            sec.refresh_theme()
+        self.selected_tag_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-style: italic; "
+            f"padding: 8px 10px; background: {COLORS['surface']}; "
+            f"border-radius: 8px; border: 1px solid {COLORS['border']};"
+        )
+        self.deleted_tags_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self.editor_info_label.setStyleSheet(MUTED_LABEL_STYLE)
+        for stat_w in (self.stat_images, self.stat_txt, self.stat_tags):
+            stat_w.setStyleSheet("background: transparent;")
+            stat_w._value_label.setStyleSheet(
+                f"color: {COLORS['accent']}; font-size: 14px; font-weight: 700; "
+                f"background: transparent;"
+            )
+            for child in stat_w.findChildren(QLabel):
+                if child is not stat_w._value_label:
+                    child.setStyleSheet(
+                        f"color: {COLORS['text_muted']}; font-size: 11px; "
+                        f"background: transparent;"
+                    )

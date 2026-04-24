@@ -795,3 +795,22 @@ class BatchGenerationTab(QWidget):
                 self._worker.wait(5000)
             self._worker.deleteLater()
             self._worker = None
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import (
+            COLORS, MUTED_LABEL_STYLE, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE,
+        )
+        self._queue_count_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self._eta_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self._status_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self._btn_run.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self._btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._table.setStyleSheet(
+            f"QTableWidget {{ gridline-color: {COLORS['border']}; "
+            f"background-color: {COLORS['surface']}; "
+            f"alternate-background-color: {COLORS['bg']}; }} "
+            f"QHeaderView::section {{ background-color: {COLORS['bg_alt']}; "
+            f"color: {COLORS['text']}; padding: 4px; border: 1px solid {COLORS['border']}; "
+            f"font-weight: 600; }}"
+        )

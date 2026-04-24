@@ -1357,3 +1357,32 @@ class LibraryTab(QWidget):
         text = self._tags_edit.text().strip()
         item.user_tags = [t.strip() for t in text.split(",") if t.strip()]
         self._save_item_meta(item)
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        self._detail_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        self._detail_name.setStyleSheet(section_header_style())
+        self._detail_path.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self._detail_meta.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;"
+        )
+        self._btn_favorite.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 2px 10px; background: transparent; color: {COLORS['text_muted']}; }} "
+            f"QPushButton:checked {{ background: {COLORS['accent_subtle']}; "
+            f"color: {COLORS['accent']}; border-color: {COLORS['accent']}; }}"
+        )
+        self._btn_copy_path.setStyleSheet(nav_button_style())
+        self._btn_open_folder.setStyleSheet(nav_button_style())
+        self._btn_use_generate.setStyleSheet(accent_button_style())
+        self._btn_use_train.setStyleSheet(accent_button_style())
+        self._btn_delete.setStyleSheet(danger_button_style())
+        self._update_toggle_styles()
+        self._stats_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;"
+        )
+        self._empty_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
+        )

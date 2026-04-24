@@ -285,6 +285,15 @@ class RecoTab(QWidget):
             QMessageBox.warning(self, "Export Failed", f"Could not write file:\n{e}")
             show_toast(self, "Export failed", "error")
 
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import COLORS, ACCENT_BUTTON_STYLE, MUTED_LABEL_STYLE
+        self.text_output.setStyleSheet(
+            f"QTextEdit {{ background-color: {COLORS['bg']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 12px; }}"
+        )
+        self.btn_recalc.setStyleSheet(ACCENT_BUTTON_STYLE)
+
     def _export_json(self):
         """Prompt the user to save the current config as a kohya_ss JSON file."""
         if self._last_config is None:

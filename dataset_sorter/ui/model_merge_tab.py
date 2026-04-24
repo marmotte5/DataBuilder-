@@ -597,3 +597,13 @@ class ModelMergeTab(QWidget):
     def load_model_path(self, path: str):
         """Called externally to pre-fill Model A from the library."""
         self._model_a_edit.setText(path)
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import (
+            MUTED_LABEL_STYLE, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE,
+        )
+        self._method_desc.setStyleSheet(MUTED_LABEL_STYLE)
+        self._status_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self._btn_merge.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self._btn_cancel.setStyleSheet(DANGER_BUTTON_STYLE)
