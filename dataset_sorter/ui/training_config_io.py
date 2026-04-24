@@ -570,10 +570,13 @@ class TrainingConfigIOMixin:
         config = self.build_config()
         data = asdict(config)
         try:
-            Path(path).write_text(
+            _p = Path(path)
+            _tmp = _p.with_suffix(".tmp")
+            _tmp.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
+            _tmp.replace(_p)
             self._log(f"Training config saved: {path}")
             show_toast(self, "Training config saved", "success")
         except OSError as e:

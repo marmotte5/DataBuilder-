@@ -10,9 +10,12 @@ Full-featured inference UI supporting:
 - One-click save to disk
 """
 
+import logging
 import weakref
 from pathlib import Path
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 from PIL import Image as PILImage
 
@@ -811,7 +814,11 @@ class GenerateTab(QWidget):
         p.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         save_path = p / f"generated_{timestamp}.png"
-        self._save_with_metadata(pil_image, str(save_path))
+        try:
+            self._save_with_metadata(pil_image, str(save_path))
+        except OSError as exc:
+            log.error("Auto-save failed for %s: %s", save_path, exc)
+            return None
         return str(save_path)
 
     # ── Model loading ───────────────────────────────────────────────────
@@ -1343,9 +1350,13 @@ class GenerateTab(QWidget):
             "PNG (*.png);;JPEG (*.jpg *.jpeg);;WebP (*.webp);;All files (*)"
         )
         if path:
-            self._save_with_metadata(pil_img, path)
-            self.status_label.setText(f"Saved: {path}")
-            show_toast(self, "Image saved", "success")
+            try:
+                self._save_with_metadata(pil_img, path)
+                self.status_label.setText(f"Saved: {path}")
+                show_toast(self, "Image saved", "success")
+            except OSError as exc:
+                log.error("Image save failed: %s", exc)
+                show_toast(self, f"Save failed: {exc}", "error")
 
     def _save_all_images(self):
         """Prompt for an output folder and save all gallery images as PNGs."""
@@ -1356,9 +1367,21 @@ class GenerateTab(QWidget):
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        saved = 0
         for i, (pil_img, info) in enumerate(self._generated_images):
             path = Path(folder) / f"generated_{timestamp}_{i:03d}.png"
-            self._save_with_metadata(pil_img, str(path))
+            try:
+                self._save_with_metadata(pil_img, str(path))
+                saved += 1
+            except OSError as exc:
+                log.error("Failed to save image %d: %s", i, exc)
 
-        self.status_label.setText(f"Saved {len(self._generated_images)} images to {folder}")
-        show_toast(self, f"{len(self._generated_images)} images saved", "success")
+        if saved == len(self._generated_images):
+            self.status_label.setText(f"Saved {saved} images to {folder}")
+            show_toast(self, f"{saved} images saved", "success")
+        elif saved > 0:
+            self.status_label.setText(f"Saved {saved}/{len(self._generated_images)} images (some failed)")
+            show_toast(self, f"{saved}/{len(self._generated_images)} saved", "warning")
+        else:
+            self.status_label.setText("All saves failed — check disk space and permissions")
+            show_toast(self, "Save failed", "error")
