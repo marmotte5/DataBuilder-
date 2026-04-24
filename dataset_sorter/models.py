@@ -131,6 +131,16 @@ class TrainingConfig:
     random_crop: bool = False       # Random crop vs center crop
     flip_augmentation: bool = False # Horizontal flip augmentation
     color_augmentation: bool = False
+    # Fine-grained color/rotation augmentation knobs (OneTrainer parity).
+    # These only apply to the live pixel_values path; when latents are
+    # pre-cached, augmentations are baked into the cache at cache time.
+    # Typical values: jitter 0.05-0.1 for mild style preservation,
+    # rotate 0-5 degrees for object photos, 0 for text/UI screenshots.
+    color_jitter_brightness: float = 0.0
+    color_jitter_contrast: float = 0.0
+    color_jitter_saturation: float = 0.0
+    color_jitter_hue: float = 0.0
+    random_rotate_degrees: float = 0.0
 
     # ── Sampling ───────────────────────────────────────────────────────
     sample_every_n_steps: int = 50
@@ -161,6 +171,13 @@ class TrainingConfig:
     multires_noise_discount: float = 0.0
     multires_noise_iterations: int = 6
     guidance_scale: float = 1.0
+
+    # Loss function choice (OneTrainer parity)
+    # - "mse"   : standard squared error (default; what SD/Flux training uses)
+    # - "huber" : robust to outlier images/captions, smooth L1 variant
+    # - "smooth_l1" : alias for huber with delta=1.0
+    loss_fn: str = "mse"
+    huber_delta: float = 0.1  # Huber transition point; smaller = more robust
 
     # Timestep sampling (flow-matching models)
     timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal, speed
@@ -313,6 +330,11 @@ class TrainingConfig:
     # ── Masked Training ──────────────────────────────────────────────────
     masked_training: bool = False       # Enable masked loss (only train on masked regions)
     mask_weight: float = 1.0           # Relative weight for masked vs unmasked regions
+    # OneTrainer-style random unmasked steps: with this probability, skip
+    # the mask for a batch and train on the full image. Prevents the model
+    # from forgetting backgrounds / context when the subject is absent.
+    # Typical value: 0.05-0.15. Set to 0 to disable.
+    unmasked_probability: float = 0.0
 
     # ── TensorBoard Logging ──────────────────────────────────────────────
     tensorboard_logging: bool = False   # Enable TensorBoard logging

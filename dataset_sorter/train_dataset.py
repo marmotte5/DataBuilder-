@@ -111,6 +111,11 @@ class CachedTrainDataset(Dataset):
         caption_dropout_rate: float = 0.0,
         cache_dir: Optional[Path] = None,
         bucket_assignments: Optional[list[tuple[int, int]]] = None,
+        color_jitter_brightness: float = 0.0,
+        color_jitter_contrast: float = 0.0,
+        color_jitter_saturation: float = 0.0,
+        color_jitter_hue: float = 0.0,
+        random_rotate_degrees: float = 0.0,
     ):
         self.image_paths = image_paths
         self.captions = captions
@@ -121,6 +126,11 @@ class CachedTrainDataset(Dataset):
         self.keep_first_n_tags = keep_first_n_tags
         self.caption_dropout_rate = caption_dropout_rate
         self.cache_dir = cache_dir
+        self.color_jitter_brightness = color_jitter_brightness
+        self.color_jitter_contrast = color_jitter_contrast
+        self.color_jitter_saturation = color_jitter_saturation
+        self.color_jitter_hue = color_jitter_hue
+        self.random_rotate_degrees = random_rotate_degrees
 
         # Per-image bucket resolutions (None = all use self.resolution)
         self._bucket_assignments = bucket_assignments
@@ -134,22 +144,37 @@ class CachedTrainDataset(Dataset):
         self._te_cached = False
         self._tokens_cached = False
 
-        # Image transforms — BILINEAR is 2-3x faster than LANCZOS with negligible
-        # quality difference for training (latents are compressed by 8x anyway)
-        self._transforms = transforms.Compose([
-            transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
-        ])
+        self._transforms = self._build_transforms(resolution, resolution)
 
     def __len__(self):
         return len(self.image_paths)
 
-    def _get_transforms_for_resolution(self, width: int, height: int):
-        """Build transforms for a specific (w, h) bucket resolution."""
+    def _build_transforms(self, width: int, height: int):
+        """Build transforms for a (w, h) resolution.
+
+        Augmentations are prepended to the pipeline so they run on PIL/tensor
+        BEFORE the final resize+crop+normalize. BILINEAR resize is 2-3x
+        faster than LANCZOS with negligible quality difference for training
+        (latents are downsampled by 8x by the VAE anyway).
+        """
         crop_cls = transforms.CenterCrop if self.center_crop else transforms.RandomCrop
-        return transforms.Compose([
+        pipeline = []
+        # Color/rotation augmentations (skip when all knobs are 0 — no-op)
+        if any((self.color_jitter_brightness, self.color_jitter_contrast,
+                self.color_jitter_saturation, self.color_jitter_hue)):
+            pipeline.append(transforms.ColorJitter(
+                brightness=self.color_jitter_brightness,
+                contrast=self.color_jitter_contrast,
+                saturation=self.color_jitter_saturation,
+                hue=self.color_jitter_hue,
+            ))
+        if self.random_rotate_degrees > 0:
+            pipeline.append(transforms.RandomRotation(
+                self.random_rotate_degrees,
+                interpolation=transforms.InterpolationMode.BILINEAR,
+                fill=0,
+            ))
+        pipeline.extend([
             transforms.Resize(
                 max(width, height),
                 interpolation=transforms.InterpolationMode.BILINEAR,
@@ -158,6 +183,11 @@ class CachedTrainDataset(Dataset):
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ])
+        return transforms.Compose(pipeline)
+
+    def _get_transforms_for_resolution(self, width: int, height: int):
+        """Build transforms for a specific bucket (w, h) resolution."""
+        return self._build_transforms(width, height)
 
     def __getitem__(self, idx):
         result = {}
