@@ -148,8 +148,10 @@ class TrainingStateManager:
         # typed values — silent config corruption.
         state_dict = asdict(state)
         state_dict["training_config"] = _to_json_safe(state_dict.get("training_config"))
-        with open(state_path, 'w') as f:
+        tmp_path = checkpoint_dir / (self.STATE_FILENAME + ".tmp")
+        with open(tmp_path, 'w') as f:
             json.dump(state_dict, f, indent=2, default=str)
+        tmp_path.replace(state_path)
 
         # Save RNG states to guarantee exact reproducibility on resume:
         # without this, the batch/augmentation sequence would differ after resume.
@@ -159,7 +161,9 @@ class TrainingStateManager:
             'numpy': np.random.get_state(),
             'python': random.getstate(),
         }
-        torch.save(random_states, checkpoint_dir / self.RANDOM_STATE_FILENAME)
+        _rng_tmp = checkpoint_dir / (self.RANDOM_STATE_FILENAME + ".tmp")
+        torch.save(random_states, str(_rng_tmp))
+        _rng_tmp.replace(checkpoint_dir / self.RANDOM_STATE_FILENAME)
 
         # The accelerator saves optimizer + scheduler, preserving the momentum
         # of adaptive optimizers (Adam, SOAP, Marmotte).

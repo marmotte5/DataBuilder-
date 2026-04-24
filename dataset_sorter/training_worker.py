@@ -419,8 +419,8 @@ class TrainingWorker(QThread):
                     log.error("RLHF candidate generation error: %s", e, exc_info=True)
                     try:
                         t.resume()
-                    except Exception:
-                        pass
+                    except Exception as resume_err:
+                        log.error("Failed to resume training after RLHF error: %s", resume_err, exc_info=True)
 
     def _on_sample(self, images, step):
         try:

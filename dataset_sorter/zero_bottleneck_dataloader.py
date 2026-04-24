@@ -634,6 +634,8 @@ class BackgroundPrefetcher:
         self._consumed.set()  # Unblock if waiting
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                log.warning("Prefetch thread did not stop within 5s timeout")
             self._thread = None
 
 

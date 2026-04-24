@@ -2530,9 +2530,11 @@ class Trainer:
             log.warning("No pipeline available for full model save; saving UNet only")
             self.backend.unet.save_pretrained(str(save_dir / "unet"))
 
-        # Save EMA weights
+        # Save EMA weights (atomic: temp file + rename to prevent corruption on crash)
         if self.ema_model is not None:
-            torch.save(self.ema_model.state_dict(), str(save_dir / "ema_weights.pt"))
+            _ema_tmp = save_dir / "ema_weights.pt.tmp"
+            torch.save(self.ema_model.state_dict(), str(_ema_tmp))
+            _ema_tmp.replace(save_dir / "ema_weights.pt")
 
         # Save training state for resume (atomic write to prevent corruption)
         state_dict = {
