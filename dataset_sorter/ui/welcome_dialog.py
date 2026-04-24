@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
 
 from dataset_sorter.app_settings import AppSettings
 from dataset_sorter.project_manager import Project, ProjectManager
+from dataset_sorter.ui.theme import COLORS
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ class WelcomeDialog(QDialog):
         self._build_ui()
         self._populate_recent()
 
+        # Start on the Recent tab if there are projects, otherwise New tab
+        if self._recent_list.count() > 0:
+            self.tabs.setCurrentIndex(1)
+        else:
+            self.tabs.setCurrentIndex(0)
+
     # ── UI construction ────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
@@ -107,7 +114,7 @@ class WelcomeDialog(QDialog):
             "project or reopening an existing one."
         )
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color: palette(mid);")
+        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']};")
         root.addWidget(subtitle)
 
         # Projects root row — always visible so users know where files live
@@ -118,8 +125,8 @@ class WelcomeDialog(QDialog):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         self._root_label.setStyleSheet(
-            "font-family: monospace; padding: 2px 6px; "
-            "background: palette(alternate-base); border-radius: 3px;"
+            f"font-family: monospace; padding: 2px 6px; "
+            f"background: {COLORS['surface']}; border-radius: 3px;"
         )
         root_row.addWidget(self._root_label, 1)
         change_root_btn = QPushButton("Change…")
@@ -187,9 +194,9 @@ class WelcomeDialog(QDialog):
         # Live preview of the path that will be created
         self._new_path_preview = QLabel("")
         self._new_path_preview.setStyleSheet(
-            "color: palette(mid); font-family: monospace; "
-            "padding: 6px 8px; background: palette(alternate-base); "
-            "border-radius: 3px; font-size: 11px;"
+            f"color: {COLORS['text_secondary']}; font-family: monospace; "
+            f"padding: 6px 8px; background: {COLORS['surface']}; "
+            f"border-radius: 3px; font-size: 11px;"
         )
         self._new_path_preview.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -207,8 +214,8 @@ class WelcomeDialog(QDialog):
             "  • logs/, presets/, history/, .cache/"
         )
         info.setStyleSheet(
-            "color: palette(mid); font-family: monospace; "
-            "padding: 8px; background: palette(alternate-base); border-radius: 4px;"
+            f"color: {COLORS['text_secondary']}; font-family: monospace; "
+            f"padding: 8px; background: {COLORS['surface']}; border-radius: 4px;"
         )
         info.setWordWrap(False)
         form.addRow("", info)
@@ -222,9 +229,9 @@ class WelcomeDialog(QDialog):
         if not raw:
             self._new_path_preview.setText("(enter a name above)")
             self._new_path_preview.setStyleSheet(
-                "color: palette(mid); font-style: italic; "
-                "padding: 6px 8px; background: palette(alternate-base); "
-                "border-radius: 3px; font-size: 11px;"
+                f"color: {COLORS['text_muted']}; font-style: italic; "
+                f"padding: 6px 8px; background: {COLORS['surface']}; "
+                f"border-radius: 3px; font-size: 11px;"
             )
             return
         safe = _safe_dir_name(raw)
@@ -245,15 +252,15 @@ class WelcomeDialog(QDialog):
         self._new_path_preview.setText(text)
         if _exists or not safe:
             self._new_path_preview.setStyleSheet(
-                "color: #c47a00; font-family: monospace; "
-                "padding: 6px 8px; background: palette(alternate-base); "
-                "border-radius: 3px; font-size: 11px;"
+                f"color: {COLORS['warning']}; font-family: monospace; "
+                f"padding: 6px 8px; background: {COLORS['surface']}; "
+                f"border-radius: 3px; font-size: 11px;"
             )
         else:
             self._new_path_preview.setStyleSheet(
-                "color: palette(text); font-family: monospace; "
-                "padding: 6px 8px; background: palette(alternate-base); "
-                "border-radius: 3px; font-size: 11px;"
+                f"color: {COLORS['text']}; font-family: monospace; "
+                f"padding: 6px 8px; background: {COLORS['surface']}; "
+                f"border-radius: 3px; font-size: 11px;"
             )
 
     def _choose_import_dataset(self) -> None:
@@ -286,7 +293,7 @@ class WelcomeDialog(QDialog):
             "or use \"Open folder…\" to import an existing project directory."
         )
         self._recent_empty_label.setWordWrap(True)
-        self._recent_empty_label.setStyleSheet("color: palette(mid); padding: 20px;")
+        self._recent_empty_label.setStyleSheet(f"color: {COLORS['text_secondary']}; padding: 20px;")
         self._recent_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._recent_empty_label.hide()
         layout.addWidget(self._recent_empty_label)
@@ -315,7 +322,7 @@ class WelcomeDialog(QDialog):
             "another drive)."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: palette(mid);")
+        info.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(info)
 
         row = QHBoxLayout()
@@ -379,12 +386,10 @@ class WelcomeDialog(QDialog):
         if self._recent_list.count() == 0:
             self._recent_empty_label.show()
             self._recent_list.hide()
-            self.tabs.setCurrentIndex(0)  # focus New tab when empty
         else:
             self._recent_empty_label.hide()
             self._recent_list.show()
             self._recent_list.setCurrentRow(0)
-            self.tabs.setCurrentIndex(1)  # focus Recent tab when populated
 
     @staticmethod
     def _count_images(folder: Path) -> int:
