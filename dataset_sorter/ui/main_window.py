@@ -75,43 +75,271 @@ _PROGRESS_FILE = _get_data_dir() / "state.json"
 # Profiles directory
 _PROFILES_DIR = _get_data_dir() / "profiles"
 
-# Built-in default profiles (partial TrainingConfig fields)
+# Built-in default profiles (partial TrainingConfig fields).
+# Organised by model family, covering LoRA and full-finetune where relevant.
+# Inspired by OneTrainer presets and community best practices.
+_SHARED = dict(
+    mixed_precision="bf16", gradient_checkpointing=True,
+    cache_latents=True, cache_text_encoder=True, sdpa=True,
+    tag_shuffle=True, save_every_n_epochs=1,
+)
 _DEFAULT_PROFILES: dict[str, dict] = {
-    "SD 1.5 Quick Test": {
+    # ── SD 1.5 ────────────────────────────────────────────────────────
+    "SD 1.5 LoRA": {
+        **_SHARED,
         "model_type": "sd15_lora",
         "lora_rank": 16, "lora_alpha": 8,
         "learning_rate": 1e-4, "text_encoder_lr": 5e-5,
-        "batch_size": 2, "epochs": 5, "resolution": 512,
-        "optimizer": "Adafactor", "mixed_precision": "bf16",
-        "gradient_checkpointing": True, "cache_latents": True,
+        "batch_size": 4, "epochs": 10, "resolution": 512,
+        "optimizer": "Adafactor",
+        "train_text_encoder": True,
     },
-    "SDXL Quality": {
-        "model_type": "sdxl_lora",
-        "lora_rank": 32, "lora_alpha": 16,
-        "learning_rate": 5e-5, "text_encoder_lr": 1e-5,
-        "batch_size": 1, "epochs": 15, "resolution": 1024,
-        "optimizer": "Adafactor", "mixed_precision": "bf16",
-        "gradient_checkpointing": True, "cache_latents": True,
+    "SD 1.5 Full Finetune": {
+        **_SHARED,
+        "model_type": "sd15_full",
+        "learning_rate": 5e-6, "text_encoder_lr": 1e-6,
+        "batch_size": 4, "epochs": 20, "resolution": 512,
+        "optimizer": "AdamW", "weight_decay": 0.01,
+        "train_text_encoder": True,
     },
-    "Flux LoRA": {
-        "model_type": "flux_lora",
+    # ── SD 2.x ────────────────────────────────────────────────────────
+    "SD 2.1 LoRA": {
+        **_SHARED,
+        "model_type": "sd2_lora",
         "lora_rank": 16, "lora_alpha": 8,
         "learning_rate": 1e-4, "text_encoder_lr": 5e-5,
-        "batch_size": 1, "epochs": 10, "resolution": 1024,
-        "optimizer": "Adafactor", "mixed_precision": "bf16",
-        "gradient_checkpointing": True, "cache_latents": True,
+        "batch_size": 4, "epochs": 10, "resolution": 768,
+        "optimizer": "Adafactor",
+    },
+    # ── SDXL / Pony ───────────────────────────────────────────────────
+    "SDXL LoRA": {
+        **_SHARED,
+        "model_type": "sdxl_lora",
+        "lora_rank": 32, "lora_alpha": 16,
+        "learning_rate": 3e-4, "text_encoder_lr": 0.0,
+        "batch_size": 2, "epochs": 15, "resolution": 1024,
+        "optimizer": "Adafactor",
         "train_text_encoder": False,
     },
-    "Pony Diffusion": {
+    "SDXL LoRA Quality": {
+        **_SHARED,
+        "model_type": "sdxl_lora",
+        "lora_rank": 64, "lora_alpha": 32,
+        "learning_rate": 5e-5, "text_encoder_lr": 1e-5,
+        "batch_size": 1, "epochs": 20, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": True,
+        "use_dora": True,
+        "min_snr_gamma": 5.0,
+    },
+    "SDXL Full Finetune": {
+        **_SHARED,
+        "model_type": "sdxl_full",
+        "learning_rate": 5e-6, "text_encoder_lr": 1e-6,
+        "batch_size": 1, "epochs": 10, "resolution": 1024,
+        "optimizer": "AdamW", "weight_decay": 0.01,
+        "gradient_accumulation": 4,
+        "train_text_encoder": True,
+    },
+    "Pony Diffusion LoRA": {
+        **_SHARED,
         "model_type": "sdxl_lora",
         "lora_rank": 32, "lora_alpha": 16,
         "learning_rate": 1e-4, "text_encoder_lr": 0.0,
-        "batch_size": 1, "epochs": 20, "resolution": 1024,
-        "optimizer": "Adafactor", "mixed_precision": "bf16",
-        "gradient_checkpointing": True, "cache_latents": True,
+        "batch_size": 2, "epochs": 20, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "clip_skip": 2,
+    },
+    # ── Flux ──────────────────────────────────────────────────────────
+    "Flux LoRA": {
+        **_SHARED,
+        "model_type": "flux_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 768,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    "Flux LoRA Quality": {
+        **_SHARED,
+        "model_type": "flux_lora",
+        "lora_rank": 32, "lora_alpha": 32,
+        "learning_rate": 1e-4,
+        "batch_size": 1, "epochs": 15, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+        "use_dora": True,
+    },
+    # ── Flux 2 ────────────────────────────────────────────────────────
+    "Flux 2 LoRA": {
+        **_SHARED,
+        "model_type": "flux2_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-5,
+        "batch_size": 2, "epochs": 10, "resolution": 512,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    # ── SD3 / SD 3.5 ─────────────────────────────────────────────────
+    "SD3 LoRA": {
+        **_SHARED,
+        "model_type": "sd3_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    "SD 3.5 LoRA": {
+        **_SHARED,
+        "model_type": "sd35_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    # ── Z-Image ──────────────────────────────────────────────────────
+    "Z-Image LoRA": {
+        **_SHARED,
+        "model_type": "zimage_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 512,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    "Z-Image Full Finetune": {
+        **_SHARED,
+        "model_type": "zimage_full",
+        "learning_rate": 1e-5,
+        "batch_size": 1, "epochs": 10, "resolution": 512,
+        "optimizer": "AdamW", "weight_decay": 0.01,
+        "gradient_accumulation": 4,
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    # ── Chroma ───────────────────────────────────────────────────────
+    "Chroma LoRA": {
+        **_SHARED,
+        "model_type": "chroma_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 512,
+        "optimizer": "Adafactor",
         "train_text_encoder": False,
     },
+    "Chroma Full Finetune": {
+        **_SHARED,
+        "model_type": "chroma_full",
+        "learning_rate": 1e-5,
+        "batch_size": 1, "epochs": 10, "resolution": 512,
+        "optimizer": "AdamW", "weight_decay": 0.01,
+        "gradient_accumulation": 4,
+        "train_text_encoder": False,
+    },
+    # ── PixArt ───────────────────────────────────────────────────────
+    "PixArt Sigma LoRA": {
+        **_SHARED,
+        "model_type": "pixart_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── Kolors ───────────────────────────────────────────────────────
+    "Kolors LoRA": {
+        **_SHARED,
+        "model_type": "kolors_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 1e-4,
+        "batch_size": 2, "epochs": 15, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── HunyuanDiT ───────────────────────────────────────────────────
+    "Hunyuan DiT LoRA": {
+        **_SHARED,
+        "model_type": "hunyuan_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── AuraFlow ─────────────────────────────────────────────────────
+    "AuraFlow LoRA": {
+        **_SHARED,
+        "model_type": "auraflow_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── Sana ──────────────────────────────────────────────────────────
+    "Sana LoRA": {
+        **_SHARED,
+        "model_type": "sana_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── HiDream ──────────────────────────────────────────────────────
+    "HiDream LoRA": {
+        **_SHARED,
+        "model_type": "hidream_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 512,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+    },
+    # ── Stable Cascade ───────────────────────────────────────────────
+    "Cascade LoRA": {
+        **_SHARED,
+        "model_type": "cascade_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 1e-4,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Adafactor",
+        "train_text_encoder": False,
+    },
+    # ── Speed-optimised presets ───────────────────────────────────────
+    "SDXL Fast (Marmotte)": {
+        **_SHARED,
+        "model_type": "sdxl_lora",
+        "lora_rank": 32, "lora_alpha": 16,
+        "learning_rate": 3e-4, "text_encoder_lr": 0.0,
+        "batch_size": 2, "epochs": 10, "resolution": 1024,
+        "optimizer": "Marmotte",
+        "train_text_encoder": False,
+        "triton_fused_loss": True,
+    },
+    "Flux Fast (Marmotte)": {
+        **_SHARED,
+        "model_type": "flux_lora",
+        "lora_rank": 16, "lora_alpha": 16,
+        "learning_rate": 3e-4,
+        "batch_size": 2, "epochs": 8, "resolution": 768,
+        "optimizer": "Marmotte",
+        "train_text_encoder": False,
+        "timestep_sampling": "logit_normal",
+        "triton_fused_loss": True, "triton_fused_flow": True,
+    },
 }
+del _SHARED
 
 
 class DragDropLineEdit(QLineEdit):
@@ -664,7 +892,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(profile_lbl)
 
         self._profile_combo = QComboBox()
-        self._profile_combo.setFixedSize(150, 30)
+        self._profile_combo.setFixedSize(200, 30)
         self._profile_combo.setToolTip("Select a training profile to load")
         self._profile_combo.activated.connect(self._on_profile_selected)
         header_layout.addWidget(self._profile_combo)
@@ -1496,7 +1724,7 @@ class MainWindow(QMainWindow):
     # ── Profile system ─────────────────────────────────────────────────────
 
     def _init_default_profiles(self):
-        """Write built-in default profiles to disk if they don't exist yet."""
+        """Write built-in default profiles to disk, updating stale ones."""
         try:
             _PROFILES_DIR.mkdir(parents=True, exist_ok=True)
             for name, partial in _DEFAULT_PROFILES.items():
@@ -1507,6 +1735,15 @@ class MainWindow(QMainWindow):
                                    indent=2, ensure_ascii=False),
                         encoding="utf-8",
                     )
+            # Clean up renamed/removed built-in profiles so the dropdown
+            # doesn't show stale entries alongside the new ones.
+            for p in _PROFILES_DIR.glob("*.json"):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    if data.get("builtin") and p.stem not in _DEFAULT_PROFILES:
+                        p.unlink()
+                except (OSError, ValueError):
+                    pass
         except OSError as e:
             log.warning("Could not initialise default profiles: %s", e)
 
