@@ -184,6 +184,12 @@ class TrainingConfigIOMixin:
         config.save_last_n_checkpoints = self.keep_ckpt_spin.value()
         config.save_precision = self.save_prec_combo.currentData() or "bf16"
 
+        # Held-out validation (optional — 0 / empty = disabled)
+        if hasattr(self, "val_dir_input"):
+            config.validation_dir = self.val_dir_input.text().strip()
+            config.validate_every_n_steps = self.validate_every_spin.value()
+            config.validation_samples_limit = self.val_samples_spin.value()
+
         # Sampling
         config.sample_every_n_steps = self.sample_steps_spin.value()
         config.sample_sampler = self.sampler_combo.currentData() or "euler_a"
@@ -428,6 +434,16 @@ class TrainingConfigIOMixin:
             if self.save_prec_combo.itemData(i) == config.save_precision:
                 self.save_prec_combo.setCurrentIndex(i)
                 break
+
+        # Held-out validation
+        if hasattr(self, "val_dir_input"):
+            self.val_dir_input.setText(getattr(config, "validation_dir", "") or "")
+            self.validate_every_spin.setValue(
+                getattr(config, "validate_every_n_steps", 0) or 0
+            )
+            self.val_samples_spin.setValue(
+                getattr(config, "validation_samples_limit", 64) or 64
+            )
 
         # Sampling
         self.sample_steps_spin.setValue(config.sample_every_n_steps)

@@ -327,6 +327,17 @@ class TrainingConfig:
     live_monitor_interval: int = 200        # Steps between live loss curve checks
     live_monitor_auto_adjust: bool = True   # Auto-reduce LR on divergence/plateau
 
+    # ── Held-out Validation (OneTrainer parity) ──────────────────────
+    # When validation_dir is set and exists, a copy of CachedTrainDataset
+    # is built over those images and run through a no-grad forward every
+    # validate_every_n_steps. Gives an honest "is this checkpoint better
+    # than the last?" signal — without it, users have to guess which
+    # checkpoint to keep based only on training loss (which is biased by
+    # the very samples it trained on).
+    validation_dir: str = ""              # Folder with validation images + .txt captions
+    validate_every_n_steps: int = 0       # 0 = disabled
+    validation_samples_limit: int = 64    # Cap to keep eval fast (prevents slowdown on large val sets)
+
     # ── Masked Training ──────────────────────────────────────────────────
     masked_training: bool = False       # Enable masked loss (only train on masked regions)
     mask_weight: float = 1.0           # Relative weight for masked vs unmasked regions

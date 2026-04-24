@@ -21,6 +21,7 @@ Chroma (LoRA + Full)
 import gc
 import json
 import logging
+import math
 import random
 import shutil
 import threading
@@ -103,6 +104,11 @@ class TrainingState:
     epoch_step: int = 0    # Batch index within current epoch (for resume)
     loss: float = 0.0
     lr: float = 0.0
+    # Latest held-out validation loss (NaN when validation is disabled or
+    # hasn't run yet). Updated inside _run_validation() every
+    # validate_every_n_steps steps when validation_dir is configured.
+    val_loss: float = float("nan")
+    val_step: int = 0        # Global step at which val_loss was last measured
     running: bool = True
     paused: bool = False
     phase: str = "idle"
@@ -273,12 +279,21 @@ class Trainer:
         self._pause_event = threading.Event()    # set = paused
         self._resume_event = threading.Event()   # set = resume requested
         self._resume_event.set()                 # start unpaused
+        # Graceful stop: observed by _handle_on_demand_actions AFTER the
+        # pending save is processed, so state.running is only cleared
+        # once we've written a resumable checkpoint.
+        self._stop_requested: bool = False
 
         # ScheduleFree optimizer flag (needs .train()/.eval() lifecycle calls)
         self._is_schedulefree: bool = False
 
         # Last training batch caption (used as sample prompt)
         self._last_batch_caption: Optional[str] = None
+
+        # Held-out validation dataset + dataloader (built in setup() when
+        # config.validation_dir points to a folder with images+captions).
+        self._val_dataset: Optional["CachedTrainDataset"] = None
+        self._val_loader = None  # type: ignore[assignment]
 
         # Token weighting
         self._token_weighter = None
@@ -623,6 +638,17 @@ class Trainer:
             color_jitter_hue=getattr(config, "color_jitter_hue", 0.0),
             random_rotate_degrees=getattr(config, "random_rotate_degrees", 0.0),
         )
+
+        # ── 6b. Held-out validation dataset (OneTrainer parity) ──
+        # Built only when the user pointed validation_dir at a folder with
+        # images + matching .txt captions. Kept with zero augmentation and
+        # zero caption dropout so the eval signal is stable.
+        self._val_dataset = self._build_validation_dataset(config, cache_dir)
+        if self._val_dataset is not None:
+            log.info(
+                "Validation set: %d held-out samples, eval every %d steps",
+                len(self._val_dataset), config.validate_every_n_steps,
+            )
 
         # ── 7. Cache VAE latents ──
         if config.cache_latents:
@@ -1631,12 +1657,27 @@ class Trainer:
                         loss_fn(self.state.global_step, self.state.loss, self.state.lr)
 
                     if progress_fn:
+                        # Append val_loss when the last eval produced a
+                        # finite value. Keeps the message short when
+                        # validation is disabled or hasn't run yet.
+                        _val_suffix = ""
+                        if math.isfinite(self.state.val_loss):
+                            _val_suffix = f"  val: {self.state.val_loss:.4f}"
                         progress_fn(
                             self.state.global_step, self.total_steps,
                             f"Epoch {epoch + 1}/{config.epochs} "
                             f"Step {self.state.global_step}/{self.total_steps} "
-                            f"Loss: {self.state.loss:.4f}",
+                            f"Loss: {self.state.loss:.4f}{_val_suffix}",
                         )
+
+                    # ── Held-out validation ──
+                    # Run BEFORE checkpoint save so the val_loss in the
+                    # state dict (and in the sample-comparison UI) reflects
+                    # the same weights as the saved checkpoint.
+                    if (self._val_dataset is not None
+                            and config.validate_every_n_steps > 0
+                            and self.state.global_step % config.validate_every_n_steps == 0):
+                        self._run_validation()
 
                     # Save checkpoint — try/finally so ScheduleFree always
                     # returns to train() mode even if saving raises. Leaving
@@ -1878,6 +1919,174 @@ class Trainer:
         self.state.phase = "done"
         if progress_fn:
             progress_fn(self.total_steps, self.total_steps, "Training complete!")
+
+    # ══════════════════════════════════════════════════════════════════
+    # Held-out validation (OneTrainer parity)
+    # ══════════════════════════════════════════════════════════════════
+
+    def _build_validation_dataset(self, config: TrainingConfig, cache_dir):
+        """Construct a validation CachedTrainDataset, or return None.
+
+        Validation is optional — only active when validation_dir is set
+        to an existing folder and validate_every_n_steps > 0. The dataset
+        is capped at validation_samples_limit so eval stays fast.
+        """
+        if not config.validation_dir or config.validate_every_n_steps <= 0:
+            return None
+        val_dir = Path(config.validation_dir).expanduser()
+        if not val_dir.exists() or not val_dir.is_dir():
+            log.warning(
+                "validation_dir %s does not exist — validation disabled", val_dir,
+            )
+            return None
+
+        # Discover images + captions (same conventions as the main dataset)
+        from dataset_sorter.train_dataset import CachedTrainDataset
+
+        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        val_images: list[Path] = []
+        val_captions: list[str] = []
+        for img_path in sorted(val_dir.iterdir()):
+            if not img_path.is_file() or img_path.suffix.lower() not in exts:
+                continue
+            sidecar = img_path.with_suffix(".txt")
+            caption = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else ""
+            val_images.append(img_path)
+            val_captions.append(caption)
+            if len(val_images) >= max(1, config.validation_samples_limit):
+                break
+
+        if not val_images:
+            log.warning("No images found in %s — validation disabled", val_dir)
+            return None
+
+        # Zero augmentation / zero dropout on the validation set: we want
+        # a stable signal each eval, not a noisy one.
+        return CachedTrainDataset(
+            image_paths=val_images,
+            captions=val_captions,
+            resolution=config.resolution,
+            center_crop=True,
+            random_flip=False,
+            tag_shuffle=False,
+            keep_first_n_tags=0,
+            caption_dropout_rate=0.0,
+            cache_dir=None,  # Never persist validation latents to disk
+            bucket_assignments=None,
+        )
+
+    @torch.no_grad()
+    def _run_validation(self) -> float:
+        """Compute mean loss over the held-out validation set.
+
+        Must be called OUTSIDE the gradient accumulation window so that
+        accumulated grads aren't polluted. Saves + restores self.backend
+        training mode so the next step continues normally.
+
+        Returns:
+            Mean validation loss (float). Updates self.state.val_loss and
+            self.state.val_step as side effects.
+        """
+        if self._val_dataset is None or len(self._val_dataset) == 0:
+            return float("nan")
+
+        from torch.utils.data import DataLoader
+        from dataset_sorter.train_dataset import training_collate_fn
+
+        config = self.config
+        # Build loader on-demand (stateless — doesn't need persistent workers)
+        batch_size = max(1, min(config.batch_size, 4))
+        loader = DataLoader(
+            self._val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,  # In-proc: no fork-CUDA issue, no thread start cost
+            pin_memory=(self.device.type == "cuda"),
+            drop_last=False,
+            collate_fn=training_collate_fn,
+        )
+
+        # Switch to eval mode. ScheduleFree also needs .eval() so the
+        # averaged weights are used for the validation forward pass.
+        unet = self.backend.unet
+        was_training = unet.training
+        unet.eval()
+        if self._is_schedulefree:
+            self.optimizer.eval()
+
+        # Isolate from training-loop side effects:
+        # - spatial mask: we don't want to mask validation loss
+        # - per-sample weights: we want a straight mean
+        # - token weight mask: cleared so caption-weighted training doesn't
+        #   bleed into the val loss measurement
+        saved_mask = getattr(self.backend, "_training_mask", None)
+        saved_sample_w = getattr(self.backend, "_adaptive_sample_weights", None)
+        saved_token_w = getattr(self.backend, "_token_weight_mask", None)
+        self.backend._training_mask = None
+        if hasattr(self.backend, "_adaptive_sample_weights"):
+            self.backend._adaptive_sample_weights = None
+        if hasattr(self.backend, "_token_weight_mask"):
+            self.backend._token_weight_mask = None
+
+        # Fixed generator state so the random noise is the same on every
+        # validation pass → clean monotonic signal instead of noisy curve.
+        rng_state = torch.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state() if self.device.type == "cuda" else None
+        )
+        torch.manual_seed(42)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(42)
+
+        total_loss = 0.0
+        total_count = 0
+        try:
+            for batch in loader:
+                loss = self._training_step(batch)
+                if torch.isfinite(loss):
+                    total_loss += float(loss.item())
+                    total_count += 1
+        except Exception as exc:
+            log.warning("Validation forward failed (%s) — skipping this eval", exc)
+            total_count = 0
+        finally:
+            # Zero any grads that might have accumulated from the forward.
+            # _training_step computes loss without calling backward here,
+            # but tensors may still carry grad_fn so belt-and-suspenders it.
+            self.optimizer.zero_grad(set_to_none=True)
+            # Restore backend state
+            self.backend._training_mask = saved_mask
+            if hasattr(self.backend, "_adaptive_sample_weights"):
+                self.backend._adaptive_sample_weights = saved_sample_w
+            if hasattr(self.backend, "_token_weight_mask"):
+                self.backend._token_weight_mask = saved_token_w
+            # Restore RNG so training reproducibility isn't affected
+            torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+            if was_training:
+                unet.train()
+            if self._is_schedulefree:
+                self.optimizer.train()
+
+        mean_loss = (total_loss / total_count) if total_count > 0 else float("nan")
+        self.state.val_loss = mean_loss
+        self.state.val_step = self.state.global_step
+
+        # TensorBoard logging alongside training loss
+        if self._tb_logger is not None and self._tb_logger.available:
+            try:
+                self._tb_logger.log_scalar(
+                    "val/loss", mean_loss, self.state.global_step,
+                )
+            except Exception as exc:
+                log.debug("TB val/loss log failed: %s", exc)
+
+        log.info(
+            "Validation @ step %d: val_loss=%.4f (train loss=%.4f)",
+            self.state.global_step, mean_loss, self.state.loss,
+        )
+        return mean_loss
 
     def _training_step(self, batch, fp8_ctx=None) -> torch.Tensor:
         """Single training step — delegates loss to backend."""
@@ -2306,6 +2515,20 @@ class Trainer:
             "epoch_step": self.state.epoch_step,
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
+            # Persist latest val_loss so the UI shows a meaningful number
+            # immediately on resume instead of NaN until the next eval.
+            "val_loss": float(self.state.val_loss),
+            "val_step": int(self.state.val_step),
+            # Config fingerprint: structural fields the optimizer/scheduler
+            # state depends on. Mismatch on resume → warn the user.
+            "config_fingerprint": {
+                "model_type": config.model_type,
+                "optimizer": config.optimizer,
+                "lora_rank": config.lora_rank,
+                "batch_size": config.batch_size,
+                "gradient_accumulation": config.gradient_accumulation,
+                "lr_scheduler": config.lr_scheduler,
+            },
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
@@ -2379,9 +2602,18 @@ class Trainer:
         self.state.phase = "training"
 
     def _cleanup_old_checkpoints(self):
-        """Keep only the last N checkpoints (step, epoch, and manual).
+        """Keep only the last N AUTO checkpoints (step_* and epoch_*).
 
-        The 'final' checkpoint is always preserved.
+        Preserved unconditionally from pruning:
+          - "final"            : last post-training save
+          - "manual_*"         : user-triggered Save Now snapshots
+          - "emergency_*"      : atexit-saved crash recovery snapshots
+          - "epoch_*" before the latest "step_*" of the same epoch —
+            we only rotate step saves by mtime inside their own class
+            so a user with both step + epoch schedules doesn't see
+            one starving the other.
+
+        save_last_n_checkpoints <= 0 disables pruning entirely.
         """
         keep = self.config.save_last_n_checkpoints
         if keep <= 0:
@@ -2389,14 +2621,55 @@ class Trainer:
         ckpt_dir = self.output_dir / "checkpoints"
         if not ckpt_dir.exists():
             return
-        # Collect all checkpoint dirs except 'final' (always kept)
-        dirs = sorted(
-            [d for d in ckpt_dir.iterdir()
-             if d.is_dir() and d.name != "final"],
-            key=lambda d: d.stat().st_mtime,
-        )
-        while len(dirs) > keep:
-            shutil.rmtree(str(dirs.pop(0)), ignore_errors=True)
+
+        # Protected names/prefixes — never auto-deleted
+        PROTECTED_EXACT = {"final"}
+        PROTECTED_PREFIXES = ("manual_", "emergency_", "stopped_")
+
+        def is_protected(name: str) -> bool:
+            return (
+                name in PROTECTED_EXACT
+                or any(name.startswith(p) for p in PROTECTED_PREFIXES)
+            )
+
+        # Rotate step_* and epoch_* independently so a fast step schedule
+        # doesn't starve the epoch checkpoints (users often keep epoch
+        # checkpoints for longer-term bookkeeping).
+        step_dirs: list[Path] = []
+        epoch_dirs: list[Path] = []
+        for d in ckpt_dir.iterdir():
+            if not d.is_dir() or is_protected(d.name):
+                continue
+            if d.name.startswith("step_"):
+                step_dirs.append(d)
+            elif d.name.startswith("epoch_"):
+                epoch_dirs.append(d)
+            # Other unknown auto-save prefixes fall through the cracks and
+            # stay on disk — safer than deleting something we don't recognise.
+
+        def _sort_key(d: Path) -> tuple[int, float]:
+            """Parse numeric suffix from the name so sort order is
+            reliable even when filesystem mtimes have been touched by
+            backup tools or cloud sync. mtime is a tie-breaker.
+            """
+            import re
+            m = re.search(r"(\d+)$", d.name)
+            n = int(m.group(1)) if m else 0
+            try:
+                mt = d.stat().st_mtime
+            except OSError:
+                mt = 0.0
+            return (n, mt)
+
+        for bucket in (step_dirs, epoch_dirs):
+            bucket.sort(key=_sort_key)
+            while len(bucket) > keep:
+                victim = bucket.pop(0)
+                try:
+                    shutil.rmtree(str(victim), ignore_errors=True)
+                    log.info("Pruned old checkpoint: %s", victim.name)
+                except OSError as exc:
+                    log.warning("Could not prune %s: %s", victim, exc)
 
     @torch.no_grad()
     def _generate_samples(self, sample_fn: SampleCallback):
@@ -2524,16 +2797,36 @@ class Trainer:
                 )
 
     def _handle_on_demand_actions(self, sample_fn, progress_fn):
-        """Process save-now / sample-now / backup-now flags."""
+        """Process save-now / sample-now / backup-now / stop flags.
+
+        Stop is handled AFTER save so a user hitting Stop mid-epoch gets
+        a resumable checkpoint written first. Without this, pressing Stop
+        lost up to save_every_n_steps of progress.
+        """
         if self._save_now.is_set():
             self._save_now.clear()
-            log.info("On-demand save requested")
-            self._save_checkpoint(f"manual_{self.state.global_step:06d}")
+            # When Stop triggered this save, label it "stopped_" so users
+            # can visually distinguish intentional halts from Save Now.
+            _is_stop_save = self._stop_requested
+            _label = "stopped" if _is_stop_save else "manual"
+            log.info(
+                "On-demand save requested (%s)",
+                "stop + save" if _is_stop_save else "manual save",
+            )
+            self._save_checkpoint(f"{_label}_{self.state.global_step:06d}")
             if progress_fn:
-                progress_fn(
-                    self.state.global_step, self.total_steps,
-                    f"Manual save at step {self.state.global_step}",
+                msg = (
+                    f"Saved before stop at step {self.state.global_step}"
+                    if _is_stop_save
+                    else f"Manual save at step {self.state.global_step}"
                 )
+                progress_fn(self.state.global_step, self.total_steps, msg)
+
+        # Stop AFTER the save has completed so state is durable
+        if self._stop_requested:
+            self._stop_requested = False
+            self.state.running = False
+            log.info("Graceful stop complete — training loop exiting")
 
         if self._sample_now.is_set():
             self._sample_now.clear()
@@ -2547,10 +2840,20 @@ class Trainer:
             self._backup_project(progress_fn)
 
     def pause(self):
-        """Pause training (blocks at next step boundary)."""
+        """Pause training (blocks at next step boundary).
+
+        Also requests an immediate checkpoint save so the user can safely
+        close the app while paused without losing up to save_every_n_steps
+        worth of progress. The save runs inside the normal on-demand
+        pathway on the worker thread, before the pause-block takes effect.
+        """
+        # Only request save if we're actually training — avoids a spurious
+        # save when pause() is called before the loop has started.
+        if self.state.running and self.state.phase != "idle":
+            self._save_now.set()
         self._pause_event.set()
         self._resume_event.clear()
-        log.info("Pause requested")
+        log.info("Pause requested (auto-save triggered)")
 
     def resume(self):
         """Resume paused training."""
@@ -2571,9 +2874,22 @@ class Trainer:
         self._backup_now.set()
 
     def stop(self):
-        """Signal graceful stop (also unblocks pause)."""
-        self.state.running = False
-        # Unblock pause gate so the loop can exit
+        """Signal graceful stop with an auto-save first.
+
+        Sets _stop_requested + _save_now then UNBLOCKS pause. We do NOT
+        clear state.running here — doing so races with the loop's
+        top-of-iteration check and can skip the save. Instead the loop's
+        _handle_on_demand_actions() observes _save_now (saves) and then
+        _stop_requested (sets running=False), guaranteeing the save
+        completes before the loop exits regardless of when stop() was
+        called relative to the current iteration.
+        """
+        if self.state.running and self.state.phase not in ("idle", "done"):
+            self._save_now.set()
+            self._stop_requested = True
+        else:
+            # Not actively training — plain stop is fine
+            self.state.running = False
         self._pause_event.clear()
         self._resume_event.set()
 
@@ -2637,17 +2953,36 @@ class Trainer:
         if self.ema_model is not None:
             torch.save(self.ema_model.state_dict(), str(backup_dir / "ema_weights.pt"))
 
-        # Save optimizer + scheduler state
+        # Save FULL resumable state — previously this dict was missing
+        # epoch_step, dl_generator, random_states, and the config
+        # fingerprint, meaning a "backup" wasn't actually a valid resume
+        # point (the next epoch would restart from batch 0, augmentation
+        # RNG would differ, etc.). Match _save_checkpoint exactly.
+        config = self.config
         backup_state = {
             "global_step": self.state.global_step,
             "epoch": self.state.epoch,
+            "epoch_step": self.state.epoch_step,
             "loss": self.state.loss,
             "lr": self.state.lr,
+            "val_loss": float(self.state.val_loss),
+            "val_step": int(self.state.val_step),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
+            "random_states": capture_random_states(),
+            "config_fingerprint": {
+                "model_type": config.model_type,
+                "optimizer": config.optimizer,
+                "lora_rank": config.lora_rank,
+                "batch_size": config.batch_size,
+                "gradient_accumulation": config.gradient_accumulation,
+                "lr_scheduler": config.lr_scheduler,
+            },
         }
         if self.grad_scaler is not None:
             backup_state["grad_scaler"] = self.grad_scaler.state_dict()
+        if getattr(self, '_dl_generator', None) is not None:
+            backup_state["dl_generator"] = self._dl_generator.get_state()
         backup_state_path = backup_dir / "training_state.pt"
         backup_tmp_path = backup_dir / "training_state.pt.tmp"
         torch.save(backup_state, str(backup_tmp_path))
@@ -2746,6 +3081,52 @@ class Trainer:
         self.state.global_step = state["global_step"]
         self.state.epoch = state["epoch"]
         self.state.epoch_step = state.get("epoch_step", 0)
+        # Restore latest val_loss so the UI shows something meaningful.
+        self.state.val_loss = float(state.get("val_loss", float("nan")))
+        self.state.val_step = int(state.get("val_step", 0))
+
+        # Warn on structural config mismatch. These are the fields the
+        # optimizer/scheduler/model state depends on — changing any of
+        # them mid-run will either fail to load state or silently corrupt
+        # training dynamics (e.g. different LR schedule from the saved
+        # one). We warn rather than hard-fail because some mismatches
+        # (batch_size, gradient_accumulation) are intentional for
+        # OOM-recovery workflows.
+        saved_fp = state.get("config_fingerprint")
+        if isinstance(saved_fp, dict):
+            current_fp = {
+                "model_type": self.config.model_type,
+                "optimizer": self.config.optimizer,
+                "lora_rank": self.config.lora_rank,
+                "batch_size": self.config.batch_size,
+                "gradient_accumulation": self.config.gradient_accumulation,
+                "lr_scheduler": self.config.lr_scheduler,
+            }
+            diffs = {
+                k: (saved_fp.get(k), current_fp.get(k))
+                for k in current_fp
+                if saved_fp.get(k) != current_fp.get(k)
+            }
+            if diffs:
+                # model_type / optimizer / lr_scheduler mismatches are
+                # high-severity — optimizer state won't transfer cleanly.
+                severe = any(
+                    k in diffs
+                    for k in ("model_type", "optimizer", "lr_scheduler", "lora_rank")
+                )
+                level = log.warning if severe else log.info
+                level(
+                    "Resume config mismatch (%s): %s",
+                    "SEVERE" if severe else "minor",
+                    ", ".join(f"{k}: {saved}→{cur}" for k, (saved, cur) in diffs.items()),
+                )
+                if severe:
+                    log.warning(
+                        "Structural config changed since checkpoint. "
+                        "Optimizer/scheduler state may load with warnings "
+                        "or be reset. Consider starting a new run if "
+                        "results differ unexpectedly."
+                    )
 
         if self.optimizer is not None and "optimizer" in state:
             try:
