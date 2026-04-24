@@ -286,3 +286,52 @@ class TestOOMRetryLogic:
         assert running_loss == 0.0
         assert _valid_microbatches == 0
         assert _accum_count == 0
+
+
+# ── Atomic write tests ──────────────────────────────────────────────────
+
+class TestAtomicWrites:
+    """Verify that critical file writes use temp + rename pattern."""
+
+    def test_project_save_uses_atomic_write(self, tmp_path):
+        from dataset_sorter.project_manager import Project
+        proj = Project(name="test_atomic", path=tmp_path)
+        proj.architecture = "sdxl"
+        proj.save()
+        assert (tmp_path / "project.json").exists()
+        # No leftover .tmp file
+        assert not (tmp_path / "project.json.tmp").exists()
+
+    def test_settings_save_uses_atomic_write(self, tmp_path):
+        from dataset_sorter.app_settings import AppSettings
+        settings = AppSettings()
+        settings_path = tmp_path / "settings.json"
+        with patch.object(AppSettings, "get_settings_path", return_value=settings_path):
+            settings.save()
+        assert settings_path.exists()
+        assert not settings_path.with_suffix(".tmp").exists()
+
+    def test_smart_resume_history_atomic(self, tmp_path):
+        from dataset_sorter.smart_resume import save_loss_history
+        save_loss_history(tmp_path, loss_history=[(100, 0.05), (200, 0.03)])
+        history_path = tmp_path / "loss_history.json"
+        assert history_path.exists()
+        assert not history_path.with_suffix(".tmp").exists()
+
+
+# ── EMA CPU offload efficiency test ─────────────────────────────────────
+
+class TestEMACPUOffloadEfficiency:
+    def test_cpu_offload_single_transfer(self):
+        """Verify CPU offload path transfers data once, not twice."""
+        import torch.nn as nn
+        from dataset_sorter.ema import EMAModel
+        model = nn.Linear(4, 4)
+        ema = EMAModel(model.parameters(), decay=0.999, cpu_offload=True)
+        ema.step = 2  # Past update_after_step
+        # Should work without error (no NaN)
+        ema.update(model.parameters())
+        # Shadow params should have been updated
+        for sp in ema.shadow_params:
+            assert sp.device.type == "cpu"
+            assert sp.dtype == torch.float32
