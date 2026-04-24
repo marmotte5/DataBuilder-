@@ -1136,15 +1136,16 @@ class GenerateWorker(QThread):
                 self._emit(self.error, f"LoRA not found: {path}")
                 continue
 
+            remapped_tmp = None
             try:
                 p = Path(path)
                 load_kwargs = {"adapter_name": name}
 
                 if p.is_file():
                     # Remap PEFT-format keys if needed before loading
-                    remapped = self._remap_peft_lora_file(str(p))
-                    if remapped:
-                        rp = Path(remapped)
+                    remapped_tmp = self._remap_peft_lora_file(str(p))
+                    if remapped_tmp:
+                        rp = Path(remapped_tmp)
                         load_kwargs["weight_name"] = rp.name
                         load_dir = str(rp.parent)
                     else:
@@ -1161,6 +1162,16 @@ class GenerateWorker(QThread):
             except Exception as e:
                 log.warning(f"Failed to load LoRA '{name}': {e}")
                 self._emit(self.error,f"Failed to load LoRA '{name}': {e}")
+            finally:
+                # Delete the PEFT-remapped temp file now that diffusers has
+                # parsed its state dict. Previously these accumulated in /tmp
+                # (hundreds of MB to GB per LoRA load, never cleaned up).
+                if remapped_tmp:
+                    try:
+                        import os
+                        os.unlink(remapped_tmp)
+                    except OSError:
+                        pass
 
         # Set adapter weights if multiple
         if len(adapter_names) > 1:
@@ -1598,19 +1609,33 @@ class GenerateWorker(QThread):
         with self._inference_lock:
             _override_adapter = None
             _prev_active_adapters = None
+            _prev_adapter_weights = None
             try:
                 _load_scheduler(pipe_ref, scheduler_name, model_type)
                 active_pipe, pipe_mode = self._get_pipeline_for_mode(pipe_ref, init_image, mask_image)
 
                 # Apply per-call LoRA override. Snapshot previously-active
-                # adapters so we can restore them after this call completes
-                # (otherwise base LoRAs would stay disabled).
+                # adapters AND their weights so we can restore the exact
+                # prior state — restoring with hardcoded 1.0 corrupts the
+                # user's intended multi-adapter mix.
                 if override_lora_path and Path(override_lora_path).exists():
                     try:
                         if hasattr(pipe_ref, "get_active_adapters"):
                             _prev_active_adapters = list(pipe_ref.get_active_adapters() or [])
                         elif hasattr(pipe_ref, "get_list_adapters"):
                             _prev_active_adapters = list(pipe_ref.get_list_adapters() or [])
+                        # Snapshot weights from the configured adapter list
+                        # by name. Falls back to 1.0 for any adapter not in
+                        # _lora_adapters (shouldn't happen in practice).
+                        _prior_weights_map = {
+                            a.get("name", f"adapter_{i}"): float(a.get("weight", 1.0))
+                            for i, a in enumerate(self._lora_adapters or [])
+                        }
+                        if _prev_active_adapters:
+                            _prev_adapter_weights = [
+                                _prior_weights_map.get(n, 1.0)
+                                for n in _prev_active_adapters
+                            ]
 
                         _override_adapter = f"_override_{id(pipe_ref)}"
                         p_lora = Path(override_lora_path)
@@ -1655,9 +1680,18 @@ class GenerateWorker(QThread):
                         log.debug(f"Could not delete override LoRA adapter: {e}")
                     if _prev_active_adapters:
                         try:
+                            # Restore with the snapshotted weights when
+                            # available, otherwise fall back to 1.0 per
+                            # adapter (legacy behaviour).
+                            _restore_weights = (
+                                _prev_adapter_weights
+                                if _prev_adapter_weights is not None
+                                and len(_prev_adapter_weights) == len(_prev_active_adapters)
+                                else [1.0] * len(_prev_active_adapters)
+                            )
                             pipe_ref.set_adapters(
                                 _prev_active_adapters,
-                                [1.0] * len(_prev_active_adapters),
+                                _restore_weights,
                             )
                         except Exception as e:
                             log.debug(f"Could not restore prior LoRA adapters: {e}")
