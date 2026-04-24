@@ -180,6 +180,15 @@ class TrainingTabBuildersMixin:
             self.lora_init_combo.addItem(label, key)
         g2l.addWidget(self.lora_init_combo, 7, 1)
 
+        g2l.addWidget(_param_label("LoRA+ Ratio", "0 = off, 16 typical"), 8, 0)
+        self.lora_plus_spin = QDoubleSpinBox()
+        self.lora_plus_spin.setRange(0, 64.0)
+        self.lora_plus_spin.setDecimals(1)
+        self.lora_plus_spin.setSingleStep(1.0)
+        self.lora_plus_spin.setValue(0.0)
+        self.lora_plus_spin.setToolTip("LoRA+ learning rate multiplier for lora_B weights. 0=off. 16=typical. Speeds up convergence.")
+        g2l.addWidget(self.lora_plus_spin, 8, 1)
+
         g2.setLayout(g2l)
         layout.addWidget(g2)
 
@@ -1643,6 +1652,15 @@ class TrainingTabBuildersMixin:
         )
         g3l.addWidget(self.tf32_check)
 
+        self.stochastic_rounding_check = QCheckBox("Stochastic Rounding (BF16 — reduces quantization bias)")
+        self.stochastic_rounding_check.setChecked(False)
+        self.stochastic_rounding_check.setToolTip(
+            "Randomly round BF16 values up/down instead of always rounding to nearest.\n"
+            "Reduces systematic quantization bias in gradient accumulation.\n"
+            "Only effective with BF16 mixed precision."
+        )
+        g3l.addWidget(self.stochastic_rounding_check)
+
         # Dynamic precision advice
         self.precision_advice_label = QLabel("")
         self.precision_advice_label.setWordWrap(True)
@@ -1692,6 +1710,11 @@ class TrainingTabBuildersMixin:
             self.save_prec_combo.addItem(label, key)
         self.save_prec_combo.setToolTip("Precision for saved checkpoints. bf16 is smallest, fp32 is most compatible.")
         g4l.addWidget(self.save_prec_combo, 3, 1)
+
+        self.save_final_check = QCheckBox("Save Final Checkpoint")
+        self.save_final_check.setChecked(True)
+        self.save_final_check.setToolTip("Save a checkpoint at end of training. Disable to rely on periodic saves only.")
+        g4l.addWidget(self.save_final_check, 4, 0, 1, 2)
 
         g4.setLayout(g4l)
         layout.addWidget(g4)

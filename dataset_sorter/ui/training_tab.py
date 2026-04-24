@@ -1743,6 +1743,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                             setattr(config, key, type(current)(value))
                     except (ValueError, TypeError):
                         pass
+            self._last_loaded_config = data
             self.apply_config(config)
             log.debug(f"Restored training config from autosave: {p}")
         except Exception as e:

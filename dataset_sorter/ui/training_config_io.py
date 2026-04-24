@@ -50,8 +50,15 @@ class TrainingConfigIOMixin:
         Reads model, network, optimizer, dataset, advanced, checkpointing,
         sampling, and RLHF settings from their respective spin boxes, combo
         boxes, and check boxes.
+
+        Starts from _last_loaded_config (if set by _load_training_config)
+        so that JSON-only fields (Marmotte sub-params, Z-Image flags, etc.)
+        survive a UI save/load roundtrip.
         """
-        config = TrainingConfig()
+        base = getattr(self, "_last_loaded_config", None)
+        config = TrainingConfig() if base is None else TrainingConfig(**{
+            k: v for k, v in base.items() if hasattr(TrainingConfig, k) and v is not None
+        })
 
         # Model
         idx = self.train_model_combo.currentIndex()
@@ -71,6 +78,7 @@ class TrainingConfigIOMixin:
         config.use_dora = self.dora_check.isChecked()
         config.use_rslora = self.rslora_check.isChecked()
         config.lora_init = self.lora_init_combo.currentData() or "default"
+        config.lora_plus_ratio = self.lora_plus_spin.value()
 
         # EMA
         config.use_ema = self.ema_check.isChecked()
@@ -180,6 +188,7 @@ class TrainingConfigIOMixin:
 
         config.cudnn_benchmark = self.cudnn_check.isChecked()
         config.enable_tf32 = self.tf32_check.isChecked()
+        config.stochastic_rounding = self.stochastic_rounding_check.isChecked()
         config.mixed_precision = self.precision_combo.currentData() or "bf16"
 
         attn = self.attention_combo.currentData() or "sdpa"
@@ -192,6 +201,7 @@ class TrainingConfigIOMixin:
         config.save_every_n_epochs = self.save_epochs_spin.value()
         config.save_last_n_checkpoints = self.keep_ckpt_spin.value()
         config.save_precision = self.save_prec_combo.currentData() or "bf16"
+        config.save_final_checkpoint = self.save_final_check.isChecked()
 
         # Held-out validation (optional — 0 / empty = disabled)
         if hasattr(self, "val_dir_input"):
@@ -303,6 +313,7 @@ class TrainingConfigIOMixin:
             if self.lora_init_combo.itemData(i) == config.lora_init:
                 self.lora_init_combo.setCurrentIndex(i)
                 break
+        self.lora_plus_spin.setValue(getattr(config, "lora_plus_ratio", 0.0))
 
         # EMA
         self.ema_check.setChecked(config.use_ema)
@@ -434,6 +445,7 @@ class TrainingConfigIOMixin:
 
         self.cudnn_check.setChecked(config.cudnn_benchmark)
         self.tf32_check.setChecked(getattr(config, "enable_tf32", False))
+        self.stochastic_rounding_check.setChecked(getattr(config, "stochastic_rounding", False))
         # Migrate legacy "fp32" value to "no" (accelerate-style naming)
         _prec = config.mixed_precision if config.mixed_precision != "fp32" else "no"
         _prec_keys = list(MIXED_PRECISION_LABELS.keys())
@@ -456,6 +468,7 @@ class TrainingConfigIOMixin:
             if self.save_prec_combo.itemData(i) == config.save_precision:
                 self.save_prec_combo.setCurrentIndex(i)
                 break
+        self.save_final_check.setChecked(getattr(config, "save_final_checkpoint", True))
 
         # Held-out validation
         if hasattr(self, "val_dir_input"):
@@ -614,6 +627,7 @@ class TrainingConfigIOMixin:
                         setattr(config, key, type(current)(value))
                 except (ValueError, TypeError):
                     pass  # Keep default rather than setting an incompatible value
+        self._last_loaded_config = data
         self.apply_config(config)
         self._log(f"Training config loaded: {path}")
         show_toast(self, "Training config loaded", "success")
