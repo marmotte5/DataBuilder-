@@ -13,81 +13,114 @@ from dataset_sorter.ui.theme import COLORS
 
 def _heading(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color: {COLORS['header']}; font-size: 18px; font-weight: 700; "
-        f"background: transparent; padding: 12px 0 4px 0;"
-    )
+    lbl.setProperty("role", "heading")
     lbl.setWordWrap(True)
+    _apply_heading_style(lbl)
     return lbl
 
 
 def _subheading(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color: {COLORS['accent']}; font-size: 14px; font-weight: 600; "
-        f"background: transparent; padding: 8px 0 2px 0;"
-    )
+    lbl.setProperty("role", "subheading")
     lbl.setWordWrap(True)
+    _apply_subheading_style(lbl)
     return lbl
 
 
 def _body(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color: {COLORS['text']}; font-size: 13px; line-height: 1.6; "
-        f"background: transparent; padding: 2px 0;"
-    )
+    lbl.setProperty("role", "body")
     lbl.setWordWrap(True)
+    _apply_body_style(lbl)
     return lbl
 
 
 def _tip_box(text: str) -> QLabel:
     lbl = QLabel(text)
+    lbl.setProperty("role", "tip")
+    lbl.setWordWrap(True)
+    _apply_tip_style(lbl)
+    return lbl
+
+
+def _step_card(number: str, title: str, description: str) -> QWidget:
+    card = QWidget()
+    card.setProperty("role", "step-card")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(6)
+
+    step_lbl = QLabel(f"Step {number}")
+    step_lbl.setProperty("role", "step-number")
+    layout.addWidget(step_lbl)
+
+    title_lbl = QLabel(title)
+    title_lbl.setProperty("role", "step-title")
+    title_lbl.setWordWrap(True)
+    layout.addWidget(title_lbl)
+
+    desc_lbl = QLabel(description)
+    desc_lbl.setProperty("role", "step-desc")
+    desc_lbl.setWordWrap(True)
+    layout.addWidget(desc_lbl)
+
+    _apply_step_card_styles(card)
+    return card
+
+
+def _apply_heading_style(lbl: QLabel) -> None:
+    lbl.setStyleSheet(
+        f"color: {COLORS['header']}; font-size: 18px; font-weight: 700; "
+        f"background: transparent; padding: 12px 0 4px 0;"
+    )
+
+
+def _apply_subheading_style(lbl: QLabel) -> None:
+    lbl.setStyleSheet(
+        f"color: {COLORS['accent']}; font-size: 14px; font-weight: 600; "
+        f"background: transparent; padding: 8px 0 2px 0;"
+    )
+
+
+def _apply_body_style(lbl: QLabel) -> None:
+    lbl.setStyleSheet(
+        f"color: {COLORS['text']}; font-size: 13px; line-height: 1.6; "
+        f"background: transparent; padding: 2px 0;"
+    )
+
+
+def _apply_tip_style(lbl: QLabel) -> None:
     lbl.setStyleSheet(
         f"background-color: {COLORS['accent_subtle']}; "
         f"color: {COLORS['accent_hover']}; "
         f"border: 1px solid {COLORS['accent']}; border-radius: 10px; "
         f"padding: 12px 16px; font-size: 12px; font-weight: 500;"
     )
-    lbl.setWordWrap(True)
-    return lbl
 
 
-def _step_card(number: str, title: str, description: str) -> QWidget:
-    card = QWidget()
+def _apply_step_card_styles(card: QWidget) -> None:
     card.setStyleSheet(
         f"QWidget {{ background-color: {COLORS['bg_alt']}; "
         f"border: 1px solid {COLORS['border']}; border-radius: 12px; }}"
     )
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(16, 14, 16, 14)
-    layout.setSpacing(6)
-
-    step_lbl = QLabel(f"Step {number}")
-    step_lbl.setStyleSheet(
-        f"color: {COLORS['accent']}; font-size: 11px; font-weight: 700; "
-        f"text-transform: uppercase; letter-spacing: 1px; background: transparent; "
-        f"border: none;"
-    )
-    layout.addWidget(step_lbl)
-
-    title_lbl = QLabel(title)
-    title_lbl.setStyleSheet(
-        f"color: {COLORS['header']}; font-size: 15px; font-weight: 700; "
-        f"background: transparent; border: none;"
-    )
-    title_lbl.setWordWrap(True)
-    layout.addWidget(title_lbl)
-
-    desc_lbl = QLabel(description)
-    desc_lbl.setStyleSheet(
-        f"color: {COLORS['text_secondary']}; font-size: 12px; "
-        f"background: transparent; border: none;"
-    )
-    desc_lbl.setWordWrap(True)
-    layout.addWidget(desc_lbl)
-
-    return card
+    for child in card.findChildren(QLabel):
+        role = child.property("role")
+        if role == "step-number":
+            child.setStyleSheet(
+                f"color: {COLORS['accent']}; font-size: 11px; font-weight: 700; "
+                f"text-transform: uppercase; letter-spacing: 1px; "
+                f"background: transparent; border: none;"
+            )
+        elif role == "step-title":
+            child.setStyleSheet(
+                f"color: {COLORS['header']}; font-size: 15px; font-weight: 700; "
+                f"background: transparent; border: none;"
+            )
+        elif role == "step-desc":
+            child.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 12px; "
+                f"background: transparent; border: none;"
+            )
 
 
 class HelpTab(QWidget):
@@ -294,3 +327,19 @@ class HelpTab(QWidget):
         layout.addStretch()
         scroll.setWidget(container)
         outer.addWidget(scroll)
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        for lbl in self.findChildren(QLabel):
+            role = lbl.property("role")
+            if role == "heading":
+                _apply_heading_style(lbl)
+            elif role == "subheading":
+                _apply_subheading_style(lbl)
+            elif role == "body":
+                _apply_body_style(lbl)
+            elif role == "tip":
+                _apply_tip_style(lbl)
+        for w in self.findChildren(QWidget):
+            if w.property("role") == "step-card":
+                _apply_step_card_styles(w)

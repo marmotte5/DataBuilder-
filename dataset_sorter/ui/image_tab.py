@@ -241,3 +241,22 @@ class ImageTab(QWidget):
     def refresh(self):
         """Redraw the current image and its metadata."""
         self._show_current()
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        from dataset_sorter.ui.theme import (
+            COLORS, NAV_BUTTON_STYLE, ACCENT_BUTTON_STYLE,
+            MUTED_LABEL_STYLE, TAG_BADGE_STYLE,
+        )
+        self.img_display.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 12px;"
+        )
+        self.index_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-weight: 600; "
+            f"font-size: 13px; background: transparent;"
+        )
+        self.path_label.setStyleSheet(MUTED_LABEL_STYLE)
+        self.bucket_label.setStyleSheet(TAG_BADGE_STYLE)
+        self.btn_prev.setStyleSheet(NAV_BUTTON_STYLE)
+        self.btn_next.setStyleSheet(NAV_BUTTON_STYLE)

@@ -2172,6 +2172,13 @@ class MainWindow(QMainWindow):
             f"QPushButton:pressed {{ background-color: {c['accent_subtle']}; }}"
         )
         self._update_mode_buttons()
+        # Refresh sub-panels/tabs that have inline styles
+        for attr in ('override_panel', 'image_tab', 'preview_tab',
+                     'help_tab', 'reco_tab', 'library_tab',
+                     'batch_tab', 'comparison_tab', 'merge_tab'):
+            widget = getattr(self, attr, None)
+            if widget is not None and hasattr(widget, 'refresh_theme'):
+                widget.refresh_theme()
 
     def _toggle_theme(self):
         """Switch between dark and light themes."""
