@@ -263,7 +263,17 @@ class FP8TrainingWrapper:
     def __init__(self, model: nn.Module, device: torch.device, enabled: bool = True):
         self.model = model
         self.device = device
-        self.enabled = enabled and device.type == "cuda" and _FP8_DTYPES_AVAILABLE
+        # Gate on hardware capability (sm_89+) in addition to dtype availability
+        _hw_capable = False
+        if device.type == "cuda" and torch.cuda.is_available():
+            _cap = torch.cuda.get_device_capability()
+            _hw_capable = _cap >= (8, 9)
+            if enabled and not _hw_capable:
+                log.warning(
+                    "FP8 requested but GPU is sm_%d%d (requires sm_89+). Disabling FP8.",
+                    _cap[0], _cap[1],
+                )
+        self.enabled = enabled and device.type == "cuda" and _FP8_DTYPES_AVAILABLE and _hw_capable
         self._scaling_tracker = FP8ScalingTracker()
         self._te_mode = _TE_AVAILABLE and self.enabled
         self._manual_mode = self.enabled and not self._te_mode

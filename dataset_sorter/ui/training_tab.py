@@ -1711,10 +1711,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _reset_autosave_badge(self, badge):
         """Restore the autosave badge to its default text and color."""
-        badge.setText("Auto-save: On")
-        badge.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
-        )
+        try:
+            badge.setText("Auto-save: On")
+            badge.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+            )
+        except RuntimeError:
+            pass
 
     def _restore_autosave(self):
         """Restore training config from autosave file if it exists."""

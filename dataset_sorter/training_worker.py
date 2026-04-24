@@ -119,7 +119,7 @@ class TrainingWorker(QThread):
             t = worker.trainer
             if t is None:
                 return
-            if not getattr(t, '_running', False):
+            if not getattr(t.state, 'running', False):
                 return
             try:
                 log.warning("Emergency checkpoint save triggered by process exit")
