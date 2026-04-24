@@ -1141,6 +1141,18 @@ class Trainer:
                 te_cached=config.cache_text_encoder,
             )
 
+            # SafetensorsMMapDataset.__getitem__ calls tensor.to(cuda, ...)
+            # which fails in forked DataLoader worker subprocesses
+            # ("Cannot re-initialize CUDA in forked subprocess"). Force
+            # num_workers=0 for this path — mmap is already zero-copy I/O
+            # so extra workers give little benefit.
+            from dataset_sorter.mmap_dataset import SafetensorsMMapDataset
+            if isinstance(self.dataset, SafetensorsMMapDataset) and self.device.type == "cuda":
+                if use_workers > 0:
+                    log.info("mmap_dataset + CUDA: forcing num_workers=0 "
+                             "(CUDA tensors cannot cross fork boundary).")
+                use_workers = 0
+
             from dataset_sorter.train_dataset import training_collate_fn
 
             if self._bucket_sampler is not None:
@@ -1226,16 +1238,18 @@ class Trainer:
             log.info("Async optimizer step enabled (overlaps with next forward pass)")
 
         # ── CUDA Graph Training Wrapper ──
-        # Fixed: noise and timesteps are now generated OUTSIDE the graph
-        # and passed as explicit inputs, preserving stochasticity.
+        # NOTE: this wrapper is instantiated but not yet integrated into the
+        # training step. The flag exists for forward-compat; enabling it has
+        # no effect until the training loop is refactored to route through
+        # self._cuda_graph.step(train_fn, ...).
         if config.cuda_graph_training and self.device.type == "cuda":
             from dataset_sorter.speed_optimizations import CUDAGraphWrapper
             self._cuda_graph = CUDAGraphWrapper(
                 warmup_steps=config.cuda_graph_warmup, enabled=True,
             )
-            log.info(
-                f"CUDA graph training enabled (warmup={config.cuda_graph_warmup}). "
-                f"Noise generated outside graph for stochasticity."
+            log.warning(
+                "cuda_graph_training=True: wrapper created but not yet "
+                "wired into the training step — currently a no-op."
             )
 
         # ── Fused Backward Pass ──
@@ -1499,6 +1513,15 @@ class Trainer:
 
                             self.scheduler.step()
                             self.optimizer.zero_grad(set_to_none=True)
+
+                    # Async optimizer launches step() on a separate CUDA
+                    # stream. sr_hook and EMA both read/write p.data on the
+                    # default stream — without an explicit sync they race
+                    # with the async step, producing silent weight corruption.
+                    if self._async_optimizer is not None and (
+                        sr_hook is not None or self.ema_model is not None
+                    ):
+                        self._async_optimizer.sync()
 
                     # Stochastic rounding: reduce bf16 truncation bias
                     if sr_hook is not None:
