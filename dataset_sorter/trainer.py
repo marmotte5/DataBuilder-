@@ -1424,60 +1424,80 @@ class Trainer:
                 if _speculative_predictor is not None:
                     _speculative_predictor.speculate()
 
-                # ── Forward + loss ──
+                # ── Forward + backward ──
+                # Wrapped in OOM handler: on CUDA OutOfMemoryError we clear
+                # the cache and skip the batch instead of crashing the session.
                 _fp8_ctx = self._fp8_wrapper.fp8_context() if self._fp8_wrapper is not None else None
-                if _zero_loader is not None:
-                    # Zero-bottleneck path: data already on GPU, skip _training_step
-                    latents = batch["latents"]
-                    te_out = batch.get("te_out", ())
-                    bsz = latents.shape[0]
-                    if _fp8_ctx is not None:
-                        with _fp8_ctx:
+                try:
+                    if _zero_loader is not None:
+                        latents = batch["latents"]
+                        te_out = batch.get("te_out", ())
+                        bsz = latents.shape[0]
+                        if _fp8_ctx is not None:
+                            with _fp8_ctx:
+                                loss = self.backend.training_step(latents, te_out, bsz)
+                        else:
                             loss = self.backend.training_step(latents, te_out, bsz)
                     else:
-                        loss = self.backend.training_step(latents, te_out, bsz)
-                else:
-                    # ── Track last caption for sample generation ──
-                    if "caption" in batch:
-                        cap = batch["caption"]
-                        if isinstance(cap, (list, tuple)):
-                            self._last_batch_caption = cap[-1]
-                        elif isinstance(cap, str):
-                            self._last_batch_caption = cap
+                        if "caption" in batch:
+                            cap = batch["caption"]
+                            if isinstance(cap, (list, tuple)):
+                                self._last_batch_caption = cap[-1]
+                            elif isinstance(cap, str):
+                                self._last_batch_caption = cap
 
-                    loss = self._training_step(batch, _fp8_ctx)
-                loss = loss / grad_accum_steps
+                        loss = self._training_step(batch, _fp8_ctx)
+                    loss = loss / grad_accum_steps
 
-                # ── NaN guard: skip backward if loss is NaN/Inf ──
-                # Do NOT zero_grad here — backward() was never called so no
-                # bad gradients were added. Clearing would destroy valid
-                # gradients accumulated from earlier steps in this window.
-                if torch.isnan(loss) or torch.isinf(loss):
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        _epoch_nan_count += 1
+                        if _speculative_predictor is not None:
+                            _speculative_predictor.restore()
+                        log.warning(
+                            f"NaN/Inf loss at step {self.state.global_step + 1} "
+                            f"(micro-batch {_accum_count}/{grad_accum_steps}), "
+                            f"skipping backward pass"
+                        )
+                        try:
+                            from dataset_sorter.ui.debug_console import log_worker_event
+                            log_worker_event(
+                                "Trainer", "NaN/Inf loss detected",
+                                f"step={self.state.global_step + 1}, "
+                                f"epoch_nan_count={_epoch_nan_count}",
+                            )
+                        except Exception:
+                            pass
+                        continue
+
+                    if self.grad_scaler is not None:
+                        self.grad_scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+
+                except torch.cuda.OutOfMemoryError:
                     _epoch_nan_count += 1
-                    # Undo speculative gradient (params were pre-modified)
                     if _speculative_predictor is not None:
                         _speculative_predictor.restore()
+                    self.optimizer.zero_grad(set_to_none=True)
+                    # Reset accumulation window so stale partial-sum loss
+                    # doesn't leak into the next optimizer step.
+                    running_loss = 0.0
+                    _valid_microbatches = 0
+                    _accum_count = 0
+                    empty_cache()
                     log.warning(
-                        f"NaN/Inf loss at step {self.state.global_step + 1} "
-                        f"(micro-batch {_accum_count}/{grad_accum_steps}), "
-                        f"skipping backward pass"
+                        "CUDA OOM at step %d — batch skipped, VRAM cleared",
+                        self.state.global_step + 1,
                     )
                     try:
                         from dataset_sorter.ui.debug_console import log_worker_event
                         log_worker_event(
-                            "Trainer", "NaN/Inf loss detected",
-                            f"step={self.state.global_step + 1}, "
-                            f"epoch_nan_count={_epoch_nan_count}",
+                            "Trainer", "OOM — batch skipped",
+                            f"step={self.state.global_step + 1}",
                         )
                     except Exception:
                         pass
                     continue
-
-                # ── Backward (with GradScaler for fp16) ──
-                if self.grad_scaler is not None:
-                    self.grad_scaler.scale(loss).backward()
-                else:
-                    loss.backward()
 
                 # ── Speculative gradient: correct prediction after backward ──
                 if _speculative_predictor is not None:
@@ -2813,7 +2833,13 @@ class Trainer:
                 "On-demand save requested (%s)",
                 "stop + save" if _is_stop_save else "manual save",
             )
-            self._save_checkpoint(f"{_label}_{self.state.global_step:06d}")
+            if self._is_schedulefree:
+                self.optimizer.eval()
+            try:
+                self._save_checkpoint(f"{_label}_{self.state.global_step:06d}")
+            finally:
+                if self._is_schedulefree:
+                    self.optimizer.train()
             if progress_fn:
                 msg = (
                     f"Saved before stop at step {self.state.global_step}"
@@ -3106,10 +3132,9 @@ class Trainer:
                 k: (saved_fp.get(k), current_fp.get(k))
                 for k in current_fp
                 if saved_fp.get(k) != current_fp.get(k)
+                and k in saved_fp  # skip keys absent from older checkpoints
             }
             if diffs:
-                # model_type / optimizer / lr_scheduler mismatches are
-                # high-severity — optimizer state won't transfer cleanly.
                 severe = any(
                     k in diffs
                     for k in ("model_type", "optimizer", "lr_scheduler", "lora_rank")

@@ -495,8 +495,8 @@ class SOAP(Optimizer):
                 # Initialize state
                 if len(state) == 0:
                     state["step"] = 0
-                    state["exp_avg"] = torch.zeros_like(p)
-                    state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["exp_avg"] = torch.zeros(p.shape, dtype=torch.float32, device=p.device)
+                    state["exp_avg_sq"] = torch.zeros(p.shape, dtype=torch.float32, device=p.device)
                     # Preconditioner eigenvectors (identity init)
                     shape = p.shape
                     state["Q"] = []
@@ -547,9 +547,9 @@ class SOAP(Optimizer):
                         exp_avg_sq.mul_(beta2)
 
                 # Rotate gradient into eigenbasis
-                rotated_grad = self._rotate(grad, state["Q"], forward=True)
+                rotated_grad = self._rotate(grad, state["Q"], forward=True).float()
 
-                # Adam update in rotated space
+                # Adam update in rotated space (FP32 moments)
                 exp_avg.lerp_(rotated_grad, 1 - beta1)
                 exp_avg_sq.mul_(beta2).addcmul_(rotated_grad, rotated_grad, value=1 - beta2)
 
@@ -614,10 +614,11 @@ class SOAP(Optimizer):
         for i, Q in enumerate(Q_list):
             if Q is None:
                 continue
+            Q_cast = Q.to(dtype=result.dtype) if Q.dtype != result.dtype else Q
             if forward:
-                result = torch.tensordot(Q.T, result, dims=([1], [i])).movedim(0, i)
+                result = torch.tensordot(Q_cast.T, result, dims=([1], [i])).movedim(0, i)
             else:
-                result = torch.tensordot(Q, result, dims=([1], [i])).movedim(0, i)
+                result = torch.tensordot(Q_cast, result, dims=([1], [i])).movedim(0, i)
         return result
 
 

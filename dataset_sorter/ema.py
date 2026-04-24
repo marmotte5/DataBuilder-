@@ -130,7 +130,7 @@ class EMAModel:
             )
         for i in range(min(len(saved), len(self.shadow_params))):
             if saved[i].shape == self.shadow_params[i].shape:
-                self.shadow_params[i] = saved[i].clone()
+                self.shadow_params[i] = saved[i].clone().float()
             else:
                 log.warning(
                     f"EMA param {i}: shape mismatch {saved[i].shape} vs "

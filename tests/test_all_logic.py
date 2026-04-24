@@ -777,8 +777,10 @@ class TestEMA:
         # Shadow starts at 0, set param to 1, update
         param.data.fill_(1.0)
         ema.update([param])
-        # With decay=0.5, shadow = 0 * 0.5 + 1.0 * 0.5 = 0.5
-        assert torch.allclose(ema.shadow_params[0], torch.tensor([0.5, 0.5, 0.5, 0.5]))
+        # Decay warmup: step=1 → effective_decay = min(0.5, 2/11) ≈ 0.1818
+        # shadow = 0 * 0.1818 + 1.0 * 0.8182 ≈ 0.8182
+        expected = 1.0 - min(0.5, 2.0 / 11.0)
+        assert torch.allclose(ema.shadow_params[0], torch.full((4,), expected))
 
     def test_ema_update_respects_update_after_step(self):
         import torch
@@ -854,7 +856,9 @@ class TestEMA:
         param.data.fill_(1.0)
         ema.update([param])
         assert ema.shadow_params[0].device.type == "cpu"
-        assert torch.allclose(ema.shadow_params[0], torch.tensor([0.5, 0.5, 0.5, 0.5]))
+        # Decay warmup: step=1 → effective_decay = min(0.5, 2/11) ≈ 0.1818
+        expected = 1.0 - min(0.5, 2.0 / 11.0)
+        assert torch.allclose(ema.shadow_params[0], torch.full((4,), expected))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
