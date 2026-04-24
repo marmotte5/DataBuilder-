@@ -52,6 +52,9 @@ from dataset_sorter.ui.help_tab import HelpTab
 from dataset_sorter.ui.batch_generation_tab import BatchGenerationTab
 from dataset_sorter.ui.model_merge_tab import ModelMergeTab
 from dataset_sorter.ui.comparison_tab import ComparisonTab
+from dataset_sorter.ui.welcome_dialog import WelcomeDialog
+from dataset_sorter.app_settings import AppSettings
+from dataset_sorter.project_manager import Project, ProjectManager
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +190,10 @@ class MainWindow(QMainWindow):
         self._gpu_available = has_gpu()
         self._selection_connected = False
 
+        # Active project (None until user creates/opens one via WelcomeDialog).
+        self._project_manager = ProjectManager()
+        self._active_project: Optional[Project] = None
+
         self._build_ui()
         self._init_default_profiles()
         self._refresh_profile_combo()
@@ -195,16 +202,161 @@ class MainWindow(QMainWindow):
         self._load_progress_state()
         # Apply initial mode to all tabs (handles first launch with no saved state)
         self._set_simple_mode(self._simple_mode)
-        self.statusBar().showMessage(
-            "Ready! Set source folder in Dataset, click Scan, then proceed through the steps. "
-            "See Help (More ▾) for a full guide."
-        )
+
+        # Project flow: try to silently reopen the last-active project,
+        # otherwise show the WelcomeDialog so the user picks one.
+        self._restore_or_prompt_project()
 
     def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
         """Show a non-blocking toast notification anchored to the central widget."""
         central = self.centralWidget()
         if central:
             show_toast(central, text, variant, duration_ms)
+
+    # ══════════════════════════════════════════════════════════════════
+    # ── Project flow ───────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+
+    def _restore_or_prompt_project(self) -> None:
+        """Reopen the last-active project, or show the welcome dialog.
+
+        Called once during __init__ after the UI is built. If the stored
+        current_project name points to a valid project on disk, we load it
+        silently. Otherwise we show the WelcomeDialog modally.
+        """
+        settings = AppSettings.load()
+        if settings.current_project:
+            try:
+                project = self._project_manager.load_project(settings.current_project)
+                self._apply_active_project(project, silent=True)
+                return
+            except FileNotFoundError:
+                log.info(
+                    "Last-active project '%s' no longer exists — showing welcome",
+                    settings.current_project,
+                )
+                settings.current_project = None
+                settings.save()
+
+        self._show_welcome_dialog()
+
+    def _show_welcome_dialog(self) -> None:
+        """Display the WelcomeDialog. If user cancels with no project open,
+        keep the app usable (do not force-exit)."""
+        dialog = WelcomeDialog(self)
+        if dialog.exec() == dialog.DialogCode.Accepted and dialog.selected_project:
+            self._apply_active_project(dialog.selected_project, silent=False)
+        elif self._active_project is None:
+            # User cancelled with no project — show a gentle banner
+            self.statusBar().showMessage(
+                "No project open — use File → Open Project to create or "
+                "open one. Your changes won't be organised until a project "
+                "is active."
+            )
+
+    def _apply_active_project(self, project: Project, *, silent: bool) -> None:
+        """Switch to *project*: update title, status bar, auto-fill paths.
+
+        Called when a project is created, opened, or restored.
+        """
+        self._active_project = project
+        # Persist for next launch
+        settings = AppSettings.load()
+        settings.current_project = project.name
+        settings.add_recent_project(project.name)
+        settings.save()
+
+        # Update window title + status bar
+        self.setWindowTitle(f"DataBuilder — {project.name}")
+        self.statusBar().showMessage(
+            f"Project: {project.name}    ·    {project.path}    ·    "
+            f"arch: {project.architecture or 'unspecified'}",
+        )
+
+        # Auto-fill paths: scan source = project/dataset, export output =
+        # project path. These are suggestions — users can still override.
+        if hasattr(self, "source_input"):
+            existing_source = self.source_input.text().strip()
+            # Only overwrite if empty or still pointing to another project's
+            # dataset (avoid clobbering a user's external folder they set).
+            if not existing_source or "dataset" in existing_source.lower():
+                self.source_input.setText(str(project.dataset_path))
+        if hasattr(self, "output_input"):
+            existing_out = self.output_input.text().strip()
+            if not existing_out:
+                self.output_input.setText(str(project.path))
+
+        # Training tab: auto-fill output dir
+        if hasattr(self, "training_tab") and hasattr(
+            self.training_tab, "output_dir_input"
+        ):
+            existing_td = self.training_tab.output_dir_input.text().strip()
+            if not existing_td:
+                self.training_tab.output_dir_input.setText(str(project.path))
+
+        if not silent:
+            self._toast(f"Project '{project.name}' opened", "success")
+
+    def _close_active_project(self) -> None:
+        """Forget the active project (next launch shows WelcomeDialog)."""
+        self._active_project = None
+        settings = AppSettings.load()
+        settings.current_project = None
+        settings.save()
+        self.setWindowTitle("DataBuilder")
+        self._show_welcome_dialog()
+
+    def _build_menu_bar(self) -> None:
+        """Minimal menu bar focused on project navigation.
+
+        Keeps the existing header/sidebar UI untouched — this only adds
+        keyboard-accessible paths to project management so users aren't
+        stuck without a way to switch projects.
+        """
+        menubar = self.menuBar()
+
+        project_menu = menubar.addMenu("&Project")
+
+        new_action = project_menu.addAction("&New project…")
+        new_action.setShortcut("Ctrl+Shift+N")
+        new_action.triggered.connect(self._show_welcome_dialog)
+
+        open_action = project_menu.addAction("&Open project…")
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self._show_welcome_dialog)
+
+        project_menu.addSeparator()
+
+        reveal_action = project_menu.addAction("&Reveal project folder")
+        reveal_action.triggered.connect(self._reveal_project_folder)
+
+        close_action = project_menu.addAction("&Close project")
+        close_action.triggered.connect(self._close_active_project)
+
+        project_menu.addSeparator()
+
+        exit_action = project_menu.addAction("E&xit")
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+
+    def _reveal_project_folder(self) -> None:
+        """Open the active project's folder in the OS file browser."""
+        if self._active_project is None:
+            self._toast("No project is open.", "warning")
+            return
+        import subprocess
+        import sys
+        path = str(self._active_project.path)
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            log.warning("Could not reveal folder: %s", exc)
+            self._toast(f"Could not open folder: {exc}", "error")
 
     # ── Sidebar navigation constants ──
     _NAV_ITEMS = [
@@ -231,6 +383,10 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         """Construct all widgets: header, stepper, content area with helper panel, footer."""
+        # Menu bar (always visible — provides File → New/Open Project and
+        # Project → Close access that isn't obvious in the existing layout)
+        self._build_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
@@ -471,33 +627,53 @@ class MainWindow(QMainWindow):
         path_bar.setContentsMargins(12, 6, 12, 6)
         path_bar.setSpacing(6)
 
-        src_lbl = QLabel("Source")
+        src_lbl = QLabel("Images in")
         src_lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 600; "
             f"font-size: 11px; background: transparent;"
         )
+        src_lbl.setToolTip(
+            "Folder containing your training images and .txt tag files.\n"
+            "When a project is open, this defaults to <project>/dataset."
+        )
         path_bar.addWidget(src_lbl)
         self.source_input = DragDropLineEdit()
-        self.source_input.setPlaceholderText("Image folder (drag & drop)...")
+        self.source_input.setPlaceholderText(
+            "Image folder with .png/.jpg + .txt captions (drag & drop)..."
+        )
         self.source_input.setToolTip(
-            "Folder with training images (.png, .jpg, .webp) and .txt tag files."
+            "Folder with training images (.png, .jpg, .webp) and matching "
+            ".txt tag files. When a project is open, defaults to the "
+            "project's dataset/ subfolder."
         )
         path_bar.addWidget(self.source_input, 3)
         btn_src = QPushButton("...")
         btn_src.setMaximumWidth(32)
-        btn_src.setToolTip("Browse for source folder")
+        btn_src.setToolTip("Browse for images folder")
         btn_src.clicked.connect(self._browse_source)
         path_bar.addWidget(btn_src)
 
-        out_lbl = QLabel("Output")
+        out_lbl = QLabel("Export to")
         out_lbl.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-weight: 600; "
             f"font-size: 11px; background: transparent;"
         )
+        out_lbl.setToolTip(
+            "Destination for the bucket-organised dataset export (used by "
+            "external tools like kohya/OneTrainer). DataBuilder's own "
+            "trainer reads from 'Images in' above — you only need this "
+            "if you want a copy organised by aspect-ratio bucket."
+        )
         path_bar.addWidget(out_lbl)
         self.output_input = DragDropLineEdit()
-        self.output_input.setPlaceholderText("Output folder (drag & drop)...")
-        self.output_input.setToolTip("Where the organized dataset will be exported.")
+        self.output_input.setPlaceholderText(
+            "Optional — export destination for bucket-organised copies..."
+        )
+        self.output_input.setToolTip(
+            "Optional. If set, the Export button will copy images here "
+            "organised by aspect-ratio bucket, suitable for kohya-ss / "
+            "OneTrainer. DataBuilder's own trainer doesn't need this step."
+        )
         path_bar.addWidget(self.output_input, 3)
         btn_out = QPushButton("...")
         btn_out.setMaximumWidth(32)

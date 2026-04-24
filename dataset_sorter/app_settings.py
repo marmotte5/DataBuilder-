@@ -75,6 +75,9 @@ class AppSettings:
 
     # ── Recent projects ────────────────────────────────────────────────
     recent_projects: list[str] = field(default_factory=list)
+    # Last-active project name — reopened automatically on launch so the
+    # user resumes where they left off. `None` means "show welcome dialog".
+    current_project: str | None = None
 
     # ── UI preferences ─────────────────────────────────────────────────
     ui_preferences: dict[str, Any] = field(default_factory=dict)
@@ -163,6 +166,8 @@ class AppSettings:
                     log.debug("Could not parse path for %s: %s", key, exc)
         if "recent_projects" in d and isinstance(d["recent_projects"], list):
             settings.recent_projects = [str(p) for p in d["recent_projects"]][:_MAX_RECENT]
+        if "current_project" in d and d["current_project"] is not None:
+            settings.current_project = str(d["current_project"])
         if "ui_preferences" in d and isinstance(d["ui_preferences"], dict):
             settings.ui_preferences = d["ui_preferences"]
         if "model_scan_dirs" in d and isinstance(d["model_scan_dirs"], list):

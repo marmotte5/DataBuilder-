@@ -1632,19 +1632,36 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         """Display the inline error panel with a suggestion based on the error message."""
         lower = error_msg.lower()
         if "out of memory" in lower or "oom" in lower or "cuda error: out" in lower:
-            suggestion = "Suggestion: Réduisez le batch size ou la résolution, ou activez gradient checkpointing."
+            suggestion = (
+                "Suggestion: Reduce batch size or resolution, or enable "
+                "gradient checkpointing (Advanced tab)."
+            )
         elif "nan" in lower and ("loss" in lower or "grad" in lower):
-            suggestion = "Suggestion: Réduisez le learning rate (essayez ÷10). Vérifiez vos données."
+            suggestion = (
+                "Suggestion: Lower the learning rate (try ÷10). "
+                "Also check your dataset for corrupted images or bad captions."
+            )
         elif "gradscaler" in lower or ("fp16" in lower and "overflow" in lower):
-            suggestion = "Suggestion: Essayez bf16 à la place de fp16. Si l'erreur persiste, désactivez mixed precision."
+            suggestion = (
+                "Suggestion: Switch to bf16 instead of fp16 (more stable). "
+                "If the error persists, disable mixed precision."
+            )
         elif "cuda" in lower and "device" in lower:
-            suggestion = "Suggestion: Vérifiez que le bon GPU est sélectionné et que CUDA est bien installé."
+            suggestion = (
+                "Suggestion: Check that the correct GPU is selected and "
+                "CUDA is installed (see GPU indicator in the header)."
+            )
+        elif "cannot re-initialize cuda in forked subprocess" in lower:
+            suggestion = (
+                "Suggestion: Disable mmap_dataset or set num_workers=0. "
+                "CUDA tensors can't cross fork boundaries on Linux."
+            )
         else:
             suggestion = ""
 
         # First line of error as title (truncated)
         first_line = error_msg.split("\n")[0][:120]
-        self._error_title.setText(f"Erreur training : {first_line}")
+        self._error_title.setText(f"Training error: {first_line}")
         self._error_suggestion.setText(suggestion)
         self._error_suggestion.setVisible(bool(suggestion))
         self._error_traceback.setPlainText(error_msg)
