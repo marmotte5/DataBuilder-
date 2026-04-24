@@ -374,15 +374,26 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
-        # Checkpoint count
+        # Checkpoint count + resumable detection
         ckpt_count = 0
+        resumable = None
         try:
             if proj.checkpoints_path.exists():
                 ckpt_count = sum(
                     1 for p in proj.checkpoints_path.iterdir() if p.is_dir()
                 )
+            # Detect a resumable run so the user knows they can pick up
+            # where the previous session (or crash) left off.
+            from dataset_sorter.training_state_manager import (
+                TrainingStateManager, read_checkpoint_metadata,
+            )
+            resumable = TrainingStateManager.get_latest_resumable_checkpoint(
+                proj.path,
+            )
         except OSError:
             pass
+        except Exception as exc:
+            log.debug("Resumable-checkpoint scan failed: %s", exc)
 
         # Compose the one-line summary
         segments = []
@@ -407,6 +418,18 @@ class MainWindow(QMainWindow):
             )
         else:
             segments.append("not trained yet")
+        if resumable is not None:
+            try:
+                meta = read_checkpoint_metadata(resumable) or {}
+                step = meta.get("global_step", "?")
+                total = meta.get("total_steps", 0) or 0
+                if total and isinstance(step, int):
+                    pct = f" ({int(step / total * 100)}%)"
+                else:
+                    pct = ""
+                segments.append(f"⚡ resume available — step {step}{pct}")
+            except Exception:
+                segments.append(f"⚡ resume available ({resumable.name})")
 
         self._project_info_label.setText("    •    ".join(segments))
         self._project_info_bar.show()
