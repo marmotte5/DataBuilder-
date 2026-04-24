@@ -21,6 +21,7 @@ Chroma (LoRA + Full)
 import gc
 import json
 import logging
+import math
 import random
 import shutil
 import threading
@@ -103,6 +104,11 @@ class TrainingState:
     epoch_step: int = 0    # Batch index within current epoch (for resume)
     loss: float = 0.0
     lr: float = 0.0
+    # Latest held-out validation loss (NaN when validation is disabled or
+    # hasn't run yet). Updated inside _run_validation() every
+    # validate_every_n_steps steps when validation_dir is configured.
+    val_loss: float = float("nan")
+    val_step: int = 0        # Global step at which val_loss was last measured
     running: bool = True
     paused: bool = False
     phase: str = "idle"
@@ -279,6 +285,11 @@ class Trainer:
 
         # Last training batch caption (used as sample prompt)
         self._last_batch_caption: Optional[str] = None
+
+        # Held-out validation dataset + dataloader (built in setup() when
+        # config.validation_dir points to a folder with images+captions).
+        self._val_dataset: Optional["CachedTrainDataset"] = None
+        self._val_loader = None  # type: ignore[assignment]
 
         # Token weighting
         self._token_weighter = None
@@ -623,6 +634,17 @@ class Trainer:
             color_jitter_hue=getattr(config, "color_jitter_hue", 0.0),
             random_rotate_degrees=getattr(config, "random_rotate_degrees", 0.0),
         )
+
+        # ── 6b. Held-out validation dataset (OneTrainer parity) ──
+        # Built only when the user pointed validation_dir at a folder with
+        # images + matching .txt captions. Kept with zero augmentation and
+        # zero caption dropout so the eval signal is stable.
+        self._val_dataset = self._build_validation_dataset(config, cache_dir)
+        if self._val_dataset is not None:
+            log.info(
+                "Validation set: %d held-out samples, eval every %d steps",
+                len(self._val_dataset), config.validate_every_n_steps,
+            )
 
         # ── 7. Cache VAE latents ──
         if config.cache_latents:
@@ -1631,12 +1653,27 @@ class Trainer:
                         loss_fn(self.state.global_step, self.state.loss, self.state.lr)
 
                     if progress_fn:
+                        # Append val_loss when the last eval produced a
+                        # finite value. Keeps the message short when
+                        # validation is disabled or hasn't run yet.
+                        _val_suffix = ""
+                        if math.isfinite(self.state.val_loss):
+                            _val_suffix = f"  val: {self.state.val_loss:.4f}"
                         progress_fn(
                             self.state.global_step, self.total_steps,
                             f"Epoch {epoch + 1}/{config.epochs} "
                             f"Step {self.state.global_step}/{self.total_steps} "
-                            f"Loss: {self.state.loss:.4f}",
+                            f"Loss: {self.state.loss:.4f}{_val_suffix}",
                         )
+
+                    # ── Held-out validation ──
+                    # Run BEFORE checkpoint save so the val_loss in the
+                    # state dict (and in the sample-comparison UI) reflects
+                    # the same weights as the saved checkpoint.
+                    if (self._val_dataset is not None
+                            and config.validate_every_n_steps > 0
+                            and self.state.global_step % config.validate_every_n_steps == 0):
+                        self._run_validation()
 
                     # Save checkpoint — try/finally so ScheduleFree always
                     # returns to train() mode even if saving raises. Leaving
@@ -1878,6 +1915,174 @@ class Trainer:
         self.state.phase = "done"
         if progress_fn:
             progress_fn(self.total_steps, self.total_steps, "Training complete!")
+
+    # ══════════════════════════════════════════════════════════════════
+    # Held-out validation (OneTrainer parity)
+    # ══════════════════════════════════════════════════════════════════
+
+    def _build_validation_dataset(self, config: TrainingConfig, cache_dir):
+        """Construct a validation CachedTrainDataset, or return None.
+
+        Validation is optional — only active when validation_dir is set
+        to an existing folder and validate_every_n_steps > 0. The dataset
+        is capped at validation_samples_limit so eval stays fast.
+        """
+        if not config.validation_dir or config.validate_every_n_steps <= 0:
+            return None
+        val_dir = Path(config.validation_dir).expanduser()
+        if not val_dir.exists() or not val_dir.is_dir():
+            log.warning(
+                "validation_dir %s does not exist — validation disabled", val_dir,
+            )
+            return None
+
+        # Discover images + captions (same conventions as the main dataset)
+        from dataset_sorter.train_dataset import CachedTrainDataset
+
+        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        val_images: list[Path] = []
+        val_captions: list[str] = []
+        for img_path in sorted(val_dir.iterdir()):
+            if not img_path.is_file() or img_path.suffix.lower() not in exts:
+                continue
+            sidecar = img_path.with_suffix(".txt")
+            caption = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else ""
+            val_images.append(img_path)
+            val_captions.append(caption)
+            if len(val_images) >= max(1, config.validation_samples_limit):
+                break
+
+        if not val_images:
+            log.warning("No images found in %s — validation disabled", val_dir)
+            return None
+
+        # Zero augmentation / zero dropout on the validation set: we want
+        # a stable signal each eval, not a noisy one.
+        return CachedTrainDataset(
+            image_paths=val_images,
+            captions=val_captions,
+            resolution=config.resolution,
+            center_crop=True,
+            random_flip=False,
+            tag_shuffle=False,
+            keep_first_n_tags=0,
+            caption_dropout_rate=0.0,
+            cache_dir=None,  # Never persist validation latents to disk
+            bucket_assignments=None,
+        )
+
+    @torch.no_grad()
+    def _run_validation(self) -> float:
+        """Compute mean loss over the held-out validation set.
+
+        Must be called OUTSIDE the gradient accumulation window so that
+        accumulated grads aren't polluted. Saves + restores self.backend
+        training mode so the next step continues normally.
+
+        Returns:
+            Mean validation loss (float). Updates self.state.val_loss and
+            self.state.val_step as side effects.
+        """
+        if self._val_dataset is None or len(self._val_dataset) == 0:
+            return float("nan")
+
+        from torch.utils.data import DataLoader
+        from dataset_sorter.train_dataset import training_collate_fn
+
+        config = self.config
+        # Build loader on-demand (stateless — doesn't need persistent workers)
+        batch_size = max(1, min(config.batch_size, 4))
+        loader = DataLoader(
+            self._val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,  # In-proc: no fork-CUDA issue, no thread start cost
+            pin_memory=(self.device.type == "cuda"),
+            drop_last=False,
+            collate_fn=training_collate_fn,
+        )
+
+        # Switch to eval mode. ScheduleFree also needs .eval() so the
+        # averaged weights are used for the validation forward pass.
+        unet = self.backend.unet
+        was_training = unet.training
+        unet.eval()
+        if self._is_schedulefree:
+            self.optimizer.eval()
+
+        # Isolate from training-loop side effects:
+        # - spatial mask: we don't want to mask validation loss
+        # - per-sample weights: we want a straight mean
+        # - token weight mask: cleared so caption-weighted training doesn't
+        #   bleed into the val loss measurement
+        saved_mask = getattr(self.backend, "_training_mask", None)
+        saved_sample_w = getattr(self.backend, "_adaptive_sample_weights", None)
+        saved_token_w = getattr(self.backend, "_token_weight_mask", None)
+        self.backend._training_mask = None
+        if hasattr(self.backend, "_adaptive_sample_weights"):
+            self.backend._adaptive_sample_weights = None
+        if hasattr(self.backend, "_token_weight_mask"):
+            self.backend._token_weight_mask = None
+
+        # Fixed generator state so the random noise is the same on every
+        # validation pass → clean monotonic signal instead of noisy curve.
+        rng_state = torch.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state() if self.device.type == "cuda" else None
+        )
+        torch.manual_seed(42)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(42)
+
+        total_loss = 0.0
+        total_count = 0
+        try:
+            for batch in loader:
+                loss = self._training_step(batch)
+                if torch.isfinite(loss):
+                    total_loss += float(loss.item())
+                    total_count += 1
+        except Exception as exc:
+            log.warning("Validation forward failed (%s) — skipping this eval", exc)
+            total_count = 0
+        finally:
+            # Zero any grads that might have accumulated from the forward.
+            # _training_step computes loss without calling backward here,
+            # but tensors may still carry grad_fn so belt-and-suspenders it.
+            self.optimizer.zero_grad(set_to_none=True)
+            # Restore backend state
+            self.backend._training_mask = saved_mask
+            if hasattr(self.backend, "_adaptive_sample_weights"):
+                self.backend._adaptive_sample_weights = saved_sample_w
+            if hasattr(self.backend, "_token_weight_mask"):
+                self.backend._token_weight_mask = saved_token_w
+            # Restore RNG so training reproducibility isn't affected
+            torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+            if was_training:
+                unet.train()
+            if self._is_schedulefree:
+                self.optimizer.train()
+
+        mean_loss = (total_loss / total_count) if total_count > 0 else float("nan")
+        self.state.val_loss = mean_loss
+        self.state.val_step = self.state.global_step
+
+        # TensorBoard logging alongside training loss
+        if self._tb_logger is not None and self._tb_logger.available:
+            try:
+                self._tb_logger.log_scalar(
+                    "val/loss", mean_loss, self.state.global_step,
+                )
+            except Exception as exc:
+                log.debug("TB val/loss log failed: %s", exc)
+
+        log.info(
+            "Validation @ step %d: val_loss=%.4f (train loss=%.4f)",
+            self.state.global_step, mean_loss, self.state.loss,
+        )
+        return mean_loss
 
     def _training_step(self, batch, fp8_ctx=None) -> torch.Tensor:
         """Single training step — delegates loss to backend."""

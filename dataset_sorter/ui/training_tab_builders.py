@@ -5,11 +5,13 @@ sub-tab (Model, Optimizer, Dataset, Advanced, Sampling, ControlNet, DPO).
 These are used as a mixin so the main TrainingTab class stays small.
 """
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QCheckBox, QTextEdit, QScrollArea, QFrame,
+    QCheckBox, QTextEdit, QScrollArea, QFrame, QFileDialog,
 )
 
 from dataset_sorter.ui.theme import COLORS
@@ -1614,10 +1616,68 @@ class TrainingTabBuildersMixin:
         g4.setLayout(g4l)
         layout.addWidget(g4)
 
+        # ── Held-out Validation ─────────────────────────────────────
+        # Measures loss on images the model has never trained on. Without
+        # this you only see training loss, which drops as the model
+        # memorises — not proof it learned to generalise. With it you
+        # get an honest "did this checkpoint overfit?" signal.
+        g5 = self._group("Validation (held-out set)")
+        g5l = QGridLayout()
+
+        g5l.addWidget(QLabel("Validation folder"), 0, 0)
+        self.val_dir_input = QLineEdit()
+        self.val_dir_input.setPlaceholderText(
+            "Folder with held-out images + .txt captions (optional)…"
+        )
+        self.val_dir_input.setToolTip(
+            "Separate folder of images NOT in the training set. Eval runs "
+            "a no-grad forward pass on these every N steps and logs "
+            "val/loss to TensorBoard. Use this to spot overfitting."
+        )
+        g5l.addWidget(self.val_dir_input, 0, 1)
+        _val_browse = QPushButton("…")
+        _val_browse.setMaximumWidth(32)
+        _val_browse.setToolTip("Browse for validation folder")
+        _val_browse.clicked.connect(self._browse_validation_dir)
+        g5l.addWidget(_val_browse, 0, 2)
+
+        g5l.addWidget(QLabel("Validate Every N Steps"), 1, 0)
+        self.validate_every_spin = QSpinBox()
+        self.validate_every_spin.setRange(0, 100000)
+        self.validate_every_spin.setValue(0)
+        self.validate_every_spin.setSpecialValueText("Off")
+        self.validate_every_spin.setToolTip(
+            "0 = disable validation. Aligning this with Save Every N Steps "
+            "means each saved checkpoint has a matching val_loss measurement."
+        )
+        g5l.addWidget(self.validate_every_spin, 1, 1)
+
+        g5l.addWidget(QLabel("Max Validation Samples"), 2, 0)
+        self.val_samples_spin = QSpinBox()
+        self.val_samples_spin.setRange(1, 4096)
+        self.val_samples_spin.setValue(64)
+        self.val_samples_spin.setToolTip(
+            "Cap on images used per validation pass. Keeps eval fast even "
+            "when the folder has thousands of images. 64 is a good default."
+        )
+        g5l.addWidget(self.val_samples_spin, 2, 1)
+
+        g5.setLayout(g5l)
+        layout.addWidget(g5)
+
         layout.addStretch()
         scroll.setWidget(w)
         self._update_precision_advice()
         return scroll
+
+    def _browse_validation_dir(self):
+        """Pick a validation folder via native file dialog."""
+        start = self.val_dir_input.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose validation folder (separate from training set)", start,
+        )
+        if chosen:
+            self.val_dir_input.setText(chosen)
 
     def _build_sampling_tab(self):
         """Build the Sampling tab with sample generation interval, sampler,
