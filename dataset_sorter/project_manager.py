@@ -158,10 +158,12 @@ class Project:
         self.presets_path.mkdir(parents=True, exist_ok=True)
         safe_name = re.sub(r"[^\w\-.]", "_", name)
         preset_path = self.presets_path / f"{safe_name}{_PRESET_EXT}"
-        preset_path.write_text(
+        _tmp = preset_path.with_suffix(".tmp")
+        _tmp.write_text(
             json.dumps({"name": name, "config": config}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        _tmp.replace(preset_path)
         log.debug("Saved preset '%s' to %s", name, preset_path)
         return preset_path
 
@@ -186,10 +188,12 @@ class Project:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         record_path = self.history_path / f"run_{ts}{_HISTORY_EXT}"
         run_info.setdefault("timestamp", datetime.now().isoformat())
-        record_path.write_text(
+        _tmp = record_path.with_suffix(".tmp")
+        _tmp.write_text(
             json.dumps(run_info, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        _tmp.replace(record_path)
         self.last_trained = datetime.now()
         self.save()
         return record_path
@@ -221,7 +225,9 @@ class Project:
         path = self.path / _PROJECT_JSON
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            _tmp = path.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            _tmp.replace(path)
         except OSError as exc:
             log.error("Could not save project.json for '%s': %s", self.name, exc)
 

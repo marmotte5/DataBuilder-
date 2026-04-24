@@ -139,7 +139,9 @@ def _save_bucket_cache(
             "dir_mtime": dir_mtime,
             "assignments": [list(a) for a in assignments],
         }
-        cache_path.write_text(json.dumps(data), encoding="utf-8")
+        _tmp = cache_path.with_suffix(".tmp")
+        _tmp.write_text(json.dumps(data), encoding="utf-8")
+        _tmp.replace(cache_path)
     except OSError:
         pass
 

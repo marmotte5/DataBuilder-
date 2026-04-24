@@ -1695,7 +1695,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             data = asdict(config)
             p = self._autosave_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            _tmp = p.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            _tmp.replace(p)
         except Exception as e:
             log.debug(f"Autosave failed: {e}")
             return

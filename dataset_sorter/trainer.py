@@ -2954,7 +2954,9 @@ class Trainer:
                 "optimizer": self.config.optimizer,
                 "lora_rank": self.config.lora_rank,
             })
-            info_path.write_text(json.dumps(existing, indent=2))
+            _tmp = info_path.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(existing, indent=2))
+            _tmp.replace(info_path)
         except OSError as e:
             log.warning(f"Could not write project.json: {e}")
 
@@ -3037,7 +3039,9 @@ class Trainer:
             if isinstance(v, Path):
                 config_dict[k] = str(v)
         try:
-            config_path.write_text(json.dumps(config_dict, indent=2, default=str))
+            _tmp = config_path.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(config_dict, indent=2, default=str))
+            _tmp.replace(config_path)
         except OSError as e:
             log.warning(f"Could not write backup config.json: {e}")
 
