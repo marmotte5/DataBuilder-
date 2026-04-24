@@ -117,6 +117,7 @@ class TrainingConfig:
     flash_attention: bool = False   # Flash Attention 2
     torch_compile: bool = False     # torch.compile() JIT
     compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
+    regional_compile: bool = False  # Compile individual transformer blocks instead of whole model
     cudnn_benchmark: bool = True    # cuDNN auto-tuner
     enable_tf32: bool = False       # TF32 matmul on NVIDIA Ampere+ (faster fp32, no dtype change)
     fp8_base_model: bool = False    # Load base model in fp8 (saves ~50% VRAM)

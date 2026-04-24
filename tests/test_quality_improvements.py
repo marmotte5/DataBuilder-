@@ -335,3 +335,95 @@ class TestEMACPUOffloadEfficiency:
         for sp in ema.shadow_params:
             assert sp.device.type == "cpu"
             assert sp.dtype == torch.float32
+
+
+# ── Regional compile tests ──────────────────────────────────────────────
+
+class TestRegionalCompile:
+    def test_finds_repeated_blocks(self):
+        """Regional compile should detect repeated transformer blocks."""
+        import torch.nn as nn
+        from dataset_sorter.speed_optimizations import _BLOCK_PATTERNS
+
+        class FakeTransformerBlock(nn.Module):
+            def forward(self, x):
+                return x
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.blocks = nn.ModuleList(
+                    [FakeTransformerBlock() for _ in range(4)]
+                )
+            def forward(self, x):
+                for b in self.blocks:
+                    x = b(x)
+                return x
+
+        model = FakeModel()
+        blocks_found = {}
+        for name, module in model.named_modules():
+            cn = module.__class__.__name__.lower()
+            if any(pat in cn for pat in _BLOCK_PATTERNS):
+                key = module.__class__.__name__
+                blocks_found.setdefault(key, []).append(name)
+
+        assert "FakeTransformerBlock" in blocks_found
+        assert len(blocks_found["FakeTransformerBlock"]) == 4
+
+    def test_apply_regional_compile_returns_count(self):
+        """Regional compile returns the number of compiled blocks."""
+        import torch.nn as nn
+        from dataset_sorter.speed_optimizations import apply_regional_compile
+
+        class FakeTransformerBlock(nn.Module):
+            def forward(self, x):
+                return x
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.blocks = nn.ModuleList(
+                    [FakeTransformerBlock() for _ in range(3)]
+                )
+            def forward(self, x):
+                for b in self.blocks:
+                    x = b(x)
+                return x
+
+        model = FakeModel()
+        count = apply_regional_compile(model, mode="default")
+        assert count == 3
+
+    def test_no_blocks_returns_zero(self):
+        """Returns 0 when no repeated blocks are found."""
+        import torch.nn as nn
+        from dataset_sorter.speed_optimizations import apply_regional_compile
+
+        model = nn.Linear(4, 4)
+        count = apply_regional_compile(model, mode="default")
+        assert count == 0
+
+
+# ── Auto speed opts tests ───────────────────────────────────────────────
+
+class TestAutoSpeedOpts:
+    def test_default_config_has_auto_speed(self):
+        from dataset_sorter.models import TrainingConfig
+        config = TrainingConfig()
+        assert config.auto_speed_opts is True
+
+    def test_regional_compile_config_exists(self):
+        from dataset_sorter.models import TrainingConfig
+        config = TrainingConfig()
+        assert hasattr(config, "regional_compile")
+        assert config.regional_compile is False
+
+    def test_compile_mode_options(self):
+        from dataset_sorter.models import TrainingConfig
+        config = TrainingConfig()
+        assert config.compile_mode == "default"
+        config.compile_mode = "max-autotune"
+        assert config.compile_mode == "max-autotune"
+        config.compile_mode = "reduce-overhead"
+        assert config.compile_mode == "reduce-overhead"
