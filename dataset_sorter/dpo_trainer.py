@@ -176,9 +176,11 @@ class PreferenceStore:
         }
         prefs_file = self.preferences_dir / "preferences.json"
         try:
-            prefs_file.write_text(
+            _tmp = prefs_file.with_suffix(".tmp")
+            _tmp.write_text(
                 json.dumps(data, indent=2, default=str), encoding="utf-8"
             )
+            _tmp.replace(prefs_file)
         except OSError as e:
             log.warning(f"Could not save preferences: {e}")
 

@@ -603,7 +603,9 @@ class TrainingDashboard:
                 "final_loss": final_loss,
             }
             out = self._history_dir / f"{self._run_id}.json"
-            out.write_text(json.dumps(record, ensure_ascii=False, indent=2))
+            _tmp = out.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2))
+            _tmp.replace(out)
             log.info("Training history saved to %s", out)
         except Exception:
             log.exception("Failed to save training history")

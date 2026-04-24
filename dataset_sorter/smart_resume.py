@@ -67,9 +67,11 @@ def save_loss_history(
 
     data = {"runs": existing}
     try:
-        history_path.write_text(
+        _tmp = history_path.with_suffix(".tmp")
+        _tmp.write_text(
             json.dumps(data, indent=2, default=str), encoding="utf-8"
         )
+        _tmp.replace(history_path)
     except OSError as e:
         log.warning(f"Could not save loss history: {e}")
 
