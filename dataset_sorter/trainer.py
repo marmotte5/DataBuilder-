@@ -602,6 +602,10 @@ class Trainer:
                 f"step {config.bucket_reso_steps})"
             )
 
+        # Color augmentation is wired in when color_augmentation=True OR any
+        # fine-grained knob is nonzero. The bool acts as a quick-toggle preset.
+        _color_aug_on = getattr(config, "color_augmentation", False)
+        _default_jitter = 0.05 if _color_aug_on else 0.0
         self.dataset = CachedTrainDataset(
             image_paths=image_paths,
             captions=captions,
@@ -613,6 +617,11 @@ class Trainer:
             caption_dropout_rate=config.caption_dropout_rate,
             cache_dir=cache_dir,
             bucket_assignments=bucket_assignments,
+            color_jitter_brightness=getattr(config, "color_jitter_brightness", _default_jitter),
+            color_jitter_contrast=getattr(config, "color_jitter_contrast", _default_jitter),
+            color_jitter_saturation=getattr(config, "color_jitter_saturation", _default_jitter),
+            color_jitter_hue=getattr(config, "color_jitter_hue", 0.0),
+            random_rotate_degrees=getattr(config, "random_rotate_degrees", 0.0),
         )
 
         # ── 7. Cache VAE latents ──

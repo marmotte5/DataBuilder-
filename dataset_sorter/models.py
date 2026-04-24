@@ -131,6 +131,16 @@ class TrainingConfig:
     random_crop: bool = False       # Random crop vs center crop
     flip_augmentation: bool = False # Horizontal flip augmentation
     color_augmentation: bool = False
+    # Fine-grained color/rotation augmentation knobs (OneTrainer parity).
+    # These only apply to the live pixel_values path; when latents are
+    # pre-cached, augmentations are baked into the cache at cache time.
+    # Typical values: jitter 0.05-0.1 for mild style preservation,
+    # rotate 0-5 degrees for object photos, 0 for text/UI screenshots.
+    color_jitter_brightness: float = 0.0
+    color_jitter_contrast: float = 0.0
+    color_jitter_saturation: float = 0.0
+    color_jitter_hue: float = 0.0
+    random_rotate_degrees: float = 0.0
 
     # ── Sampling ───────────────────────────────────────────────────────
     sample_every_n_steps: int = 50
