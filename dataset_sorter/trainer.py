@@ -505,7 +505,11 @@ class Trainer:
         # ── 3e. torch.compile() JIT ──
         # Must run AFTER all wrappers (fp8, quantize, mebp) and BEFORE TE setup.
         # fullgraph=False avoids graph breaks that crash on PEFT LoRA dynamic dispatch.
-        if config.torch_compile and self.backend.unet is not None:
+        # Skip if the backend already compiled (apply_speed_optimizations) —
+        # wrapping torch.compile twice allocates two Dynamo graph caches
+        # (1-3 GB each on Flux) and fights for the same module.
+        _already_compiled = getattr(self.backend, "_compiled", False)
+        if config.torch_compile and self.backend.unet is not None and not _already_compiled:
             try:
                 _mode = getattr(config, "compile_mode", "default") or "default"
                 log.info(f"torch.compile: mode={_mode!r} — first step will be slow (JIT warmup)")
@@ -514,6 +518,7 @@ class Trainer:
                     mode=_mode,
                     fullgraph=False,
                 )
+                self.backend._compiled = True
                 log.info("torch.compile applied to UNet/transformer")
             except Exception as exc:
                 log.warning(
@@ -521,6 +526,8 @@ class Trainer:
                     "Upgrade to PyTorch 2.0+ for JIT support.",
                     exc,
                 )
+        elif config.torch_compile and _already_compiled:
+            log.info("torch.compile already applied by backend — skipping second compile")
 
         # ── 4. Text encoder setup ──
         self.backend.freeze_text_encoders()
@@ -705,14 +712,24 @@ class Trainer:
                 te_outs = [self.dataset[i].get("te_cache", ()) for i in range(len(self.dataset))]
                 caps = [self.dataset[i].get("caption", "") for i in range(len(self.dataset))]
                 builder.build_safetensors_cache(latents, te_outs, caps)
+                # Free the intermediate lists and the old in-RAM cache dicts
+                # immediately after the safetensors file is written. Otherwise
+                # peak RAM ≈ 2x dataset size during mmap setup on large
+                # datasets (13 GB+ for 2k SDXL 1024px, SDXL+T5 can reach 26 GB).
+                del latents, te_outs, caps
+                old_ds = self.dataset
+                if hasattr(old_ds, "clear_caches"):
+                    old_ds.clear_caches()
+                gc.collect()
                 mmap_ds = SafetensorsMMapDataset(
-                    mmap_dir, len(self.dataset), self.device, self.dtype,
+                    mmap_dir, len(old_ds), self.device, self.dtype,
                     tag_shuffle=config.tag_shuffle,
                     keep_first_n_tags=config.keep_first_n_tags,
                     caption_dropout_rate=config.caption_dropout_rate,
                 )
                 mmap_ds.open()
                 self.dataset = mmap_ds
+                del old_ds
                 log.info(f"MMap dataset active: {len(self.dataset)} samples, zero-copy loading")
             except Exception as e:
                 log.warning(f"MMap dataset setup failed, using standard dataset: {e}")
@@ -1124,6 +1141,18 @@ class Trainer:
                 te_cached=config.cache_text_encoder,
             )
 
+            # SafetensorsMMapDataset.__getitem__ calls tensor.to(cuda, ...)
+            # which fails in forked DataLoader worker subprocesses
+            # ("Cannot re-initialize CUDA in forked subprocess"). Force
+            # num_workers=0 for this path — mmap is already zero-copy I/O
+            # so extra workers give little benefit.
+            from dataset_sorter.mmap_dataset import SafetensorsMMapDataset
+            if isinstance(self.dataset, SafetensorsMMapDataset) and self.device.type == "cuda":
+                if use_workers > 0:
+                    log.info("mmap_dataset + CUDA: forcing num_workers=0 "
+                             "(CUDA tensors cannot cross fork boundary).")
+                use_workers = 0
+
             from dataset_sorter.train_dataset import training_collate_fn
 
             if self._bucket_sampler is not None:
@@ -1209,16 +1238,18 @@ class Trainer:
             log.info("Async optimizer step enabled (overlaps with next forward pass)")
 
         # ── CUDA Graph Training Wrapper ──
-        # Fixed: noise and timesteps are now generated OUTSIDE the graph
-        # and passed as explicit inputs, preserving stochasticity.
+        # NOTE: this wrapper is instantiated but not yet integrated into the
+        # training step. The flag exists for forward-compat; enabling it has
+        # no effect until the training loop is refactored to route through
+        # self._cuda_graph.step(train_fn, ...).
         if config.cuda_graph_training and self.device.type == "cuda":
             from dataset_sorter.speed_optimizations import CUDAGraphWrapper
             self._cuda_graph = CUDAGraphWrapper(
                 warmup_steps=config.cuda_graph_warmup, enabled=True,
             )
-            log.info(
-                f"CUDA graph training enabled (warmup={config.cuda_graph_warmup}). "
-                f"Noise generated outside graph for stochasticity."
+            log.warning(
+                "cuda_graph_training=True: wrapper created but not yet "
+                "wired into the training step — currently a no-op."
             )
 
         # ── Fused Backward Pass ──
@@ -1483,6 +1514,15 @@ class Trainer:
                             self.scheduler.step()
                             self.optimizer.zero_grad(set_to_none=True)
 
+                    # Async optimizer launches step() on a separate CUDA
+                    # stream. sr_hook and EMA both read/write p.data on the
+                    # default stream — without an explicit sync they race
+                    # with the async step, producing silent weight corruption.
+                    if self._async_optimizer is not None and (
+                        sr_hook is not None or self.ema_model is not None
+                    ):
+                        self._async_optimizer.sync()
+
                     # Stochastic rounding: reduce bf16 truncation bias
                     if sr_hook is not None:
                         sr_hook.apply(trainable_params)
@@ -1588,14 +1628,19 @@ class Trainer:
                             f"Loss: {self.state.loss:.4f}",
                         )
 
-                    # Save checkpoint
+                    # Save checkpoint — try/finally so ScheduleFree always
+                    # returns to train() mode even if saving raises. Leaving
+                    # it in eval() silently breaks the optimizer's invariant
+                    # (gradients vs averaged weights mismatch → divergence).
                     if (config.save_every_n_steps > 0 and
                             self.state.global_step % config.save_every_n_steps == 0):
                         if self._is_schedulefree:
                             self.optimizer.eval()
-                        self._save_checkpoint(f"step_{self.state.global_step:06d}")
-                        if self._is_schedulefree:
-                            self.optimizer.train()
+                        try:
+                            self._save_checkpoint(f"step_{self.state.global_step:06d}")
+                        finally:
+                            if self._is_schedulefree:
+                                self.optimizer.train()
 
                     # Generate samples
                     if (config.sample_every_n_steps > 0 and
@@ -1603,9 +1648,11 @@ class Trainer:
                             sample_fn):
                         if self._is_schedulefree:
                             self.optimizer.eval()
-                        self._generate_samples(sample_fn)
-                        if self._is_schedulefree:
-                            self.optimizer.train()
+                        try:
+                            self._generate_samples(sample_fn)
+                        finally:
+                            if self._is_schedulefree:
+                                self.optimizer.train()
 
                     # Attention map debug report
                     if (self._attention_debugger is not None and
@@ -1661,13 +1708,15 @@ class Trainer:
             except Exception:
                 pass
 
-            # Epoch checkpoint
+            # Epoch checkpoint — try/finally so ScheduleFree always exits eval()
             if config.save_every_n_epochs > 0 and (epoch + 1) % config.save_every_n_epochs == 0:
                 if self._is_schedulefree:
                     self.optimizer.eval()
-                self._save_checkpoint(f"epoch_{epoch + 1:04d}")
-                if self._is_schedulefree:
-                    self.optimizer.train()
+                try:
+                    self._save_checkpoint(f"epoch_{epoch + 1:04d}")
+                finally:
+                    if self._is_schedulefree:
+                        self.optimizer.train()
 
         # Clean up DataLoader workers (persistent_workers keep processes alive)
         if _zero_loader is not None:
@@ -1685,9 +1734,11 @@ class Trainer:
         if config.save_final_checkpoint:
             if self._is_schedulefree:
                 self.optimizer.eval()
-            self._save_checkpoint("final")
-            if self._is_schedulefree:
-                self.optimizer.train()
+            try:
+                self._save_checkpoint("final")
+            finally:
+                if self._is_schedulefree:
+                    self.optimizer.train()
         else:
             log.info("save_final_checkpoint=False: skipping final checkpoint save.")
 
@@ -2164,24 +2215,31 @@ class Trainer:
                     p for g in self.optimizer.param_groups
                     for p in g["params"] if p.requires_grad
                 ]
-                if self.grad_scaler is not None:
-                    self.grad_scaler.scale(total_dpo_loss).backward()
-                    self.grad_scaler.unscale_(self.optimizer)
-                    if config.max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            _dpo_params, config.max_grad_norm,
-                        )
-                    self.grad_scaler.step(self.optimizer)
-                    self.grad_scaler.update()
-                else:
-                    total_dpo_loss.backward()
-                    if config.max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            _dpo_params, config.max_grad_norm,
-                        )
-                    self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
-                self.scheduler.step()
+                # Wrap the DPO backward/step in try/finally: if any step
+                # (grad clip on NaN, optimizer.step under OOM, scheduler.step)
+                # raises, we MUST zero the accumulated gradients. Otherwise
+                # they leak into the next normal training step and produce
+                # a phantom gradient spike that looks like divergence.
+                try:
+                    if self.grad_scaler is not None:
+                        self.grad_scaler.scale(total_dpo_loss).backward()
+                        self.grad_scaler.unscale_(self.optimizer)
+                        if config.max_grad_norm > 0:
+                            torch.nn.utils.clip_grad_norm_(
+                                _dpo_params, config.max_grad_norm,
+                            )
+                        self.grad_scaler.step(self.optimizer)
+                        self.grad_scaler.update()
+                    else:
+                        total_dpo_loss.backward()
+                        if config.max_grad_norm > 0:
+                            torch.nn.utils.clip_grad_norm_(
+                                _dpo_params, config.max_grad_norm,
+                            )
+                        self.optimizer.step()
+                    self.scheduler.step()
+                finally:
+                    self.optimizer.zero_grad(set_to_none=True)
                 log.info(
                     f"DPO step applied: {len(dpo_losses)} pairs, "
                     f"loss={total_dpo_loss.item():.4f}"

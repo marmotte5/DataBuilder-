@@ -118,10 +118,12 @@ class SpeedTimestepSampler:
         # Process one timestep at a time to correctly handle duplicates within
         # a batch (fancy indexing with duplicates only keeps the last write,
         # silently dropping EMA updates for earlier occurrences).
+        # Transfer indices to CPU once up-front; previously each t_idx[i].item()
+        # call forced a per-iteration GPU sync (N syncs per step) that
+        # completely defeated async pipeline overlap.
         with torch.no_grad():
-            t_idx = timesteps.long()
-            for i in range(len(t_idx)):
-                ti = t_idx[i].item()
+            t_idx_cpu = timesteps.long().cpu().tolist()
+            for i, ti in enumerate(t_idx_cpu):
                 li = losses[i].detach()
                 if not self._ts_seen[ti]:
                     self._loss_ema[ti] = li
