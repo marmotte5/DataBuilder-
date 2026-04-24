@@ -340,8 +340,76 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_recent_menu"):
             self._refresh_recent_menu()
 
+        # Refresh the project info strip and make it visible
+        self._refresh_project_info_bar()
+
         if not silent:
             self._toast(f"Project '{project.name}' opened", "success")
+
+    def _refresh_project_info_bar(self) -> None:
+        """Rebuild the one-line project-stats strip from disk.
+
+        Shows image count, caption coverage, checkpoint count, and last
+        trained date. Called on project open/close and after any action
+        that might change these numbers (scan completion, checkpoint save).
+        """
+        if not hasattr(self, "_project_info_bar"):
+            return
+        proj = self._active_project
+        if proj is None:
+            self._project_info_bar.hide()
+            return
+
+        # Image + caption count from the project's dataset folder
+        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        img_count = 0
+        captioned = 0
+        try:
+            if proj.dataset_path.exists():
+                for item in proj.dataset_path.iterdir():
+                    if item.is_file() and item.suffix.lower() in exts:
+                        img_count += 1
+                        if item.with_suffix(".txt").exists():
+                            captioned += 1
+        except OSError:
+            pass
+
+        # Checkpoint count
+        ckpt_count = 0
+        try:
+            if proj.checkpoints_path.exists():
+                ckpt_count = sum(
+                    1 for p in proj.checkpoints_path.iterdir() if p.is_dir()
+                )
+        except OSError:
+            pass
+
+        # Compose the one-line summary
+        segments = []
+        segments.append(f"📁 {proj.name}")
+        if proj.architecture:
+            segments.append(f"arch: {proj.architecture}")
+        if img_count == 0:
+            segments.append("no images yet")
+        else:
+            coverage = (captioned / img_count) * 100 if img_count else 0
+            segments.append(
+                f"{img_count} image{'s' if img_count != 1 else ''}  "
+                f"({captioned} captioned, {coverage:.0f}%)"
+            )
+        if ckpt_count > 0:
+            segments.append(
+                f"{ckpt_count} checkpoint{'s' if ckpt_count != 1 else ''}"
+            )
+        if proj.last_trained:
+            segments.append(
+                f"last trained {proj.last_trained.strftime('%Y-%m-%d %H:%M')}"
+            )
+        else:
+            segments.append("not trained yet")
+
+        self._project_info_label.setText("    •    ".join(segments))
+        self._project_info_bar.show()
 
     def _close_active_project(self) -> None:
         """Forget the active project (next launch shows WelcomeDialog)."""
@@ -353,6 +421,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DataBuilder")
         if hasattr(self, "_recent_menu"):
             self._refresh_recent_menu()
+        self._refresh_project_info_bar()  # hides the strip
         self._show_welcome_dialog()
 
     def _build_menu_bar(self) -> None:
@@ -808,6 +877,50 @@ class MainWindow(QMainWindow):
         path_bar.addWidget(self.btn_scan)
 
         main_area_layout.addWidget(self._path_bar_widget)
+
+        # ── Project stats strip ──────────────────────────────────────────
+        # Compact one-line dashboard shown when a project is active.
+        # Gives users a persistent "at-a-glance" view of what's in their
+        # project (image count, trained checkpoints, etc.) without having
+        # to click Scan first. Hidden when no project is open.
+        self._project_info_bar = QWidget()
+        self._project_info_bar.setStyleSheet(
+            f"background-color: {COLORS['bg']}; "
+            f"border-bottom: 1px solid {COLORS['border']};"
+        )
+        info_layout = QHBoxLayout(self._project_info_bar)
+        info_layout.setContentsMargins(12, 4, 12, 4)
+        info_layout.setSpacing(16)
+
+        self._project_info_label = QLabel("")
+        self._project_info_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; "
+            f"background: transparent;"
+        )
+        self._project_info_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        info_layout.addWidget(self._project_info_label, 1)
+
+        # Action buttons on the right of the strip
+        self._btn_reveal_project = QPushButton("Reveal folder")
+        self._btn_reveal_project.setToolTip(
+            "Open the project folder in the system file browser."
+        )
+        self._btn_reveal_project.clicked.connect(self._reveal_project_folder)
+        info_layout.addWidget(self._btn_reveal_project)
+
+        self._btn_switch_project = QPushButton("Switch project…")
+        self._btn_switch_project.setToolTip(
+            "Open a different project (Ctrl+O)."
+        )
+        self._btn_switch_project.clicked.connect(
+            lambda: self._show_welcome_dialog(focus_tab=1)
+        )
+        info_layout.addWidget(self._btn_switch_project)
+
+        self._project_info_bar.hide()  # Hidden until a project is active
+        main_area_layout.addWidget(self._project_info_bar)
 
         # Progress bar (hidden until needed)
         self.progress_bar = QProgressBar()
@@ -2119,6 +2232,10 @@ class MainWindow(QMainWindow):
         self.entries = entries
         self.progress_bar.setVisible(False)
         self._set_controls_enabled(True)
+        # Scan might have added images to the project dataset folder — refresh
+        # the project info strip so the user sees the updated count.
+        if hasattr(self, "_refresh_project_info_bar"):
+            self._refresh_project_info_bar()
 
         if not entries:
             self.statusBar().showMessage(
