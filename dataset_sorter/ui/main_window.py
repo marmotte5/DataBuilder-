@@ -316,7 +316,12 @@ class MainWindow(QMainWindow):
         projects_root_str = str(self._project_manager.get_projects_root())
 
         def _is_inside_projects_root(p: str) -> bool:
-            return bool(p) and p.startswith(projects_root_str)
+            if not p:
+                return False
+            try:
+                return Path(p).resolve().is_relative_to(Path(projects_root_str).resolve())
+            except (ValueError, OSError):
+                return False
 
         if hasattr(self, "source_input"):
             existing_source = self.source_input.text().strip()
