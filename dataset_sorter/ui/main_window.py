@@ -240,19 +240,54 @@ class MainWindow(QMainWindow):
 
         self._show_welcome_dialog()
 
-    def _show_welcome_dialog(self) -> None:
+    def _show_welcome_dialog(self, *, focus_tab: int = -1) -> None:
         """Display the WelcomeDialog. If user cancels with no project open,
-        keep the app usable (do not force-exit)."""
+        keep the app usable (do not force-exit).
+
+        Args:
+            focus_tab: -1 to use the dialog's default focus (Recent if
+                any, else New), 0 for New, 1 for Recent, 2 for Open folder.
+        """
         dialog = WelcomeDialog(self)
+        if focus_tab >= 0:
+            dialog.tabs.setCurrentIndex(focus_tab)
         if dialog.exec() == dialog.DialogCode.Accepted and dialog.selected_project:
+            # If user switched to a different project, clear any
+            # previously-loaded scan data to avoid mixing datasets.
+            if (self._active_project is not None
+                    and self._active_project.name != dialog.selected_project.name
+                    and self.entries):
+                self._clear_loaded_dataset()
             self._apply_active_project(dialog.selected_project, silent=False)
         elif self._active_project is None:
             # User cancelled with no project — show a gentle banner
             self.statusBar().showMessage(
-                "No project open — use File → Open Project to create or "
-                "open one. Your changes won't be organised until a project "
-                "is active."
+                "No project open — use Project → Open project to create "
+                "or open one. You can still scan a folder without a project, "
+                "but training output will not be organised automatically."
             )
+
+    def _clear_loaded_dataset(self) -> None:
+        """Reset the in-memory scan state when switching between projects."""
+        self.entries.clear()
+        self.tag_counts.clear()
+        self.tag_to_entries.clear()
+        self.manual_overrides.clear()
+        self.deleted_tags.clear()
+        self.tag_auto_buckets.clear()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        # Tell panels to refresh if they're built
+        if hasattr(self, "tag_panel") and self.tag_panel is not None:
+            try:
+                self.tag_panel.refresh([], Counter())
+            except Exception as exc:
+                log.debug("tag_panel refresh after clear failed: %s", exc)
+        if hasattr(self, "image_tab") and self.image_tab is not None:
+            try:
+                self.image_tab.set_entries([])
+            except Exception as exc:
+                log.debug("image_tab refresh after clear failed: %s", exc)
 
     def _apply_active_project(self, project: Project, *, silent: bool) -> None:
         """Switch to *project*: update title, status bar, auto-fill paths.
@@ -274,16 +309,22 @@ class MainWindow(QMainWindow):
         )
 
         # Auto-fill paths: scan source = project/dataset, export output =
-        # project path. These are suggestions — users can still override.
+        # project path. These are suggestions — we only overwrite when the
+        # field is empty OR points at another project's subfolder inside
+        # our Projects root. External user paths (e.g. /mnt/dataset_nas)
+        # are preserved even if they happen to contain the word "dataset".
+        projects_root_str = str(self._project_manager.get_projects_root())
+
+        def _is_inside_projects_root(p: str) -> bool:
+            return bool(p) and p.startswith(projects_root_str)
+
         if hasattr(self, "source_input"):
             existing_source = self.source_input.text().strip()
-            # Only overwrite if empty or still pointing to another project's
-            # dataset (avoid clobbering a user's external folder they set).
-            if not existing_source or "dataset" in existing_source.lower():
+            if not existing_source or _is_inside_projects_root(existing_source):
                 self.source_input.setText(str(project.dataset_path))
         if hasattr(self, "output_input"):
             existing_out = self.output_input.text().strip()
-            if not existing_out:
+            if not existing_out or _is_inside_projects_root(existing_out):
                 self.output_input.setText(str(project.path))
 
         # Training tab: auto-fill output dir
@@ -291,19 +332,27 @@ class MainWindow(QMainWindow):
             self.training_tab, "output_dir_input"
         ):
             existing_td = self.training_tab.output_dir_input.text().strip()
-            if not existing_td:
+            if not existing_td or _is_inside_projects_root(existing_td):
                 self.training_tab.output_dir_input.setText(str(project.path))
+
+        # Keep the Recent submenu in sync so the just-opened project
+        # doesn't appear in its own "switch to" list.
+        if hasattr(self, "_recent_menu"):
+            self._refresh_recent_menu()
 
         if not silent:
             self._toast(f"Project '{project.name}' opened", "success")
 
     def _close_active_project(self) -> None:
         """Forget the active project (next launch shows WelcomeDialog)."""
+        self._clear_loaded_dataset()
         self._active_project = None
         settings = AppSettings.load()
         settings.current_project = None
         settings.save()
         self.setWindowTitle("DataBuilder")
+        if hasattr(self, "_recent_menu"):
+            self._refresh_recent_menu()
         self._show_welcome_dialog()
 
     def _build_menu_bar(self) -> None:
@@ -315,15 +364,23 @@ class MainWindow(QMainWindow):
         """
         menubar = self.menuBar()
 
-        project_menu = menubar.addMenu("&Project")
+        self._project_menu = menubar.addMenu("&Project")
+        project_menu = self._project_menu
 
         new_action = project_menu.addAction("&New project…")
         new_action.setShortcut("Ctrl+Shift+N")
-        new_action.triggered.connect(self._show_welcome_dialog)
+        new_action.triggered.connect(lambda: self._show_welcome_dialog(focus_tab=0))
 
         open_action = project_menu.addAction("&Open project…")
         open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._show_welcome_dialog)
+        open_action.triggered.connect(lambda: self._show_welcome_dialog(focus_tab=1))
+
+        # Recent submenu — populated lazily when the Project menu opens so
+        # it always reflects the current recent list.
+        self._recent_menu = project_menu.addMenu("Open &recent")
+        project_menu.aboutToShow.connect(self._refresh_recent_menu)
+        # Initial population so the menu shows something even before first open
+        self._refresh_recent_menu()
 
         project_menu.addSeparator()
 
@@ -338,6 +395,49 @@ class MainWindow(QMainWindow):
         exit_action = project_menu.addAction("E&xit")
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
+
+    def _refresh_recent_menu(self) -> None:
+        """Rebuild the Recent submenu from AppSettings.recent_projects."""
+        if not hasattr(self, "_recent_menu"):
+            return
+        self._recent_menu.clear()
+        settings = AppSettings.load()
+        known = {p.name: p for p in self._project_manager.list_projects()}
+        shown_any = False
+        for name in settings.recent_projects[:10]:
+            proj = known.get(name)
+            if proj is None:
+                continue  # Skip stale entries (folder gone)
+            if self._active_project is not None and name == self._active_project.name:
+                continue  # Don't list the currently-open project
+            details = []
+            if proj.architecture:
+                details.append(proj.architecture)
+            if proj.last_trained:
+                details.append(f"trained {proj.last_trained.strftime('%Y-%m-%d')}")
+            label = name if not details else f"{name}  ({', '.join(details)})"
+            action = self._recent_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, n=name: self._open_project_by_name(n)
+            )
+            shown_any = True
+        if not shown_any:
+            empty = self._recent_menu.addAction("(no other recent projects)")
+            empty.setEnabled(False)
+
+    def _open_project_by_name(self, name: str) -> None:
+        """Quickly switch to a recent project without going through the dialog."""
+        try:
+            proj = self._project_manager.load_project(name)
+        except FileNotFoundError as exc:
+            self._toast(f"Project '{name}' no longer exists", "error")
+            log.info("Failed to open recent project: %s", exc)
+            return
+        if (self._active_project is not None
+                and self._active_project.name != proj.name
+                and self.entries):
+            self._clear_loaded_dataset()
+        self._apply_active_project(proj, silent=False)
 
     def _reveal_project_folder(self) -> None:
         """Open the active project's folder in the OS file browser."""
