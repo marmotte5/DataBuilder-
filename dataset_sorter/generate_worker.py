@@ -1644,7 +1644,11 @@ class GenerateWorker(QThread):
                     try:
                         if hasattr(pipe_ref, "delete_adapters"):
                             pipe_ref.delete_adapters([_override_adapter])
-                        elif hasattr(pipe_ref, "unload_lora_weights"):
+                        elif not _prev_active_adapters and hasattr(pipe_ref, "unload_lora_weights"):
+                            # Fallback for older diffusers: only safe to unload
+                            # all LoRAs if there were no prior adapters to
+                            # preserve. Otherwise unload_lora_weights would
+                            # nuke base LoRAs the user explicitly loaded.
                             pipe_ref.unload_lora_weights()
                             _prev_active_adapters = None
                     except Exception as e:
