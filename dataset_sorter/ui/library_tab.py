@@ -356,45 +356,61 @@ class ModelCard(QFrame):
 
         # Icon/type indicator
         icon_text = "\U0001F4E6" if self._item.is_directory else "\U0001F4C4"
-        icon_label = QLabel(icon_text)
-        icon_label.setStyleSheet(
+        self._icon_label = QLabel(icon_text)
+        self._icon_label.setStyleSheet(
             f"font-size: 22px; background: transparent; color: {COLORS['text_secondary']};"
         )
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(icon_label)
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self._icon_label)
 
         # File name (elided)
-        name_label = QLabel(self._item.name)
-        name_label.setStyleSheet(
+        self._name_label = QLabel(self._item.name)
+        self._name_label.setStyleSheet(
             f"color: {COLORS['text']}; font-size: 12px; font-weight: 600; "
             f"background: transparent;"
         )
-        name_label.setWordWrap(False)
-        metrics = name_label.fontMetrics()
+        self._name_label.setWordWrap(False)
+        metrics = self._name_label.fontMetrics()
         elided = metrics.elidedText(self._item.name, Qt.TextElideMode.ElideMiddle, self.CARD_WIDTH - 28)
-        name_label.setText(elided)
-        layout.addWidget(name_label)
+        self._name_label.setText(elided)
+        layout.addWidget(self._name_label)
 
         # Size
-        size_label = QLabel(self._item.size_display)
-        size_label.setStyleSheet(
+        self._size_label = QLabel(self._item.size_display)
+        self._size_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;"
         )
-        layout.addWidget(size_label)
+        layout.addWidget(self._size_label)
 
         # Model type badge
-        badge = QLabel(self._item.model_type)
-        badge.setStyleSheet(tag_badge_style())
-        badge.setFixedHeight(20)
-        badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        layout.addWidget(badge)
+        self._badge_label = QLabel(self._item.model_type)
+        self._badge_label.setStyleSheet(tag_badge_style())
+        self._badge_label.setFixedHeight(20)
+        self._badge_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self._badge_label)
 
         # Modified date
-        date_label = QLabel(self._item.modified_display)
-        date_label.setStyleSheet(muted_label_style())
-        layout.addWidget(date_label)
+        self._date_label = QLabel(self._item.modified_display)
+        self._date_label.setStyleSheet(muted_label_style())
+        layout.addWidget(self._date_label)
 
         layout.addStretch()
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        self._apply_style(hovered=False)
+        self._icon_label.setStyleSheet(
+            f"font-size: 22px; background: transparent; color: {COLORS['text_secondary']};"
+        )
+        self._name_label.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 12px; font-weight: 600; "
+            f"background: transparent;"
+        )
+        self._size_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;"
+        )
+        self._badge_label.setStyleSheet(tag_badge_style())
+        self._date_label.setStyleSheet(muted_label_style())
 
     def _apply_style(self, hovered: bool):
         """Set the frame's stylesheet based on selection and hover state."""
@@ -575,11 +591,11 @@ class LibraryTab(QWidget):
         toolbar.addWidget(self._search_edit)
 
         # Refresh button
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedHeight(34)
-        refresh_btn.setStyleSheet(nav_button_style())
-        refresh_btn.clicked.connect(self.refresh)
-        toolbar.addWidget(refresh_btn)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setFixedHeight(34)
+        self._refresh_btn.setStyleSheet(nav_button_style())
+        self._refresh_btn.clicked.connect(self.refresh)
+        toolbar.addWidget(self._refresh_btn)
 
         return toolbar
 
@@ -588,12 +604,12 @@ class LibraryTab(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(6)
 
-        folder_label = QLabel("Folders:")
-        folder_label.setStyleSheet(
+        self._folder_label = QLabel("Folders:")
+        self._folder_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 12px; "
             f"font-weight: 600; background: transparent;"
         )
-        bar.addWidget(folder_label)
+        bar.addWidget(self._folder_label)
 
         self._folder_display = QLabel("")
         self._folder_display.setStyleSheet(
@@ -603,23 +619,23 @@ class LibraryTab(QWidget):
         self._folder_display.setWordWrap(False)
         bar.addWidget(self._folder_display, stretch=1)
 
-        browse_btn = QPushButton("Browse")
-        browse_btn.setFixedHeight(30)
-        browse_btn.setStyleSheet(nav_button_style())
-        browse_btn.clicked.connect(self._browse_folder)
-        bar.addWidget(browse_btn)
+        self._browse_btn = QPushButton("Browse")
+        self._browse_btn.setFixedHeight(30)
+        self._browse_btn.setStyleSheet(nav_button_style())
+        self._browse_btn.clicked.connect(self._browse_folder)
+        bar.addWidget(self._browse_btn)
 
-        add_btn = QPushButton("+ Add Folder")
-        add_btn.setFixedHeight(30)
-        add_btn.setStyleSheet(nav_button_style())
-        add_btn.clicked.connect(self._add_folder)
-        bar.addWidget(add_btn)
+        self._add_btn = QPushButton("+ Add Folder")
+        self._add_btn.setFixedHeight(30)
+        self._add_btn.setStyleSheet(nav_button_style())
+        self._add_btn.clicked.connect(self._add_folder)
+        bar.addWidget(self._add_btn)
 
-        remove_btn = QPushButton("Remove Folder")
-        remove_btn.setFixedHeight(30)
-        remove_btn.setStyleSheet(nav_button_style())
-        remove_btn.clicked.connect(self._remove_folder)
-        bar.addWidget(remove_btn)
+        self._remove_btn = QPushButton("Remove Folder")
+        self._remove_btn.setFixedHeight(30)
+        self._remove_btn.setStyleSheet(nav_button_style())
+        self._remove_btn.clicked.connect(self._remove_folder)
+        bar.addWidget(self._remove_btn)
 
         self._update_folder_display()
         return bar
@@ -663,7 +679,9 @@ class LibraryTab(QWidget):
         """Create the bottom detail panel showing info for the selected item."""
         self._detail_frame = QFrame()
         self._detail_frame.setStyleSheet(
-            f"QFrame {{ {card_style()} }}"
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border: 1px solid {COLORS['border']}; "
+            f"border-radius: 12px; padding: 14px;"
         )
         self._detail_frame.setFixedHeight(180)
 
@@ -1360,7 +1378,12 @@ class LibraryTab(QWidget):
 
     def refresh_theme(self):
         """Re-apply all inline styles after a theme change."""
-        self._detail_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        # Detail panel frame and children
+        self._detail_frame.setStyleSheet(
+            f"background-color: {COLORS['bg_alt']}; "
+            f"border: 1px solid {COLORS['border']}; "
+            f"border-radius: 12px; padding: 14px;"
+        )
         self._detail_name.setStyleSheet(section_header_style())
         self._detail_path.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
@@ -1379,10 +1402,43 @@ class LibraryTab(QWidget):
         self._btn_use_generate.setStyleSheet(accent_button_style())
         self._btn_use_train.setStyleSheet(accent_button_style())
         self._btn_delete.setStyleSheet(danger_button_style())
+        # Toolbar widgets
         self._update_toggle_styles()
         self._stats_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self._fav_filter_btn.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 6px; "
+            f"padding: 4px 10px; background: transparent; color: {COLORS['text_muted']}; }} "
+            f"QPushButton:checked {{ background: {COLORS['accent_subtle']}; "
+            f"color: {COLORS['accent']}; border-color: {COLORS['accent']}; }}"
+        )
+        self._refresh_btn.setStyleSheet(nav_button_style())
+        # Folder bar
+        self._folder_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; "
+            f"font-weight: 600; background: transparent;"
+        )
+        self._folder_display.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;"
         )
-        self._empty_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
+        self._browse_btn.setStyleSheet(nav_button_style())
+        self._add_btn.setStyleSheet(nav_button_style())
+        self._remove_btn.setStyleSheet(nav_button_style())
+        # Progress bar
+        self._progress_bar.setStyleSheet(
+            f"QProgressBar {{ border: none; background: {COLORS['border']}; }} "
+            f"QProgressBar::chunk {{ background: {COLORS['accent']}; }}"
         )
+        # Scroll area and card grid
+        self._scroll_area.setStyleSheet(
+            f"QScrollArea {{ border: none; background: transparent; }}"
+        )
+        self._grid_container.setStyleSheet("background: transparent;")
+        self._empty_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 14px; "
+            f"background: transparent; padding: 60px 0;"
+        )
+        # Refresh all model cards
+        for card in self._cards:
+            card.refresh_theme()
