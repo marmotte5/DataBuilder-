@@ -58,6 +58,7 @@ Role in DataBuilder:
 
 import gc
 import logging
+import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -203,6 +204,23 @@ class TrainBackendBase(ABC):
         mask_area = mask.sum(dim=list(range(1, len(mask.shape)))).clamp(min=1.0)
         return masked.sum(dim=list(range(1, len(masked.shape)))) / mask_area
 
+    def _base_loss(
+        self, pred: torch.Tensor, target: torch.Tensor,
+    ) -> torch.Tensor:
+        """Dispatch loss by config.loss_fn.
+
+        - "mse"       : F.mse_loss (standard)
+        - "huber"     : F.huber_loss with configurable delta (robust to outliers)
+        - "smooth_l1" : equivalent to huber with delta=1.0
+        """
+        loss_fn = getattr(self.config, "loss_fn", "mse").lower()
+        if loss_fn == "huber":
+            delta = float(getattr(self.config, "huber_delta", 0.1))
+            return F.huber_loss(pred, target, reduction="none", delta=delta)
+        if loss_fn == "smooth_l1":
+            return F.smooth_l1_loss(pred, target, reduction="none")
+        return F.mse_loss(pred, target, reduction="none")
+
     def _compute_epsilon_loss(
         self, noise_pred: torch.Tensor, noise: torch.Tensor,
         latents: torch.Tensor, timesteps: torch.Tensor,
@@ -212,13 +230,17 @@ class TrainBackendBase(ABC):
             target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
         else:
             target = noise
-        # Use Triton fused MSE+cast kernel when available (~15% faster).
-        # Fall back to standard path when spatial masks are active (fused
-        # kernel returns per-sample means, but masking needs unreduced loss).
-        if self.config.triton_fused_loss and self._training_mask is None:
+        # Triton fused MSE+cast kernel (~15% faster) — skip for non-MSE
+        # loss_fn since the fused kernel is MSE-specific.
+        _use_fused = (
+            self.config.triton_fused_loss
+            and self._training_mask is None
+            and getattr(self.config, "loss_fn", "mse").lower() == "mse"
+        )
+        if _use_fused:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
-        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+        loss = self._base_loss(noise_pred.float(), target.float())
         return self._apply_spatial_mask(loss)
 
     def _compute_vpred_loss(
@@ -239,7 +261,7 @@ class TrainBackendBase(ABC):
             sigma_t = sigma_t.view(shape)
         # Compute target in fp32 to preserve precision in alpha*noise - sigma*latents
         target = alpha_t * noise.float() - sigma_t * latents.float()
-        loss = F.mse_loss(noise_pred.float(), target, reduction="none")
+        loss = self._base_loss(noise_pred.float(), target)
         return self._apply_spatial_mask(loss)
 
     def _compute_flow_loss(
@@ -248,10 +270,15 @@ class TrainBackendBase(ABC):
     ) -> torch.Tensor:
         """Flow matching loss: target = noise - latents."""
         target = noise.float() - latents.float()
-        if self.config.triton_fused_loss and self._training_mask is None:
+        _use_fused = (
+            self.config.triton_fused_loss
+            and self._training_mask is None
+            and getattr(self.config, "loss_fn", "mse").lower() == "mse"
+        )
+        if _use_fused:
             from dataset_sorter.triton_kernels import fused_mse_loss
             return fused_mse_loss(noise_pred, target)
-        loss = F.mse_loss(noise_pred.float(), target, reduction="none")
+        loss = self._base_loss(noise_pred.float(), target)
         return self._apply_spatial_mask(loss)
 
     # ── Shared flow matching helpers ───────────────────────────────────
@@ -606,6 +633,53 @@ class TrainBackendBase(ABC):
                 te.cpu()
         empty_cache()
 
+    @staticmethod
+    def _apply_multires_noise(
+        noise: torch.Tensor, discount: float, iterations: int,
+    ) -> torch.Tensor:
+        """Kohya-style multi-resolution noise augmentation.
+
+        Adds noise pyramids at decreasing spatial resolutions, weighted by
+        ``discount ** (i+1)``. This prevents color shift / flat-color bias
+        that plain Gaussian noise causes on SD1.5/SDXL training. Based on
+        https://wandb.ai/johnowhitaker/multires_noise/reports/ .
+
+        Only meaningful when ``discount > 0`` and ``iterations > 0``.
+        """
+        if discount <= 0.0 or iterations <= 0:
+            return noise
+        b, c, h, w = noise.shape
+        for i in range(iterations):
+            # Downscale factor in [2, 4]
+            r = random.random() * 2 + 2
+            wn = max(1, int(w / (r ** (i + 1))))
+            hn = max(1, int(h / (r ** (i + 1))))
+            small = torch.randn(
+                b, c, hn, wn, device=noise.device, dtype=noise.dtype,
+            )
+            noise = noise + torch.nn.functional.interpolate(
+                small, size=(h, w), mode="bilinear", align_corners=False,
+            ) * (discount ** (i + 1))
+            # Early exit once we hit 1x1 (further iterations are degenerate)
+            if hn == 1 and wn == 1:
+                break
+        # Re-standardize to keep unit variance (prevents amplitude drift)
+        std = noise.std().clamp(min=1e-8)
+        return noise / std
+
+    @staticmethod
+    def _apply_ip_noise_gamma(
+        noisy_latents: torch.Tensor, gamma: float,
+    ) -> torch.Tensor:
+        """Input perturbation from Ning et al. 2023 ("Input Perturbation
+        Reduces Exposure Bias in Diffusion Models"). Adds a small Gaussian
+        perturbation to the noisy input; regularizes away from training-only
+        distribution. Only active when ``gamma > 0``.
+        """
+        if gamma <= 0.0:
+            return noisy_latents
+        return noisy_latents + gamma * torch.randn_like(noisy_latents)
+
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
@@ -619,6 +693,12 @@ class TrainBackendBase(ABC):
                 latents.shape[0], latents.shape[1], 1, 1,
                 device=latents.device, dtype=latents.dtype,
             )
+        # Multi-resolution noise: prevents color bias on SD1.5/SDXL
+        noise = self._apply_multires_noise(
+            noise,
+            getattr(config, "multires_noise_discount", 0.0),
+            getattr(config, "multires_noise_iterations", 0),
+        )
 
         # Sample timesteps (per-timestep EMA, SpeeD asymmetric, or uniform)
         if self._timestep_ema_sampler is not None:
@@ -641,6 +721,11 @@ class TrainBackendBase(ABC):
 
         # Add noise to latents
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+        # Input perturbation (Ning et al. 2023) regularizes away from
+        # training-only distribution. Only applied when gamma > 0.
+        noisy_latents = self._apply_ip_noise_gamma(
+            noisy_latents, getattr(config, "ip_noise_gamma", 0.0),
+        )
 
         # Unpack text encoder outputs
         encoder_hidden = te_out[0]
@@ -774,7 +859,17 @@ class TrainBackendBase(ABC):
                 latents.shape[0], latents.shape[1], 1, 1,
                 device=latents.device, dtype=latents.dtype,
             )
+        # Multi-resolution noise (same effect as epsilon path)
+        noise = self._apply_multires_noise(
+            noise,
+            getattr(config, "multires_noise_discount", 0.0),
+            getattr(config, "multires_noise_iterations", 0),
+        )
         noisy_latents = self._flow_interpolate(latents, noise, t)
+        # Input perturbation regularization
+        noisy_latents = self._apply_ip_noise_gamma(
+            noisy_latents, getattr(config, "ip_noise_gamma", 0.0),
+        )
 
         encoder_hidden = te_out[0]
         pooled = te_out[1] if len(te_out) > 1 else None

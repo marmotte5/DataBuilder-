@@ -162,6 +162,13 @@ class TrainingConfig:
     multires_noise_iterations: int = 6
     guidance_scale: float = 1.0
 
+    # Loss function choice (OneTrainer parity)
+    # - "mse"   : standard squared error (default; what SD/Flux training uses)
+    # - "huber" : robust to outlier images/captions, smooth L1 variant
+    # - "smooth_l1" : alias for huber with delta=1.0
+    loss_fn: str = "mse"
+    huber_delta: float = 0.1  # Huber transition point; smaller = more robust
+
     # Timestep sampling (flow-matching models)
     timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal, speed
     model_prediction_type: str = ""     # epsilon, v_prediction, raw, flow
@@ -313,6 +320,11 @@ class TrainingConfig:
     # ── Masked Training ──────────────────────────────────────────────────
     masked_training: bool = False       # Enable masked loss (only train on masked regions)
     mask_weight: float = 1.0           # Relative weight for masked vs unmasked regions
+    # OneTrainer-style random unmasked steps: with this probability, skip
+    # the mask for a batch and train on the full image. Prevents the model
+    # from forgetting backgrounds / context when the subject is absent.
+    # Typical value: 0.05-0.15. Set to 0 to disable.
+    unmasked_probability: float = 0.0
 
     # ── TensorBoard Logging ──────────────────────────────────────────────
     tensorboard_logging: bool = False   # Enable TensorBoard logging

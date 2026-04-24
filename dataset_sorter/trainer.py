@@ -21,6 +21,7 @@ Chroma (LoRA + Full)
 import gc
 import json
 import logging
+import random
 import shutil
 import threading
 import time
@@ -2010,7 +2011,17 @@ class Trainer:
                     self._attention_rebalancer.update_from_attention_maps(attn_maps, cap)
 
         # ── Masked training: pass spatial mask to backend ──
-        if self._mask_map and "index" in batch:
+        # OneTrainer-style unmasked_probability: randomly skip the mask for
+        # this batch so the model retains its background/context generation
+        # ability. Otherwise purely-masked training causes catastrophic
+        # forgetting outside the mask region.
+        _skip_mask = (
+            getattr(self.config, "unmasked_probability", 0.0) > 0.0
+            and random.random() < self.config.unmasked_probability
+        )
+        if _skip_mask:
+            self.backend._training_mask = None
+        if self._mask_map and "index" in batch and not _skip_mask:
             indices = batch["index"]
             if isinstance(indices, torch.Tensor):
                 indices = indices.tolist()
