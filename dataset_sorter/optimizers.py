@@ -581,10 +581,15 @@ class SOAP(Optimizer):
             # Compute the i-th mode unfolding's covariance estimate
             # Move dim i to front, reshape to 2D
             g = grad.movedim(i, 0).reshape(grad.shape[i], -1)
-            # Running covariance via exponential moving average
+            # Running covariance via exponential moving average.
+            # Accumulate covariance in FP32 regardless of grad dtype — BF16
+            # covariance silently degrades eigh() quality in mixed-precision
+            # training (BF16 has ~8 bits of mantissa), which is the dominant
+            # use case on RTX 4090 / H100.
             cov_key = f"cov_{i}"
             alpha = 0.1  # EMA decay for covariance
-            cov = g @ g.T / g.shape[1]
+            g_f32 = g.float()
+            cov = g_f32 @ g_f32.T / g_f32.shape[1]
             if cov_key in state:
                 state[cov_key].lerp_(cov, alpha)
             else:
@@ -595,7 +600,10 @@ class SOAP(Optimizer):
                 continue
             try:
                 _, eigvecs = torch.linalg.eigh(state[cov_key])
-                Q_list[i] = eigvecs
+                # Cast back to grad dtype: covariance+eigh run in FP32 for
+                # numerical quality, but we store the basis in the param's
+                # dtype so subsequent rotations stay in low precision.
+                Q_list[i] = eigvecs.to(dtype=grad.dtype)
             except Exception as e:
                 log.warning("SOAP eigendecomposition failed (keeping old basis): %s", e)
 

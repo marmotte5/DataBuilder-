@@ -398,8 +398,18 @@ class TrainBackendBase(ABC):
             apply_liger_kernels(self.unet)
 
         # 7. Gradient checkpointing
+        # use_reentrant=False is preferred by PyTorch and diffusers: the
+        # reentrant variant drops autocast context in the recompute pass,
+        # silently running ops in FP32 instead of BF16 and losing VRAM
+        # savings. Fallback to the no-kwargs form for backends that don't
+        # accept gradient_checkpointing_kwargs.
         if config.gradient_checkpointing and self.unet is not None:
-            self.unet.enable_gradient_checkpointing()
+            try:
+                self.unet.enable_gradient_checkpointing(
+                    gradient_checkpointing_kwargs={"use_reentrant": False},
+                )
+            except TypeError:
+                self.unet.enable_gradient_checkpointing()
 
         # 8. VAE optimizations (slicing for lower peak VRAM)
         if self.vae is not None:
