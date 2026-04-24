@@ -213,7 +213,9 @@ def get_locked_fields(optimizer_name: str) -> dict:
     name = optimizer_name.lower()
     if name in ("prodigy", "dadaptadam"):
         return {"learning_rate": 1.0, "lr_scheduler": "constant"}
-    if name == "adamw_schedulefree":
+    # "AdamWScheduleFree".lower() == "adamwschedulefree" (no underscore).
+    # Accept both forms to be robust against callers passing variants.
+    if name in ("adamwschedulefree", "adamw_schedulefree"):
         return {"lr_scheduler": "constant"}
     if name == "adafactor":
         return {"learning_rate": None}

@@ -31,12 +31,15 @@ class EMAModel:
         self.update_after_step = update_after_step
         self.step = 0
 
-        # Store EMA weights — optionally on CPU to save VRAM
+        # Store EMA weights in FP32 regardless of training dtype. BF16/FP16
+        # shadow params lose precision over thousands of lerp_() steps with
+        # a factor of 1e-4, silently degrading EMA quality. FP32 is standard
+        # practice (diffusers EMAModel, Kohya sd-scripts, Stability AI).
         device = torch.device("cpu") if cpu_offload else None
         self.shadow_params = []
         for p in parameters:
             if p.requires_grad:
-                sp = p.data.clone().detach()
+                sp = p.data.detach().to(torch.float32).clone()
                 if device is not None:
                     sp = sp.to(device)
                 self.shadow_params.append(sp)
@@ -51,19 +54,25 @@ class EMAModel:
         if self.step <= self.update_after_step:
             return
 
-        one_minus_decay = 1.0 - self.decay
+        # Decay warmup: clamp effective decay at early steps so the shadow
+        # params aren't pulled toward random initialization. Standard formula
+        # used by diffusers EMAModel, Kohya sd-scripts, and original EMA
+        # papers: decay = min(decay, (1+step) / (10+step)). At step=0 this
+        # is 1/10=0.1 (fast tracking); converges to `decay` as step grows.
+        effective_decay = min(self.decay, (1 + self.step) / (10 + self.step))
+        one_minus_decay = 1.0 - effective_decay
         if self.cpu_offload:
             # Batch transfer: gather all param data to CPU in one pass
             pairs = list(zip(self.shadow_params, _grad_params(parameters)))
             # Check all params for NaN first — a partial EMA update creates
             # an inconsistent mix of different training steps.
             for sp, p in pairs:
-                p_data = p.data.to(sp.device, non_blocking=True)
+                p_data = p.data.to(sp.device, dtype=sp.dtype, non_blocking=True)
                 if torch.isnan(p_data).any():
                     log.warning("EMA update skipped: NaN detected in model parameters")
                     return
             for sp, p in pairs:
-                p_data = p.data.to(sp.device, non_blocking=True)
+                p_data = p.data.to(sp.device, dtype=sp.dtype, non_blocking=True)
                 sp.lerp_(p_data, one_minus_decay)
         else:
             params_list = list(zip(self.shadow_params, _grad_params(parameters)))
@@ -72,7 +81,11 @@ class EMAModel:
                     log.warning("EMA update skipped: NaN detected in model parameters")
                     return
             for sp, p in params_list:
-                sp.lerp_(p.data, one_minus_decay)
+                # Upcast param to FP32 only if needed (usually it is BF16/FP16)
+                if p.data.dtype != sp.dtype:
+                    sp.lerp_(p.data.to(sp.dtype), one_minus_decay)
+                else:
+                    sp.lerp_(p.data, one_minus_decay)
 
     def store(self, parameters: Iterable[nn.Parameter]):
         """Save current model params (before replacing with EMA for inference)."""
@@ -81,9 +94,13 @@ class EMAModel:
         ]
 
     def copy_to(self, parameters: Iterable[nn.Parameter]):
-        """Copy EMA weights into model parameters (for inference/sampling)."""
+        """Copy EMA weights into model parameters (for inference/sampling).
+
+        EMA shadow params are kept in FP32 but the model may be BF16/FP16 —
+        cast back to the model's dtype on copy.
+        """
         for sp, p in zip(self.shadow_params, _grad_params(parameters)):
-            p.data.copy_(sp.to(p.device))
+            p.data.copy_(sp.to(device=p.device, dtype=p.dtype))
 
     def restore(self, parameters: Iterable[nn.Parameter]):
         """Restore original model params (after EMA inference)."""

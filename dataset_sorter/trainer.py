@@ -529,9 +529,11 @@ class Trainer:
         if config.train_text_encoder_2 and self.backend.supports_dual_te:
             self.backend.unfreeze_text_encoder(2)
 
-        # ── 5. GradScaler for fp16 (not needed for bf16; CUDA only) ──
-        if self.dtype == torch.float16 and self.device.type == "cuda":
-            self.grad_scaler = torch.amp.GradScaler("cuda")
+        # ── 5. GradScaler for fp16 (not needed for bf16) ──
+        # FP16 training requires GradScaler to prevent gradient underflow.
+        # Support both CUDA and Intel XPU; MPS/CPU fp16 is blocked upstream.
+        if self.dtype == torch.float16 and self.device.type in ("cuda", "xpu"):
+            self.grad_scaler = torch.amp.GradScaler(self.device.type)
             # GradScaler requires ALL trainable params to be float32 so their
             # gradients are float32 (unscale_ crashes on fp16 gradients).
             # The LoRA params are already cast in _apply_lora(); do the same for
