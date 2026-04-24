@@ -62,17 +62,17 @@ class EMAModel:
         effective_decay = min(self.decay, (1 + self.step) / (10 + self.step))
         one_minus_decay = 1.0 - effective_decay
         if self.cpu_offload:
-            # Batch transfer: gather all param data to CPU in one pass
             pairs = list(zip(self.shadow_params, _grad_params(parameters)))
-            # Check all params for NaN first — a partial EMA update creates
-            # an inconsistent mix of different training steps.
+            # Transfer all params GPU→CPU once, check for NaN, then reuse for
+            # the actual update.  Avoids a redundant second GPU→CPU transfer.
+            transferred: list[torch.Tensor] = []
             for sp, p in pairs:
                 p_data = p.data.to(sp.device, dtype=sp.dtype, non_blocking=True)
                 if torch.isnan(p_data).any():
                     log.warning("EMA update skipped: NaN detected in model parameters")
                     return
-            for sp, p in pairs:
-                p_data = p.data.to(sp.device, dtype=sp.dtype, non_blocking=True)
+                transferred.append(p_data)
+            for (sp, _), p_data in zip(pairs, transferred):
                 sp.lerp_(p_data, one_minus_decay)
         else:
             params_list = list(zip(self.shadow_params, _grad_params(parameters)))

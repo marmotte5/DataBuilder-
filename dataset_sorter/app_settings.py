@@ -121,10 +121,12 @@ class AppSettings:
         path = self.get_settings_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
+            _tmp = path.with_suffix(".tmp")
+            _tmp.write_text(
                 json.dumps(self._to_dict(), indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            _tmp.replace(path)
         except OSError as exc:
             log.error("Could not save settings: %s", exc)
 

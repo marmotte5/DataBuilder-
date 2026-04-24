@@ -144,7 +144,9 @@ class ChunkPacker:
             "captions": captions,
         }
         meta_path = self.output_dir / "chunks_meta.json"
-        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        _tmp = meta_path.with_suffix(".tmp")
+        _tmp.write_text(json.dumps(meta), encoding="utf-8")
+        _tmp.replace(meta_path)
 
         log.info(
             f"ChunkPacker: {num_samples} samples → {len(chunk_paths)} chunks "
@@ -634,6 +636,8 @@ class BackgroundPrefetcher:
         self._consumed.set()  # Unblock if waiting
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                log.warning("Prefetch thread did not stop within 5s timeout")
             self._thread = None
 
 

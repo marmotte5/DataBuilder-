@@ -228,16 +228,22 @@ class WelcomeDialog(QDialog):
             )
             return
         safe = _safe_dir_name(raw)
+        if len(safe) > 200:
+            safe = safe[:200]
         full_path = self.settings.projects_root / safe
-        if safe != raw:
+        _exists = self.manager.project_exists(safe)
+        if not safe:
+            text = "Invalid name (only special characters)"
+        elif len(raw) > 200:
+            text = f"{full_path}    (name truncated to 200 chars)"
+        elif safe != raw:
             text = f"{full_path}    (name sanitised from '{raw}')"
-        elif self.manager.project_exists(raw):
+        elif _exists:
             text = f"{full_path}    ⚠ already exists"
         else:
             text = str(full_path)
         self._new_path_preview.setText(text)
-        # Warning color when existing
-        if self.manager.project_exists(raw):
+        if _exists or not safe:
             self._new_path_preview.setStyleSheet(
                 "color: #c47a00; font-family: monospace; "
                 "padding: 6px 8px; background: palette(alternate-base); "
@@ -539,6 +545,13 @@ class WelcomeDialog(QDialog):
             QMessageBox.warning(self, "Missing name", "Please enter a project name.")
             self._name_edit.setFocus()
             return
+        if len(name) > 200:
+            QMessageBox.warning(
+                self, "Name too long",
+                "Project name must be 200 characters or fewer.",
+            )
+            self._name_edit.setFocus()
+            return
         architecture = self._arch_combo.currentData() or ""
         base_model = self._base_model_edit.text().strip()
         import_src = self._import_dataset_edit.text().strip()
@@ -624,7 +637,20 @@ class WelcomeDialog(QDialog):
             )
             return
         name = item.data(Qt.ItemDataRole.UserRole)
-        self.selected_project = self.manager.load_project(name)
+        try:
+            self.selected_project = self.manager.load_project(name)
+        except FileNotFoundError:
+            reply = QMessageBox.warning(
+                self, "Project folder missing",
+                f"The folder for project '{name}' no longer exists.\n\n"
+                f"Remove it from the recent list?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.settings.remove_recent_project(name)
+                self.settings.save()
+                self._populate_recent()
+            return
 
     def _do_browse_existing(self) -> None:
         path_str = self._browse_path_edit.text().strip()

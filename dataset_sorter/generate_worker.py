@@ -372,7 +372,7 @@ class GenerateWorker(QThread):
         Emits error if the worker is already busy.
         """
         if self.isRunning():
-            self._emit(self.error,"Worker is busy. Wait for the current operation to finish.")
+            self._emit(self.error, "Worker is busy. Wait for the current operation to finish.")
             return
         self._mode = "load"
         self._model_path = model_path
@@ -384,7 +384,7 @@ class GenerateWorker(QThread):
     def generate(self):
         """Start image generation (runs in thread). Model must be loaded first."""
         if self.isRunning():
-            self._emit(self.error,"Worker is busy. Wait for the current operation to finish.")
+            self._emit(self.error, "Worker is busy. Wait for the current operation to finish.")
             return
         self._mode = "generate"
         self._stop_requested = False
@@ -442,14 +442,14 @@ class GenerateWorker(QThread):
             log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
             log_vram_state(f"generate error ({self._mode})")
             if "c10" in str(e).lower() or "1114" in str(e):
-                self._emit(self.error,
+                self._emit(self.error, 
                     "PyTorch DLL failed to load (c10.dll). "
                     "Run update.bat to reinstall PyTorch, or install "
                     "Visual C++ Redistributable (x64) and update NVIDIA drivers."
                 )
             else:
-                self._emit(self.error,f"{e}\n\n{traceback.format_exc()}")
-            self._emit(self.finished_generating,False, str(e))
+                self._emit(self.error, f"{e}\n\n{traceback.format_exc()}")
+            self._emit(self.finished_generating, False, str(e))
             # Unload on load failures to free VRAM from partial pipeline.
             if self._mode == "load":
                 try:
@@ -462,8 +462,8 @@ class GenerateWorker(QThread):
             log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
             log_vram_state(f"generate error ({self._mode})")
             tb = traceback.format_exc()
-            self._emit(self.error,f"{e}\n\n{tb}")
-            self._emit(self.finished_generating,False, str(e))
+            self._emit(self.error, f"{e}\n\n{tb}")
+            self._emit(self.finished_generating, False, str(e))
             # Only unload on load errors (model is in unknown state).
             # For generation errors, the model is still valid and can be reused.
             if self._mode == "load":
@@ -497,7 +497,7 @@ class GenerateWorker(QThread):
         """
         import torch
 
-        self._emit(self.progress,0, 100, "Loading model...")
+        self._emit(self.progress, 0, 100, "Loading model...")
 
         # Unload any previously loaded pipeline to free GPU memory before
         # allocating the new one. Without this, switching models (e.g. Flux
@@ -526,7 +526,7 @@ class GenerateWorker(QThread):
             if not torch.cuda.is_bf16_supported():
                 dtype = torch.float16
 
-        self._emit(self.progress,10, 100, f"Loading {self._model_type} pipeline...")
+        self._emit(self.progress, 10, 100, f"Loading {self._model_type} pipeline...")
 
         model_type = self._model_type
         model_path = self._model_path
@@ -535,8 +535,8 @@ class GenerateWorker(QThread):
         pipe = self._load_pipeline(model_path, model_type, dtype)
         if pipe is None:
             msg = f"Failed to load pipeline for model type: {model_type}"
-            self._emit(self.error,msg)
-            self._emit(self.finished_generating,False, msg)
+            self._emit(self.error, msg)
+            self._emit(self.finished_generating, False, msg)
             return
 
         # Wrap post-load setup in try/except so the local `pipe` is freed on
@@ -544,7 +544,7 @@ class GenerateWorker(QThread):
         # assignment to self.pipe leaves a GPU-resident pipeline unreachable,
         # leaking potentially 5-20 GB of VRAM until process exit.
         try:
-            self._emit(self.progress,50, 100, "Applying optimizations...")
+            self._emit(self.progress, 50, 100, "Applying optimizations...")
 
             # Enable memory optimizations — cpu_offload must be called INSTEAD of
             # pipe.to(device), not after it, otherwise the model is already fully on
@@ -582,7 +582,7 @@ class GenerateWorker(QThread):
             if hasattr(pipe, "enable_vae_tiling"):
                 pipe.enable_vae_tiling()
 
-            self._emit(self.progress,70, 100, "Loading LoRA adapters...")
+            self._emit(self.progress, 70, 100, "Loading LoRA adapters...")
 
             # Load LoRA adapters
             if self._lora_adapters:
@@ -609,7 +609,7 @@ class GenerateWorker(QThread):
                     except Exception as exc:
                         log.warning("torch.compile on pipeline failed: %s — continuing without it", exc)
 
-            self._emit(self.progress,90, 100, "Finalizing...")
+            self._emit(self.progress, 90, 100, "Finalizing...")
 
             with self._lock:
                 self.pipe = pipe
@@ -627,8 +627,8 @@ class GenerateWorker(QThread):
         from dataset_sorter.ui.debug_console import log_vram_state
         log_vram_state(f"model loaded: {model_type}")
 
-        self._emit(self.progress,100, 100, "Model loaded!")
-        self._emit(self.model_loaded,
+        self._emit(self.progress, 100, 100, "Model loaded!")
+        self._emit(self.model_loaded, 
             f"Loaded {model_type} on {self._device} ({dtype.__name__ if hasattr(dtype, '__name__') else dtype})"
         )
 
@@ -841,14 +841,14 @@ class GenerateWorker(QThread):
 
         base_repo = BASE_REPOS.get(model_type)
         if not base_repo:
-            self._emit(self.error,
+            self._emit(self.error, 
                 f"No base model repo known for '{model_type}'. "
                 f"Use a diffusers-format model folder instead."
             )
             return None
 
         # ── Phase 1: Try local cache (no network access) ─────────────────────
-        self._emit(self.progress,15, 100, f"Checking {model_type} cache ({base_repo})...")
+        self._emit(self.progress, 15, 100, f"Checking {model_type} cache ({base_repo})...")
         pipe = self._try_load_pipeline_cached(base_repo, kwargs)
 
         if pipe is None:
@@ -861,13 +861,13 @@ class GenerateWorker(QThread):
 
         if pipe is None:
             # ── Phase 3: Full fallback download ───────────────────────────────
-            self._emit(self.progress,17, 100,
+            self._emit(self.progress, 17, 100,
                 f"Downloading full {model_type} pipeline from {base_repo} "
                 f"(this may take a while)...")
             try:
                 pipe = diffusers.DiffusionPipeline.from_pretrained(base_repo, **kwargs)
             except Exception as e:
-                self._emit(self.error,
+                self._emit(self.error, 
                     f"Failed to load base pipeline from {base_repo}: {e}\n\n"
                     f"Make sure you have internet access for the first download, "
                     f"or point to a diffusers-format model folder."
@@ -877,10 +877,10 @@ class GenerateWorker(QThread):
         # ── Swap transformer weights from user's local file ───────────────────
         model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
         if model_component is None:
-            self._emit(self.error,f"Cannot find transformer/unet in {model_type} pipeline.")
+            self._emit(self.error, f"Cannot find transformer/unet in {model_type} pipeline.")
             return None
 
-        self._emit(self.progress,30, 100, "Loading fine-tuned weights from local file...")
+        self._emit(self.progress, 30, 100, "Loading fine-tuned weights from local file...")
 
         try:
             state_dict = load_file(model_path, device="cpu")
@@ -897,7 +897,7 @@ class GenerateWorker(QThread):
                 log.warning(f"Unexpected keys when loading weights: {len(unexpected)} keys")
 
         except Exception as e:
-            self._emit(self.error,f"Failed to load weights from {model_path}: {e}")
+            self._emit(self.error, f"Failed to load weights from {model_path}: {e}")
             pipe = None
             gc.collect()
             if torch.cuda.is_available():
@@ -964,7 +964,7 @@ class GenerateWorker(QThread):
             return None
 
         cache_dir = os.environ.get("HF_HOME")
-        self._emit(self.progress,17, 100,
+        self._emit(self.progress, 17, 100,
             f"Downloading {model_type} components "
             f"(VAE + text encoder + configs — skipping transformer, using local file)...")
 
@@ -1010,14 +1010,14 @@ class GenerateWorker(QThread):
             # Last resort: copy the file (slow for large models)
             if not linked:
                 try:
-                    self._emit(self.progress,22, 100, "Copying transformer weights to cache...")
+                    self._emit(self.progress, 22, 100, "Copying transformer weights to cache...")
                     shutil.copy2(model_path, transformer_weight_file)
                     log.info("Copied transformer weights to cache: %s", transformer_weight_file)
                 except Exception as e:
                     log.warning("Could not link or copy transformer weights: %s", e)
                     return None
 
-        self._emit(self.progress,25, 100, f"Loading {model_type} pipeline from local components...")
+        self._emit(self.progress, 25, 100, f"Loading {model_type} pipeline from local components...")
 
         try:
             pipe = diffusers.DiffusionPipeline.from_pretrained(
@@ -1064,7 +1064,7 @@ class GenerateWorker(QThread):
                     log.debug(f"Fallback {fallback_name} failed: {e}")
                     continue
 
-        self._emit(self.error,
+        self._emit(self.error, 
             f"Cannot load single .safetensors file. "
             f"Please use a diffusers-format model folder instead."
         )
@@ -1161,7 +1161,7 @@ class GenerateWorker(QThread):
 
             except Exception as e:
                 log.warning(f"Failed to load LoRA '{name}': {e}")
-                self._emit(self.error,f"Failed to load LoRA '{name}': {e}")
+                self._emit(self.error, f"Failed to load LoRA '{name}': {e}")
             finally:
                 # Delete the PEFT-remapped temp file now that diffusers has
                 # parsed its state dict. Previously these accumulated in /tmp
@@ -1392,8 +1392,8 @@ class GenerateWorker(QThread):
 
         with self._lock:
             if self.pipe is None:
-                self._emit(self.error,"No model loaded. Load a model first.")
-                self._emit(self.finished_generating,False, "No model loaded")
+                self._emit(self.error, "No model loaded. Load a model first.")
+                self._emit(self.finished_generating, False, "No model loaded")
                 return
             # Take a local reference under the lock so a concurrent
             # unload_model() call cannot set self.pipe = None between
@@ -1417,7 +1417,7 @@ class GenerateWorker(QThread):
         from dataset_sorter.ui.debug_console import log_vram_state
         log_vram_state(f"generation start: {total} image(s), {width}x{height}")
 
-        self._emit(self.progress,0, total, f"Generating {total} image(s)...")
+        self._emit(self.progress, 0, total, f"Generating {total} image(s)...")
 
         # Set scheduler
         _load_scheduler(pipe_ref, scheduler_name, model_type)
@@ -1428,10 +1428,10 @@ class GenerateWorker(QThread):
         succeeded = 0
         for i in range(total):
             if self._stop_requested:
-                self._emit(self.finished_generating,False, "Generation stopped by user.")
+                self._emit(self.finished_generating, False, "Generation stopped by user.")
                 return
 
-            self._emit(self.progress,i, total, f"Generating image {i + 1}/{total}...")
+            self._emit(self.progress, i, total, f"Generating image {i + 1}/{total}...")
 
             # Seed
             if seed < 0:
@@ -1520,14 +1520,14 @@ class GenerateWorker(QThread):
                     f"{width}x{height} | "
                     f"{mode_str}"
                 )
-                self._emit(self.image_generated,img, i, info)
+                self._emit(self.image_generated, img, i, info)
                 succeeded += 1
 
             except Exception as e:
                 log.error(f"Generation failed for image {i + 1}: {e}")
                 tb = traceback.format_exc()
                 log.debug("Generation traceback:\n%s", tb)
-                self._emit(self.error,f"Image {i + 1} failed: {e}\n\n{tb}")
+                self._emit(self.error, f"Image {i + 1} failed: {e}\n\n{tb}")
                 # Free any GPU memory leaked by the failed generation
                 gc.collect()
                 try:
@@ -1547,11 +1547,11 @@ class GenerateWorker(QThread):
 
         log_vram_state(f"generation complete: {succeeded}/{total}")
 
-        self._emit(self.progress,total, total, "Generation complete!")
+        self._emit(self.progress, total, total, "Generation complete!")
         if succeeded == 0 and total > 0:
-            self._emit(self.finished_generating,False, f"All {total} image(s) failed to generate.")
+            self._emit(self.finished_generating, False, f"All {total} image(s) failed to generate.")
         else:
-            self._emit(self.finished_generating,True, f"Generated {succeeded}/{total} image(s).")
+            self._emit(self.finished_generating, True, f"Generated {succeeded}/{total} image(s).")
 
     def _do_generate_blocking(self, params: dict | None = None) -> list[tuple]:
         """Synchronous generation — returns list of (PIL.Image, info_str).

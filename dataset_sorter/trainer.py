@@ -282,7 +282,7 @@ class Trainer:
         # Graceful stop: observed by _handle_on_demand_actions AFTER the
         # pending save is processed, so state.running is only cleared
         # once we've written a resumable checkpoint.
-        self._stop_requested: bool = False
+        self._stop_requested = threading.Event()
 
         # ScheduleFree optimizer flag (needs .train()/.eval() lifecycle calls)
         self._is_schedulefree: bool = False
@@ -1828,7 +1828,13 @@ class Trainer:
                 log.warning(f"Could not copy final model to models/: {e}")
 
         if sample_fn:
-            self._generate_samples(sample_fn)
+            if self._is_schedulefree:
+                self.optimizer.eval()
+            try:
+                self._generate_samples(sample_fn)
+            finally:
+                if self._is_schedulefree:
+                    self.optimizer.train()
 
         # Log VRAM monitor report
         if self._vram_monitor is not None:
@@ -2524,9 +2530,11 @@ class Trainer:
             log.warning("No pipeline available for full model save; saving UNet only")
             self.backend.unet.save_pretrained(str(save_dir / "unet"))
 
-        # Save EMA weights
+        # Save EMA weights (atomic: temp file + rename to prevent corruption on crash)
         if self.ema_model is not None:
-            torch.save(self.ema_model.state_dict(), str(save_dir / "ema_weights.pt"))
+            _ema_tmp = save_dir / "ema_weights.pt.tmp"
+            torch.save(self.ema_model.state_dict(), str(_ema_tmp))
+            _ema_tmp.replace(save_dir / "ema_weights.pt")
 
         # Save training state for resume (atomic write to prevent corruption)
         state_dict = {
@@ -2827,7 +2835,7 @@ class Trainer:
             self._save_now.clear()
             # When Stop triggered this save, label it "stopped_" so users
             # can visually distinguish intentional halts from Save Now.
-            _is_stop_save = self._stop_requested
+            _is_stop_save = self._stop_requested.is_set()
             _label = "stopped" if _is_stop_save else "manual"
             log.info(
                 "On-demand save requested (%s)",
@@ -2849,8 +2857,8 @@ class Trainer:
                 progress_fn(self.state.global_step, self.total_steps, msg)
 
         # Stop AFTER the save has completed so state is durable
-        if self._stop_requested:
-            self._stop_requested = False
+        if self._stop_requested.is_set():
+            self._stop_requested.clear()
             self.state.running = False
             log.info("Graceful stop complete — training loop exiting")
 
@@ -2858,7 +2866,13 @@ class Trainer:
             self._sample_now.clear()
             log.info("On-demand sample requested")
             if sample_fn:
-                self._generate_samples(sample_fn)
+                if self._is_schedulefree:
+                    self.optimizer.eval()
+                try:
+                    self._generate_samples(sample_fn)
+                finally:
+                    if self._is_schedulefree:
+                        self.optimizer.train()
 
         if self._backup_now.is_set():
             self._backup_now.clear()
@@ -2912,7 +2926,7 @@ class Trainer:
         """
         if self.state.running and self.state.phase not in ("idle", "done"):
             self._save_now.set()
-            self._stop_requested = True
+            self._stop_requested.set()
         else:
             # Not actively training — plain stop is fine
             self.state.running = False
@@ -2940,7 +2954,9 @@ class Trainer:
                 "optimizer": self.config.optimizer,
                 "lora_rank": self.config.lora_rank,
             })
-            info_path.write_text(json.dumps(existing, indent=2))
+            _tmp = info_path.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(existing, indent=2))
+            _tmp.replace(info_path)
         except OSError as e:
             log.warning(f"Could not write project.json: {e}")
 
@@ -3023,7 +3039,9 @@ class Trainer:
             if isinstance(v, Path):
                 config_dict[k] = str(v)
         try:
-            config_path.write_text(json.dumps(config_dict, indent=2, default=str))
+            _tmp = config_path.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(config_dict, indent=2, default=str))
+            _tmp.replace(config_path)
         except OSError as e:
             log.warning(f"Could not write backup config.json: {e}")
 

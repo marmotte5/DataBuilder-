@@ -1695,7 +1695,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             data = asdict(config)
             p = self._autosave_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            _tmp = p.with_suffix(".tmp")
+            _tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            _tmp.replace(p)
         except Exception as e:
             log.debug(f"Autosave failed: {e}")
             return
@@ -1711,10 +1713,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     def _reset_autosave_badge(self, badge):
         """Restore the autosave badge to its default text and color."""
-        badge.setText("Auto-save: On")
-        badge.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
-        )
+        try:
+            badge.setText("Auto-save: On")
+            badge.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
+            )
+        except RuntimeError:
+            pass
 
     def _restore_autosave(self):
         """Restore training config from autosave file if it exists."""
@@ -1740,6 +1745,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                             setattr(config, key, type(current)(value))
                     except (ValueError, TypeError):
                         pass
+            self._last_loaded_config = data
             self.apply_config(config)
             log.debug(f"Restored training config from autosave: {p}")
         except Exception as e:
