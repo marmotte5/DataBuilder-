@@ -487,12 +487,12 @@ class GenerateTab(QWidget):
         btn_browse_init = QPushButton("Browse")
         btn_browse_init.clicked.connect(self._browse_init_image)
         i2i_layout.addWidget(btn_browse_init, 0, 3)
-        btn_clear_init = QToolButton()
-        btn_clear_init.setText("X")
-        btn_clear_init.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
-        btn_clear_init.setToolTip("Clear init image (back to txt2img)")
-        btn_clear_init.clicked.connect(self._clear_init_image)
-        i2i_layout.addWidget(btn_clear_init, 0, 4)
+        self._btn_clear_init = QToolButton()
+        self._btn_clear_init.setText("X")
+        self._btn_clear_init.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
+        self._btn_clear_init.setToolTip("Clear init image (back to txt2img)")
+        self._btn_clear_init.clicked.connect(self._clear_init_image)
+        i2i_layout.addWidget(self._btn_clear_init, 0, 4)
 
         i2i_layout.addWidget(QLabel("Mask image:"), 1, 0)
         self.mask_image_path = QLineEdit()
@@ -501,12 +501,12 @@ class GenerateTab(QWidget):
         btn_browse_mask = QPushButton("Browse")
         btn_browse_mask.clicked.connect(self._browse_mask_image)
         i2i_layout.addWidget(btn_browse_mask, 1, 3)
-        btn_clear_mask = QToolButton()
-        btn_clear_mask.setText("X")
-        btn_clear_mask.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
-        btn_clear_mask.setToolTip("Clear mask (back to img2img)")
-        btn_clear_mask.clicked.connect(self._clear_mask_image)
-        i2i_layout.addWidget(btn_clear_mask, 1, 4)
+        self._btn_clear_mask = QToolButton()
+        self._btn_clear_mask.setText("X")
+        self._btn_clear_mask.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;")
+        self._btn_clear_mask.setToolTip("Clear mask (back to img2img)")
+        self._btn_clear_mask.clicked.connect(self._clear_mask_image)
+        i2i_layout.addWidget(self._btn_clear_mask, 1, 4)
 
         i2i_layout.addWidget(QLabel("Strength:"), 2, 0)
         self.strength_spin = QDoubleSpinBox()
@@ -1385,3 +1385,29 @@ class GenerateTab(QWidget):
         else:
             self.status_label.setText("All saves failed — check disk space and permissions")
             show_toast(self, "Save failed", "error")
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        self._model_banner.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; padding: 6px;"
+        )
+        self._update_model_status(self.model_path_edit.text())
+        self._btn_clear_init.setStyleSheet(
+            f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;"
+        )
+        self._btn_clear_mask.setStyleSheet(
+            f"color: {COLORS['danger']}; font-weight: bold; background: transparent; border: none;"
+        )
+        self.init_preview.setStyleSheet(
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; background: {COLORS['surface']};"
+        )
+        self.image_label.setStyleSheet(
+            f"background-color: {COLORS['surface']}; "
+            f"border: 2px dashed {COLORS['border']}; border-radius: 16px; "
+            f"padding: 8px; color: {COLORS['text_muted']}; font-size: 14px;"
+        )
+        self.image_info.setStyleSheet(MUTED_LABEL_STYLE)
+        self.btn_generate.setStyleSheet(SUCCESS_BUTTON_STYLE)
+        self.btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)

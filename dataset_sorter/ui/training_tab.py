@@ -551,7 +551,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         right_layout.addWidget(self.cuda_label)
 
         # Status + Loss in a compact card
-        status_card = QWidget()
+        self._status_card = status_card = QWidget()
         status_card.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 10px;"
@@ -608,12 +608,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         # VRAM usage bar
         vram_row = QHBoxLayout()
         vram_row.setSpacing(6)
-        vram_lbl = QLabel("VRAM:")
-        vram_lbl.setStyleSheet(
+        self._vram_lbl = QLabel("VRAM:")
+        self._vram_lbl.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
             f"background: transparent;"
         )
-        vram_row.addWidget(vram_lbl)
+        vram_row.addWidget(self._vram_lbl)
 
         self.vram_bar = QProgressBar()
         self.vram_bar.setRange(0, 100)
@@ -660,11 +660,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         # Sample preview header row
         _sample_header = QHBoxLayout()
-        _sample_title = QLabel("Sample Preview")
-        _sample_title.setStyleSheet(
+        self._sample_title = QLabel("Sample Preview")
+        self._sample_title.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;"
         )
-        _sample_header.addWidget(_sample_title, 1)
+        _sample_header.addWidget(self._sample_title, 1)
         self.btn_generate_sample = QPushButton("Generate Sample Now")
         self.btn_generate_sample.setToolTip(
             "Force sample generation immediately (training must be running)"
@@ -2000,3 +2000,102 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                 sig.disconnect(slot)
             except TypeError:
                 pass
+
+    def refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        c = COLORS
+        self._resume_banner.setStyleSheet(
+            f"QFrame {{ background-color: {c['accent']}22; "
+            f"border: 1px solid {c['accent']}; border-radius: 6px; padding: 4px; }}"
+        )
+        self._resume_banner_label.setStyleSheet(
+            f"color: {c['text']}; font-weight: 600; background: transparent;"
+        )
+        self.preset_desc_label.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self.cuda_label.setStyleSheet(
+            f"color: {c['success']}; padding: 10px 14px; "
+            f"background-color: {c['success_bg']}; "
+            f"border: 1px solid #1a4a35; border-left: 3px solid {c['success']}; "
+            f"border-radius: 8px; font-size: 11px; font-weight: 500;"
+        )
+        self._status_card.setStyleSheet(
+            f"background-color: {c['bg_alt']}; "
+            f"border: 1px solid {c['border']}; border-radius: 10px; padding: 10px;"
+        )
+        self.status_label.setStyleSheet(
+            f"color: {c['text_secondary']}; padding: 2px; "
+            f"background: transparent; font-size: 12px;"
+        )
+        self.loss_label.setStyleSheet(
+            f"color: {c['accent']}; font-size: 18px; font-weight: 700; "
+            f"background: transparent; font-family: 'JetBrains Mono', monospace; "
+            f"padding: 2px;"
+        )
+        self._vram_lbl.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; font-weight: 600; "
+            f"background: transparent;"
+        )
+        self.vram_bar.setStyleSheet(
+            f"QProgressBar {{ background-color: {c['bg']}; "
+            f"border: 1px solid {c['border']}; border-radius: 4px; "
+            f"text-align: center; color: {c['text']}; font-size: 10px; }}"
+            f"QProgressBar::chunk {{ background-color: {c['accent']}; border-radius: 3px; }}"
+        )
+        self.vram_detail_label.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 10px; background: transparent; "
+            f"font-family: 'JetBrains Mono', monospace;"
+        )
+        self.disk_label.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 10px; padding: 2px 6px; "
+            f"background: transparent;"
+        )
+        self.log_output.setStyleSheet(
+            f"QTextEdit {{ background-color: {c['bg']}; color: {c['text']}; "
+            f"border: 1px solid {c['border']}; border-radius: 10px; padding: 10px; }}"
+        )
+        self._sample_title.setStyleSheet(
+            f"color: {c['text_muted']}; font-size: 11px; background: transparent;"
+        )
+        self.sample_label.setStyleSheet(
+            f"background-color: {c['surface']}; "
+            f"border: 2px dashed {c['border']}; "
+            f"border-radius: 16px; color: {c['text_muted']}; font-size: 13px;"
+        )
+        self._error_panel.setStyleSheet(
+            f"QFrame {{ background-color: {c.get('danger_bg', '#3d1a1a')}; "
+            f"border: 1px solid {c.get('danger', '#f87171')}; border-radius: 8px; "
+            f"padding: 4px; }}"
+        )
+        self._error_title.setStyleSheet(
+            f"color: {c.get('danger', '#f87171')}; font-weight: 700; "
+            f"font-size: 13px; background: transparent;"
+        )
+        self._error_traceback.setStyleSheet(
+            f"QTextEdit {{ background-color: {c['bg']}; color: {c['text']}; "
+            f"border: 1px solid {c['border']}; border-radius: 4px; padding: 6px; }}"
+        )
+        self._vram_est_frame.setStyleSheet(
+            f"QFrame {{ background-color: {c['surface']}; "
+            f"border: 1px solid {c['border']}; border-radius: 6px; "
+            f"padding: 2px; }}"
+        )
+        self._vram_est_label.setStyleSheet(
+            f"color: {c['text']}; font-weight: 600; background: transparent;"
+        )
+        self._time_est_label.setStyleSheet(
+            f"color: {c['text_secondary']}; background: transparent;"
+        )
+        self._vram_warning_label.setStyleSheet(
+            f"color: {c.get('danger', '#f87171')}; font-weight: 600; background: transparent;"
+        )
+        self._validation_label.setStyleSheet(
+            f"color: {c.get('danger', '#f87171')}; font-size: 11px; "
+            f"padding: 4px 8px; background: {c.get('danger_bg', '#3d1a1a')}; "
+            f"border: 1px solid {c.get('danger', '#f87171')}; border-radius: 6px;"
+        )
+        self.btn_pause.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_resume.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
+        self.btn_train.setStyleSheet(SUCCESS_BUTTON_STYLE)

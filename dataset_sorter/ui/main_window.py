@@ -833,8 +833,8 @@ class MainWindow(QMainWindow):
         # Logo
         logo_lbl = QLabel("DataBuilder")
         logo_lbl.setStyleSheet(
-            f"color: {COLORS['accent']}; font-size: 18px; font-weight: 800; "
-            f"background: transparent; letter-spacing: -0.5px;"
+            f"color: {COLORS['accent']}; font-size: 17px; font-weight: 800; "
+            f"background: transparent; letter-spacing: -0.3px;"
         )
         logo_lbl.setToolTip("DataBuilder — AI Training Suite")
         header_layout.addWidget(logo_lbl)
@@ -1461,24 +1461,27 @@ class MainWindow(QMainWindow):
         """
         if state == "active":
             return (
-                f"QPushButton {{ background-color: {COLORS['accent']}; "
-                f"color: white; border: none; border-radius: 8px; "
-                f"font-size: 11px; font-weight: 700; padding: 4px 12px; }} "
-                f"QPushButton:hover {{ background-color: {COLORS['accent']}; }}"
+                f"QPushButton {{ "
+                f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                f"stop:0 {COLORS['gradient_start']}, stop:1 {COLORS['gradient_end']}); "
+                f"color: white; border: none; border-radius: 10px; "
+                f"font-size: 11px; font-weight: 700; padding: 6px 16px; }} "
+                f"QPushButton:hover {{ "
+                f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                f"stop:0 {COLORS['accent_hover']}, stop:1 {COLORS['gradient_end']}); }}"
             )
         if state == "done":
             return (
                 f"QPushButton {{ background-color: {COLORS['success_bg']}; "
-                f"color: {COLORS['success']}; border: 1px solid {COLORS['success']}; "
-                f"border-radius: 8px; font-size: 11px; font-weight: 600; padding: 4px 12px; }} "
+                f"color: {COLORS['success']}; border: 1px solid {COLORS['success']}40; "
+                f"border-radius: 10px; font-size: 11px; font-weight: 600; padding: 6px 16px; }} "
                 f"QPushButton:hover {{ background-color: {COLORS['success_bg']}; }}"
             )
         if state == "disabled":
             return (
                 f"QPushButton {{ background-color: {COLORS['bg']}; "
                 f"color: {COLORS['text_muted']}; border: 1px dashed {COLORS['border_subtle']}; "
-                f"border-radius: 8px; font-size: 11px; font-weight: 400; padding: 4px 12px; "
-                f"opacity: 0.5; }} "
+                f"border-radius: 10px; font-size: 11px; font-weight: 400; padding: 6px 16px; }} "
                 f"QPushButton:hover {{ color: {COLORS['text_muted']}; "
                 f"border-color: {COLORS['border_subtle']}; }}"
             )
@@ -1486,8 +1489,9 @@ class MainWindow(QMainWindow):
         return (
             f"QPushButton {{ background-color: {COLORS['surface']}; "
             f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 8px; font-size: 11px; font-weight: 500; padding: 4px 12px; }} "
-            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
+            f"border-radius: 10px; font-size: 11px; font-weight: 500; padding: 6px 16px; }} "
+            f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; "
+            f"background-color: {COLORS['surface_hover']}; }}"
         )
 
     def _switch_nav(self, nav_id: str):
@@ -1691,14 +1695,14 @@ class MainWindow(QMainWindow):
         if state == "active":
             return (
                 f"QPushButton {{ background-color: {COLORS['accent_subtle']}; "
-                f"color: {COLORS['accent']}; border: 1px solid {COLORS['accent']}; "
-                f"border-radius: 6px; font-size: 11px; font-weight: 700; padding: 3px 12px; }} "
+                f"color: {COLORS['accent']}; border: 1px solid {COLORS['accent']}50; "
+                f"border-radius: 8px; font-size: 11px; font-weight: 700; padding: 5px 14px; }} "
                 f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }}"
             )
         return (
             f"QPushButton {{ background-color: transparent; "
             f"color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 6px; font-size: 11px; font-weight: 500; padding: 3px 12px; }} "
+            f"border-radius: 8px; font-size: 11px; font-weight: 500; padding: 5px 14px; }} "
             f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; "
             f"background-color: {COLORS['surface']}; }}"
         )
@@ -2175,7 +2179,8 @@ class MainWindow(QMainWindow):
         # Refresh sub-panels/tabs that have inline styles
         for attr in ('override_panel', 'image_tab', 'preview_tab',
                      'help_tab', 'reco_tab', 'library_tab',
-                     'batch_tab', 'comparison_tab', 'merge_tab'):
+                     'batch_tab', 'comparison_tab', 'merge_tab',
+                     'generate_tab', 'training_tab', 'dataset_tab'):
             widget = getattr(self, attr, None)
             if widget is not None and hasattr(widget, 'refresh_theme'):
                 widget.refresh_theme()
