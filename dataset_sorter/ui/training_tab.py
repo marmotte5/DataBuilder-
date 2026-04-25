@@ -1140,6 +1140,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         Called after all builder mixins have created their widgets.
         Must be called once the full UI is built.
         """
+        # Widgets whose value materially changes the VRAM estimate. rank/alpha
+        # scale LoRA parameter count linearly; network type changes the
+        # parameter formula (LoHa/LoKr); optimizer changes optimizer-state
+        # footprint (Adam = 2× params, AdamW8bit ≈ 0.25×, Marmotte ≈ 0.05×).
         for widget in (
             self.train_model_combo,
             self.resolution_spin,
@@ -1147,7 +1151,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self.precision_combo,
             self.fp8_check,
             self.grad_ckpt_check,
+            getattr(self, 'rank_spin', None),
+            getattr(self, 'alpha_spin', None),
+            getattr(self, 'train_network_combo', None),
+            getattr(self, 'train_optimizer_combo', None),
         ):
+            if widget is None:
+                continue
             try:
                 if hasattr(widget, 'currentIndexChanged'):
                     widget.currentIndexChanged.connect(self._update_vram_estimate)
@@ -1157,9 +1167,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
                     widget.stateChanged.connect(self._update_vram_estimate)
             except Exception:
                 pass
-        # Also connect steps/epochs changes
+        # Time estimate also depends on epochs/steps and gradient accumulation
+        # (effective batch = batch × accum).
         for w in (getattr(self, 'epochs_spin', None),
-                  getattr(self, 'max_steps_spin', None)):
+                  getattr(self, 'max_steps_spin', None),
+                  getattr(self, 'grad_accum_spin', None)):
             if w is not None and hasattr(w, 'valueChanged'):
                 w.valueChanged.connect(self._update_vram_estimate)
 
