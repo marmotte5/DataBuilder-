@@ -3520,12 +3520,22 @@ class MainWindow(QMainWindow):
 def run():
     """Launch the DataBuilder application."""
     from dataset_sorter.ui.debug_console import CrashResilientApp
+    from dataset_sorter.ui.splash import show_splash
 
     app = CrashResilientApp(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(get_stylesheet())
+
+    # Show the splash screen BEFORE constructing MainWindow — the heavy
+    # imports (PyTorch / diffusers / transformers) and tab construction
+    # take 5+ s on first launch and look like a hang otherwise.
+    splash = show_splash("Loading DataBuilder...")
+
+    if splash is not None:
+        splash.set_message("Building UI...")
     window = MainWindow()
-    window.show()
+    if splash is not None:
+        splash.set_message("Initializing debug console...")
 
     # Set up the debug console (external log window, exception hooks, UI instrumentation)
     from dataset_sorter.ui.debug_console import setup_debug_console
@@ -3537,5 +3547,10 @@ def run():
     _crash_reset = QTimer()
     _crash_reset.timeout.connect(app.reset_crash_count)
     _crash_reset.start(10_000)  # every 10 seconds
+
+    # Show the main window and dismiss the splash as it appears.
+    if splash is not None:
+        splash.finish_with(window)
+    window.show()
 
     sys.exit(app.exec())

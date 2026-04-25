@@ -689,16 +689,21 @@ class Trainer:
         if config.cache_latents_to_disk:
             # Include model type in cache path to prevent stale latent collisions
             # when switching models (different VAEs produce different latent distributions).
+            from dataset_sorter.constants import TMPFS_CACHE_ROOT
             _model_tag = self.backend.model_name
-            if config.cache_to_ram_disk and Path("/dev/shm").is_dir():
+            tmpfs_root = Path(TMPFS_CACHE_ROOT)
+            if config.cache_to_ram_disk and tmpfs_root.is_dir():
                 # Use tmpfs RAM disk for faster cache I/O (Linux only)
-                cache_dir = Path("/dev/shm") / f"databuilder_cache_{output_dir.name}" / _model_tag
+                cache_dir = tmpfs_root / f"databuilder_cache_{output_dir.name}" / _model_tag
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 log.info(f"Using RAM disk for cache: {cache_dir}")
             else:
                 cache_dir = output_dir / ".cache" / _model_tag
                 if config.cache_to_ram_disk:
-                    log.warning("cache_to_ram_disk=True but /dev/shm not available, using disk cache")
+                    log.warning(
+                        "cache_to_ram_disk=True but %s not available, using disk cache",
+                        tmpfs_root,
+                    )
 
         bucket_assignments = None
         self._bucket_sampler = None
@@ -1477,7 +1482,7 @@ class Trainer:
             _epoch_nan_count = 0
 
             try:
-                from dataset_sorter.ui.debug_console import log_worker_event
+                from dataset_sorter.diagnostics import log_worker_event
                 log_worker_event(
                     "Trainer",
                     f"epoch {epoch + 1}/{config.epochs} started",
@@ -1582,7 +1587,7 @@ class Trainer:
                             f"skipping backward pass"
                         )
                         try:
-                            from dataset_sorter.ui.debug_console import log_worker_event
+                            from dataset_sorter.diagnostics import log_worker_event
                             log_worker_event(
                                 "Trainer", "NaN/Inf loss detected",
                                 f"step={self.state.global_step + 1}, "
@@ -1613,7 +1618,7 @@ class Trainer:
                         self.state.global_step + 1,
                     )
                     try:
-                        from dataset_sorter.ui.debug_console import log_worker_event
+                        from dataset_sorter.diagnostics import log_worker_event
                         log_worker_event(
                             "Trainer", "OOM — batch skipped",
                             f"step={self.state.global_step + 1}",
@@ -1888,7 +1893,7 @@ class Trainer:
                     "train/epoch_avg_loss", _epoch_avg_loss, epoch + 1,
                 )
             try:
-                from dataset_sorter.ui.debug_console import log_worker_event, log_vram_state
+                from dataset_sorter.diagnostics import log_worker_event, log_vram_state
                 log_worker_event(
                     "Trainer",
                     f"epoch {epoch + 1}/{config.epochs} finished",
@@ -2739,7 +2744,7 @@ class Trainer:
         # Log checkpoint save to debug console
         _ckpt_elapsed = time.perf_counter() - _ckpt_t0
         try:
-            from dataset_sorter.ui.debug_console import log_worker_event
+            from dataset_sorter.diagnostics import log_worker_event
             _size_mb = sum(
                 f.stat().st_size for f in save_dir.rglob("*") if f.is_file()
             ) / (1024 * 1024)
@@ -3002,7 +3007,7 @@ class Trainer:
             log.info("On-demand backup requested")
             self._backup_project(progress_fn)
 
-    def pause(self):
+    def pause(self) -> None:
         """Pause training (blocks at next step boundary).
 
         Also requests an immediate checkpoint save so the user can safely
@@ -3018,25 +3023,25 @@ class Trainer:
         self._resume_event.clear()
         log.info("Pause requested (auto-save triggered)")
 
-    def resume(self):
+    def resume(self) -> None:
         """Resume paused training."""
         self._pause_event.clear()
         self._resume_event.set()
         log.info("Resume requested")
 
-    def request_save(self):
+    def request_save(self) -> None:
         """Request an immediate checkpoint save."""
         self._save_now.set()
 
-    def request_sample(self):
+    def request_sample(self) -> None:
         """Request immediate sample generation."""
         self._sample_now.set()
 
-    def request_backup(self):
+    def request_backup(self) -> None:
         """Request a full project backup."""
         self._backup_now.set()
 
-    def stop(self):
+    def stop(self) -> None:
         """Signal graceful stop with an auto-save first.
 
         Sets _stop_requested + _save_now then UNBLOCKS pause. We do NOT
@@ -3493,7 +3498,7 @@ class Trainer:
 
             log.info("Smart Resume: Adjustments applied automatically.")
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Free all resources (safe even if setup() failed)."""
         self.state.phase = "idle"
 

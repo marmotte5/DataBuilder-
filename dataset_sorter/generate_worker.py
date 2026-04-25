@@ -342,7 +342,7 @@ class GenerateWorker(QThread):
             elif self._mode == "generate":
                 self._do_generate()
         except OSError as e:
-            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            from dataset_sorter.diagnostics import log_categorized_error, log_vram_state
             import sys
             log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
             log_vram_state(f"generate error ({self._mode})")
@@ -362,7 +362,7 @@ class GenerateWorker(QThread):
                 except Exception as ue:
                     log.debug(f"Unload model during OSError cleanup failed: {ue}")
         except Exception as e:
-            from dataset_sorter.ui.debug_console import log_categorized_error, log_vram_state
+            from dataset_sorter.diagnostics import log_categorized_error, log_vram_state
             import sys
             log_categorized_error(e, f"generate ({self._mode})", sys.exc_info()[2])
             log_vram_state(f"generate error ({self._mode})")
@@ -529,7 +529,7 @@ class GenerateWorker(QThread):
                 torch.cuda.empty_cache()
             raise
 
-        from dataset_sorter.ui.debug_console import log_vram_state
+        from dataset_sorter.diagnostics import log_vram_state
         log_vram_state(f"model loaded: {model_type}")
 
         self._emit(self.progress, 100, 100, "Model loaded!")
@@ -1343,7 +1343,7 @@ class GenerateWorker(QThread):
         pag_scale = float(self.pag_scale or 0.0)
         pag_layers = self.pag_layers or "mid"
 
-        from dataset_sorter.ui.debug_console import log_vram_state
+        from dataset_sorter.diagnostics import log_vram_state
         log_vram_state(f"generation start: {total} image(s), {width}x{height}")
 
         self._emit(self.progress, 0, total, f"Generating {total} image(s)...")
