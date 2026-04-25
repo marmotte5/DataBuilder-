@@ -79,6 +79,10 @@ class RecoTab(QWidget):
         )
         for key, label in NETWORK_TYPES.items():
             self.network_combo.addItem(label, key)
+        # Cap combo width so the long item descriptions
+        # (e.g. "Marmotte v2 — Ultra-low memory, per-channel adaptive…")
+        # don't push the tab's minimum width past 1265px.
+        self.network_combo.setMaximumWidth(380)
         row2.addWidget(self.network_combo, 1)
         row2.addWidget(self._field_label("Optimizer"))
         self.optimizer_combo = QComboBox()
@@ -88,6 +92,7 @@ class RecoTab(QWidget):
         )
         for key, label in OPTIMIZERS.items():
             self.optimizer_combo.addItem(label, key)
+        self.optimizer_combo.setMaximumWidth(420)
         row2.addWidget(self.optimizer_combo, 1)
         layout.addLayout(row2)
 

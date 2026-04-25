@@ -332,6 +332,14 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._model_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.model_path_input.setCompleter(self._model_completer)
         paths_grid.addWidget(self.model_path_input, 0, 1)
+        # Tiny icon-only buttons need their own style — global QPushButton
+        # padding is 8px 20px, so a 28px-wide button leaves the icon with
+        # no room and renders blank.
+        _icon_btn_style = (
+            "QPushButton { padding: 4px 0px; min-width: 28px; "
+            "font-size: 14px; }"
+        )
+
         _model_btn_widget = QWidget()
         _model_btn_layout = QHBoxLayout(_model_btn_widget)
         _model_btn_layout.setContentsMargins(0, 0, 0, 0)
@@ -345,11 +353,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             "Scan configured directories for local model files.\n"
             "Configure scan paths in Settings → Model Scan Dirs."
         )
-        self._btn_scan_models.setFixedWidth(28)
+        self._btn_scan_models.setStyleSheet(_icon_btn_style)
+        self._btn_scan_models.setFixedWidth(36)
         self._btn_scan_models.clicked.connect(self._start_model_scan)
         _model_btn_layout.addWidget(self._btn_scan_models)
         _btn_copy_model = QPushButton("📋")
-        _btn_copy_model.setFixedWidth(28)
+        _btn_copy_model.setStyleSheet(_icon_btn_style)
+        _btn_copy_model.setFixedWidth(36)
         _btn_copy_model.setToolTip("Copy model path to clipboard")
         _btn_copy_model.clicked.connect(
             lambda: QApplication.clipboard().setText(self.model_path_input.text())
@@ -371,7 +381,8 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_out.clicked.connect(self._browse_output)
         _out_btn_layout.addWidget(btn_out)
         _btn_copy_out = QPushButton("📋")
-        _btn_copy_out.setFixedWidth(28)
+        _btn_copy_out.setStyleSheet(_icon_btn_style)
+        _btn_copy_out.setFixedWidth(36)
         _btn_copy_out.setToolTip("Copy output path to clipboard")
         _btn_copy_out.clicked.connect(
             lambda: QApplication.clipboard().setText(self.output_dir_input.text())
@@ -995,8 +1006,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             tabs.setCurrentIndex(0)
 
     def _group(self, title: str) -> QGroupBox:
-        """Create a QGroupBox with the given title for use in config sections."""
-        g = QGroupBox(title)
+        """Create a QGroupBox with the given title for use in config sections.
+
+        Escape any ampersand in the title because QGroupBox treats ``&`` as
+        a mnemonic accelerator marker — without escaping, "Model & Resolution"
+        renders as "Model _Resolution" with the R underlined.
+        """
+        g = QGroupBox(title.replace("&", "&&"))
         return g
 
     def _muted(self, text):

@@ -168,10 +168,18 @@ class CaptionPreviewSection(QWidget):
         ctrl.addWidget(self.btn_preview)
         layout.addLayout(ctrl)
 
-        # Caption selector
+        # Caption selector — global QPushButton padding is 8px 20px, so a
+        # 40px-wide nav button leaves zero room for the "<" / ">" text and
+        # they render as empty squares. Override padding for these.
+        _nav_btn_style = (
+            "QPushButton { padding: 4px 6px; min-width: 32px; "
+            "font-weight: 700; font-size: 14px; }"
+        )
         nav = QHBoxLayout()
         self.btn_prev = QPushButton("<")
-        self.btn_prev.setMaximumWidth(40)
+        self.btn_prev.setStyleSheet(_nav_btn_style)
+        self.btn_prev.setMaximumWidth(48)
+        self.btn_prev.setToolTip("Previous caption")
         self.btn_prev.clicked.connect(self._prev_caption)
         nav.addWidget(self.btn_prev)
 
@@ -184,7 +192,9 @@ class CaptionPreviewSection(QWidget):
         nav.addWidget(self.caption_idx_label, 1)
 
         self.btn_next = QPushButton(">")
-        self.btn_next.setMaximumWidth(40)
+        self.btn_next.setStyleSheet(_nav_btn_style)
+        self.btn_next.setMaximumWidth(48)
+        self.btn_next.setToolTip("Next caption")
         self.btn_next.clicked.connect(self._next_caption)
         nav.addWidget(self.btn_next)
         layout.addLayout(nav)

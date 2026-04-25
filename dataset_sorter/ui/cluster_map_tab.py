@@ -211,7 +211,8 @@ class ClusterMapTab(QWidget):
         self._reducer_combo = QComboBox()
         self._reducer_combo.addItem("UMAP (recommended)", "umap")
         self._reducer_combo.addItem("t-SNE", "tsne")
-        self._reducer_combo.setFixedWidth(180)
+        # 180 was too narrow for "UMAP (recommended)" — clipped to "UMAP (recomme".
+        self._reducer_combo.setMinimumWidth(220)
         self._reducer_combo.setToolTip(
             "UMAP is faster and preserves global structure better; "
             "t-SNE focuses on local neighborhoods."
