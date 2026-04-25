@@ -217,6 +217,22 @@ class MMapTensorStore:
         shape = meta["shape"]
         dtype = self._dtype_from_str(meta["dtype"])
 
+        # Bounds check on the slice: a corrupted index file (truncated cache,
+        # partial write, mismatched header/data) could specify offsets past
+        # the end of the mmap. Without this check Python's mmap silently
+        # returns whatever bytes happen to live at those addresses (or
+        # raises a vague ValueError) and the resulting tensor would feed
+        # garbage into training. Fail loudly with the file path and the
+        # problematic key so the user knows which cache to delete.
+        end = offset + nbytes
+        if offset < 0 or end > len(self._mmap):
+            raise ValueError(
+                f"Cache file appears corrupted: tensor {key!r} at offset "
+                f"{offset} length {nbytes} exceeds mmap size {len(self._mmap)} "
+                f"(file: {getattr(self, '_path', '?')}). Delete the cache "
+                "directory and re-run to rebuild."
+            )
+
         # Read raw bytes from mmap (zero-copy on Linux with page cache)
         raw = self._mmap[offset:offset + nbytes]
 
@@ -244,6 +260,14 @@ class MMapTensorStore:
             shape = meta["shape"]
             dtype = self._dtype_from_str(meta["dtype"])
 
+            # Same bounds check as get_latent — defends against corrupted
+            # index files specifying offsets past the end of the mmap.
+            end = offset + nbytes
+            if offset < 0 or end > len(self._mmap):
+                raise ValueError(
+                    f"Cache file appears corrupted: tensor {key!r} at offset "
+                    f"{offset} length {nbytes} exceeds mmap size {len(self._mmap)}"
+                )
             raw = self._mmap[offset:offset + nbytes]
             tensor = self._numpy_to_tensor_safe(raw, shape, dtype)
             outputs.append(tensor.to(self.device, non_blocking=True))
