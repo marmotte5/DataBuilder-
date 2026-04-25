@@ -431,9 +431,10 @@ class MainWindow(QMainWindow):
         # Apply initial mode to all tabs (handles first launch with no saved state)
         self._set_simple_mode(self._simple_mode)
 
-        # Project flow: try to silently reopen the last-active project,
-        # otherwise show the WelcomeDialog so the user picks one.
-        self._restore_or_prompt_project()
+        # Project flow is deferred until AFTER the window is shown and the
+        # splash dismissed — see ``run()``. Opening the modal WelcomeDialog
+        # from inside ``__init__`` would race the splash's WindowStaysOnTopHint
+        # (the dialog appears behind the splash until the constructor returns).
 
     def _toast(self, text: str, variant: str = "success", duration_ms: int = 2500):
         """Show a non-blocking toast notification anchored to the central widget."""
@@ -3549,8 +3550,16 @@ def run():
     _crash_reset.start(10_000)  # every 10 seconds
 
     # Show the main window and dismiss the splash as it appears.
+    # Order matters: ``finish(target)`` arms QSplashScreen to hide on
+    # ``target``'s first paint event, so it MUST be called before show().
     if splash is not None:
         splash.finish_with(window)
     window.show()
+
+    # Defer the project-restore / WelcomeDialog flow to the next event-loop
+    # tick. By then the splash is gone and the main window is fully painted,
+    # so the modal welcome dialog opens cleanly on top — instead of fighting
+    # the splash's WindowStaysOnTopHint.
+    QTimer.singleShot(0, window._restore_or_prompt_project)
 
     sys.exit(app.exec())
