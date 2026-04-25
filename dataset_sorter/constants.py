@@ -625,3 +625,31 @@ MTIME_TOLERANCE: float = 0.01           # File mtime comparison tolerance (secon
 DEFAULT_INFERENCE_STEPS: int = 28       # Default diffusion inference steps
 DEFAULT_CFG_SCALE: float = 7.0          # Default classifier-free guidance scale
 DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no change, 1=full noise)
+DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off, 3.0 typical)
+DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset
+
+# Models that support Perturbed Attention Guidance via diffusers' *PAGPipeline
+# variants (drastically improves structure quality — hands, faces — without
+# the color saturation artefacts of a high CFG).
+PAG_MODELS: dict[str, str] = {
+    "sd15":     "StableDiffusionPAGPipeline",
+    "sd2":      "StableDiffusionPAGPipeline",
+    "sdxl":     "StableDiffusionXLPAGPipeline",
+    "pony":     "StableDiffusionXLPAGPipeline",
+    "sd3":      "StableDiffusion3PAGPipeline",
+    "sd35":     "StableDiffusion3PAGPipeline",
+    "pixart":   "PixArtSigmaPAGPipeline",
+    "sana":     "SanaPAGPipeline",
+    "kolors":   "KolorsPAGPipeline",
+    "hunyuan":  "HunyuanDiTPAGPipeline",
+}
+
+# Layer presets for PAG. Values match diffusers' `pag_applied_layers` names.
+# "mid" = middle U-Net block (most balanced, most-recommended preset).
+PAG_LAYER_PRESETS: dict[str, list[str]] = {
+    "mid":         ["mid"],
+    "down.2":      ["down.block_2"],
+    "up.0":        ["up.block_0"],
+    "mid+down.2":  ["mid", "down.block_2"],
+    "all":         ["mid", "down.block_2", "up.block_0"],
+}

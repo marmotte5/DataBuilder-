@@ -36,6 +36,8 @@ from dataset_sorter.constants import (
     DEFAULT_CFG_SCALE,
     DEFAULT_IMG2IMG_STRENGTH,
     DEFAULT_INFERENCE_STEPS,
+    PAG_LAYER_PRESETS,
+    PAG_MODELS,
 )
 
 log = logging.getLogger(__name__)
@@ -335,6 +337,14 @@ class GenerateWorker(QThread):
         self.seed = -1  # -1 = random
         self.num_images = 1
         self.clip_skip = 0
+
+        # Perturbed Attention Guidance (PAG) — drastically improves structural
+        # quality (hands, faces, anatomy) without the saturation artefacts of
+        # high CFG. Only active when pag_scale > 0 AND model_type is in
+        # PAG_MODELS. The pipeline is loaded as the PAG variant once
+        # (e.g., StableDiffusionXLPAGPipeline) so the slider works live.
+        self.pag_scale: float = 0.0
+        self.pag_layers: str = "mid"
 
         # img2img / inpainting
         self.init_image: Optional[Image.Image] = None   # img2img input
@@ -653,13 +663,25 @@ class GenerateWorker(QThread):
         if model_type in TRUST_REMOTE_CODE_MODELS:
             kwargs["trust_remote_code"] = True
 
-        # Get pipeline class
-        if model_type in PIPELINE_MAP:
-            module_name, class_name = PIPELINE_MAP[model_type]
-            pipe_cls = getattr(diffusers, class_name)
-        else:
-            # Fallback: generic DiffusionPipeline
-            pipe_cls = diffusers.DiffusionPipeline
+        # Get pipeline class — prefer the PAG variant when supported, since
+        # it's a strict superset (behaves identically when pag_scale=0 but
+        # unlocks Perturbed Attention Guidance when the user enables it).
+        pipe_cls = None
+        if model_type in PAG_MODELS:
+            pag_cls_name = PAG_MODELS[model_type]
+            pipe_cls = getattr(diffusers, pag_cls_name, None)
+            if pipe_cls is None:
+                log.info(
+                    "PAG pipeline %s not present in diffusers %s — falling back to standard pipeline",
+                    pag_cls_name, getattr(diffusers, "__version__", "?"),
+                )
+        if pipe_cls is None:
+            if model_type in PIPELINE_MAP:
+                _, class_name = PIPELINE_MAP[model_type]
+                pipe_cls = getattr(diffusers, class_name)
+            else:
+                # Fallback: generic DiffusionPipeline
+                pipe_cls = diffusers.DiffusionPipeline
 
         try:
             if is_single_file:
@@ -1240,7 +1262,9 @@ class GenerateWorker(QThread):
                             height: int | None = None,
                             clip_skip: int | None = None,
                             init_image=None,
-                            strength: float | None = None) -> tuple[PngInfo, str]:
+                            strength: float | None = None,
+                            pag_scale: float | None = None,
+                            pag_layers: str | None = None) -> tuple[PngInfo, str]:
         """Build PNG tEXt metadata chunks in Automatic1111's format.
 
         Writes a 'parameters' chunk with the prompt, negative prompt, and
@@ -1268,6 +1292,8 @@ class GenerateWorker(QThread):
         _clip_skip = clip_skip if clip_skip is not None else self.clip_skip
         _init_image = init_image if init_image is not None else self.init_image
         _strength = strength if strength is not None else self.strength
+        _pag_scale = pag_scale if pag_scale is not None else float(self.pag_scale or 0.0)
+        _pag_layers = pag_layers if pag_layers is not None else self.pag_layers
 
         # Build parameters string (compatible with A1111 / civitai metadata readers)
         params_parts = [_positive]
@@ -1286,6 +1312,9 @@ class GenerateWorker(QThread):
             settings.append(f"Clip skip: {_clip_skip}")
         if _init_image is not None:
             settings.append(f"Denoising strength: {_strength}")
+        if _pag_scale > 0:
+            settings.append(f"PAG scale: {_pag_scale}")
+            settings.append(f"PAG layers: {_pag_layers}")
 
         # LoRA info
         lora_parts = []
@@ -1309,6 +1338,9 @@ class GenerateWorker(QThread):
         pnginfo.add_text("model", self._model_path)
         pnginfo.add_text("width", str(_width))
         pnginfo.add_text("height", str(_height))
+        if _pag_scale > 0:
+            pnginfo.add_text("pag_scale", str(_pag_scale))
+            pnginfo.add_text("pag_layers", str(_pag_layers))
 
         # Software attribution fields
         pnginfo.add_text("Software", "DataBuilder")
@@ -1413,6 +1445,8 @@ class GenerateWorker(QThread):
         init_image = self.init_image
         mask_image = self.mask_image
         strength = self.strength
+        pag_scale = float(self.pag_scale or 0.0)
+        pag_layers = self.pag_layers or "mid"
 
         from dataset_sorter.ui.debug_console import log_vram_state
         log_vram_state(f"generation start: {total} image(s), {width}x{height}")
@@ -1477,6 +1511,23 @@ class GenerateWorker(QThread):
             if model_type in CFG_MODELS and negative_prompt:
                 kwargs["negative_prompt"] = negative_prompt
 
+            # Perturbed Attention Guidance — only for supported models, only
+            # when the loaded pipeline is the PAG variant. The pipe is loaded
+            # with the PAG class for any model in PAG_MODELS, so a runtime
+            # check on the pipe class is the authoritative gate.
+            if pag_scale > 0 and model_type in PAG_MODELS:
+                pipe_class_name = type(active_pipe).__name__
+                if "PAG" in pipe_class_name:
+                    kwargs["pag_scale"] = pag_scale
+                    layer_list = PAG_LAYER_PRESETS.get(pag_layers, ["mid"])
+                    kwargs["pag_applied_layers"] = layer_list
+                else:
+                    log.info(
+                        "PAG requested (scale=%.2f) but loaded pipeline is %s; "
+                        "reload the model to enable PAG.",
+                        pag_scale, pipe_class_name,
+                    )
+
             # Clip skip (for SD 1.5 / SDXL)
             if clip_skip > 0 and model_type in CLIP_SKIP_MODELS:
                 kwargs["clip_skip"] = clip_skip
@@ -1501,6 +1552,8 @@ class GenerateWorker(QThread):
                     clip_skip=clip_skip,
                     init_image=init_image,
                     strength=strength,
+                    pag_scale=pag_scale,
+                    pag_layers=pag_layers,
                 )
                 img.info["pnginfo"] = pnginfo
                 img.info["parameters"] = parameters_str
@@ -1512,14 +1565,17 @@ class GenerateWorker(QThread):
                 elif init_image is not None:
                     mode_str = f"img2img (str={strength})"
 
-                info = (
-                    f"Seed: {current_seed} | "
-                    f"Steps: {steps} | "
-                    f"CFG: {cfg_scale} | "
-                    f"Sampler: {scheduler_name} | "
-                    f"{width}x{height} | "
-                    f"{mode_str}"
-                )
+                info_parts = [
+                    f"Seed: {current_seed}",
+                    f"Steps: {steps}",
+                    f"CFG: {cfg_scale}",
+                    f"Sampler: {scheduler_name}",
+                    f"{width}x{height}",
+                    mode_str,
+                ]
+                if pag_scale > 0 and "pag_scale" in kwargs:
+                    info_parts.append(f"PAG: {pag_scale} ({pag_layers})")
+                info = " | ".join(info_parts)
                 self._emit(self.image_generated, img, i, info)
                 succeeded += 1
 

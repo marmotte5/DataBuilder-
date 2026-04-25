@@ -1011,6 +1011,7 @@ class MainWindow(QMainWindow):
             ("Compare",  "compare"),
             ("Merge",    "merge"),
             ("Library",  "library"),
+            ("Cluster",  "cluster"),
             ("Settings", "settings"),
             ("Help",     "help"),
         ]
@@ -1326,13 +1327,30 @@ class MainWindow(QMainWindow):
             )
         self._content_stack.addWidget(self.library_tab)  # index 6
 
-        # Page 7: Settings (recommendations)
-        self.reco_tab = RecoTab()
-        self._content_stack.addWidget(self.reco_tab)  # index 7
+        # Page 7: Cluster Map (Latent Space Visualizer)
+        try:
+            from dataset_sorter.ui.cluster_map_tab import ClusterMapTab
+            self.cluster_tab = ClusterMapTab()
+            self.cluster_tab.navigate_to_image.connect(self._on_cluster_navigate)
+        except ImportError as _e:
+            log.warning("Cluster map unavailable: %s", _e)
+            self.cluster_tab = QLabel(
+                "Cluster Map requires umap-learn / transformers. "
+                "Install with: pip install umap-learn scikit-learn"
+            )
+            self.cluster_tab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.cluster_tab.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
+            )
+        self._content_stack.addWidget(self.cluster_tab)  # index 7
 
-        # Page 8: Help
+        # Page 8: Settings (recommendations)
+        self.reco_tab = RecoTab()
+        self._content_stack.addWidget(self.reco_tab)  # index 8
+
+        # Page 9: Help
         self.help_tab = HelpTab()
-        self._content_stack.addWidget(self.help_tab)  # index 8
+        self._content_stack.addWidget(self.help_tab)  # index 9
 
         main_content_layout.addWidget(self._content_stack, 1)
         content_row_layout.addWidget(main_content, 7)
@@ -1499,12 +1517,13 @@ class MainWindow(QMainWindow):
         nav_to_page = {
             "dataset": 0, "train": 1, "generate": 2,
             "batch": 3, "compare": 4, "merge": 5,
-            "library": 6, "settings": 7, "help": 8,
+            "library": 6, "cluster": 7, "settings": 8, "help": 9,
         }
         nav_to_title = {
             "dataset": "", "train": "", "generate": "",
             "batch": "Batch Generate", "compare": "A/B Compare", "merge": "Merge",
-            "library": "Library", "settings": "Settings", "help": "Help",
+            "library": "Library", "cluster": "Latent Space Visualizer",
+            "settings": "Settings", "help": "Help",
         }
         # Stepper step_id → stepper highlight mapping
         nav_to_stepper = {
@@ -2180,7 +2199,8 @@ class MainWindow(QMainWindow):
         for attr in ('override_panel', 'image_tab', 'preview_tab',
                      'help_tab', 'reco_tab', 'library_tab',
                      'batch_tab', 'comparison_tab', 'merge_tab',
-                     'generate_tab', 'training_tab', 'dataset_tab'):
+                     'generate_tab', 'training_tab', 'dataset_tab',
+                     'cluster_tab'):
             widget = getattr(self, attr, None)
             if widget is not None and hasattr(widget, 'refresh_theme'):
                 widget.refresh_theme()
@@ -2544,6 +2564,8 @@ class MainWindow(QMainWindow):
         self._toast(f"Scan complete — {len(self.entries)} images found", "success")
         self._update_step_indicator(2)  # Step 3: Edit
         self._update_status_label()
+        # Push image paths to the Cluster Map so Compute is one click away.
+        self._sync_cluster_paths()
 
     # -- Tag index & buckets --
 
@@ -3156,6 +3178,23 @@ class MainWindow(QMainWindow):
             if hasattr(parent, 'setCurrentWidget'):
                 parent.setCurrentWidget(self.image_tab)
             self.statusBar().showMessage(f"Navigated to image {index + 1}.")
+
+    def _sync_cluster_paths(self):
+        """Push the current dataset's image paths to the Cluster Map tab."""
+        if not hasattr(self, "cluster_tab") or not hasattr(self.cluster_tab, "set_image_paths"):
+            return
+        paths = [str(e.path) for e in self.entries if getattr(e, "path", None)]
+        self.cluster_tab.set_image_paths(paths)
+
+    def _on_cluster_navigate(self, image_path: str):
+        """Cluster point double-clicked — jump to the image in the Images tab."""
+        target = str(image_path)
+        for idx, entry in enumerate(self.entries):
+            if str(getattr(entry, "path", "")) == target:
+                self._navigate_to_image(idx)
+                self._switch_nav("dataset")
+                return
+        self.statusBar().showMessage(f"Image not in current dataset: {Path(target).name}")
 
     # -- Auto Pipeline --
 
