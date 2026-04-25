@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QDoubleSpinBox, QTextEdit, QScrollArea,
     QGroupBox, QCheckBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QComboBox,
+    QHeaderView, QAbstractItemView, QComboBox, QMessageBox,
 )
 
 from dataset_sorter.models import ImageEntry
@@ -168,10 +168,18 @@ class CaptionPreviewSection(QWidget):
         ctrl.addWidget(self.btn_preview)
         layout.addLayout(ctrl)
 
-        # Caption selector
+        # Caption selector — global QPushButton padding is 8px 20px, so a
+        # 40px-wide nav button leaves zero room for the "<" / ">" text and
+        # they render as empty squares. Override padding for these.
+        _nav_btn_style = (
+            "QPushButton { padding: 4px 6px; min-width: 32px; "
+            "font-weight: 700; font-size: 14px; }"
+        )
         nav = QHBoxLayout()
         self.btn_prev = QPushButton("<")
-        self.btn_prev.setMaximumWidth(40)
+        self.btn_prev.setStyleSheet(_nav_btn_style)
+        self.btn_prev.setMaximumWidth(48)
+        self.btn_prev.setToolTip("Previous caption")
         self.btn_prev.clicked.connect(self._prev_caption)
         nav.addWidget(self.btn_prev)
 
@@ -184,7 +192,9 @@ class CaptionPreviewSection(QWidget):
         nav.addWidget(self.caption_idx_label, 1)
 
         self.btn_next = QPushButton(">")
-        self.btn_next.setMaximumWidth(40)
+        self.btn_next.setStyleSheet(_nav_btn_style)
+        self.btn_next.setMaximumWidth(48)
+        self.btn_next.setToolTip("Next caption")
         self.btn_next.clicked.connect(self._next_caption)
         nav.addWidget(self.btn_next)
         layout.addLayout(nav)
@@ -2374,17 +2384,38 @@ class TagImportanceSection(QWidget):
         )
 
     def _apply_smart_buckets(self):
-        """Emit smart buckets to replace frequency-based bucketing."""
-        if self._report and self._report.smart_buckets:
-            self.apply_smart_buckets.emit(self._report.smart_buckets)
-            self.detail_text.setPlainText(
-                "Smart buckets applied!\n"
-                "Concept tags now get low buckets (high training priority).\n"
-                "Noise and generic tags get high buckets."
-            )
+        """Emit smart buckets to replace frequency-based bucketing.
+
+        Confirms first because the operation overwrites any manual bucket
+        overrides the user previously set.
+        """
+        if not (self._report and self._report.smart_buckets):
+            return
+        n = len(self._report.smart_buckets)
+        reply = QMessageBox.question(
+            self, "Apply Smart Buckets?",
+            f"Replace bucket assignments for {n} tag(s) with importance-based "
+            f"values?\n\n"
+            f"This overwrites any manual bucket overrides you set earlier.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.apply_smart_buckets.emit(self._report.smart_buckets)
+        self.detail_text.setPlainText(
+            "Smart buckets applied!\n"
+            "Concept tags now get low buckets (high training priority).\n"
+            "Noise and generic tags get high buckets."
+        )
 
     def _apply_cleaning(self):
-        """Emit noise/caption tags for deletion."""
+        """Emit noise/caption tags for deletion (with confirmation).
+
+        Cleaning permanently deletes noise tags and either rewrites caption
+        tags to a matching real tag or deletes them outright. Confirm with
+        explicit counts so the user knows the blast radius.
+        """
         if not self._report:
             return
         from dataset_sorter.tag_importance import TagType
@@ -2403,6 +2434,26 @@ class TagImportanceSection(QWidget):
             else:
                 # Caption with no match -> just delete
                 to_delete.add(tag)
+
+        if not to_delete and not caption_conversions:
+            QMessageBox.information(
+                self, "Nothing to clean",
+                "Analysis didn't find any noise or caption tags to clean.",
+            )
+            return
+
+        reply = QMessageBox.question(
+            self, "Clean Noise & Captions?",
+            f"This will modify your tags:\n\n"
+            f"  • Delete {len(to_delete)} noise/caption tag(s)\n"
+            f"  • Consolidate {len(caption_conversions)} caption tag(s) "
+            f"into matching real tags\n\n"
+            f"Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
         self.apply_tag_cleaning.emit(to_delete, caption_conversions)
         self.detail_text.setPlainText(

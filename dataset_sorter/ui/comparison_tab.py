@@ -61,6 +61,7 @@ class _SideConfig(QGroupBox):
         self._label = label
         self._color = color
         self._apply_group_style()
+        self._build_form()
 
     def _apply_group_style(self):
         self.setStyleSheet(
@@ -72,9 +73,12 @@ class _SideConfig(QGroupBox):
         )
 
     def refresh_theme(self, color: str):
+        """Re-apply group-box styling for a new accent color. The form is
+        built once in ``__init__``; theme refresh only restyles."""
         self._color = color
         self._apply_group_style()
 
+    def _build_form(self):
         layout = QGridLayout(self)
         layout.setSpacing(6)
 

@@ -724,6 +724,40 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
 
+        # ── Help menu ──────────────────────────────────────────────────
+        help_menu = menubar.addMenu("&Help")
+        about_action = help_menu.addAction("&About DataBuilder")
+        about_action.triggered.connect(self._show_about_dialog)
+
+    def _show_about_dialog(self) -> None:
+        """Display a small About dialog with version + marmot branding."""
+        from dataset_sorter import __version__
+        from dataset_sorter.ui.splash import resolve_logo_path
+        from PyQt6.QtGui import QPixmap
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About DataBuilder")
+        logo_path = resolve_logo_path()
+        if logo_path is not None:
+            msg.setIconPixmap(
+                QPixmap(str(logo_path)).scaled(
+                    96, 96,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        msg.setText(f"<h2>DataBuilder {__version__}</h2>")
+        msg.setInformativeText(
+            "<p>The fastest trainer and generator for text-to-image models.</p>"
+            "<p>Dataset preparation • LoRA &amp; full finetune training • "
+            "Image generation • Model library — for RTX 4090 / H100 hardware.</p>"
+            "<p>Built with PyQt6 · MIT licensed</p>"
+            "<p><a href='https://github.com/marmotte5/DataBuilder-'>GitHub</a></p>"
+        )
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
     def _refresh_recent_menu(self) -> None:
         """Rebuild the Recent submenu from AppSettings.recent_projects."""
         if not hasattr(self, "_recent_menu"):
