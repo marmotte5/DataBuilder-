@@ -829,7 +829,7 @@ class AugmentationSection(QWidget):
                     spin.setSingleStep(param_def["step"])
                     spin.setDecimals(2)
                     spin.setValue(param_def["default"])
-                    spin.setMaximumWidth(80)
+                    spin.setMaximumWidth(96)
                     spin.valueChanged.connect(
                         lambda val, k=key, pk=param_key: self._update_param(k, pk, val)
                     )
@@ -838,7 +838,7 @@ class AugmentationSection(QWidget):
                     spin.setRange(int(param_def["min"]), int(param_def["max"]))
                     spin.setSingleStep(int(param_def["step"]))
                     spin.setValue(int(param_def["default"]))
-                    spin.setMaximumWidth(80)
+                    spin.setMaximumWidth(96)
                     spin.valueChanged.connect(
                         lambda val, k=key, pk=param_key: self._update_param(k, pk, val)
                     )
