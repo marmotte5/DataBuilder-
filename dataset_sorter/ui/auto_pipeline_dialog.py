@@ -250,7 +250,7 @@ class AutoPipelineDialog(QDialog):
         self.btn_clean_only.clicked.connect(self._clean_only)
         btn_row.addWidget(self.btn_clean_only)
 
-        self.btn_launch = QPushButton("Clean & Launch Training")
+        self.btn_launch = QPushButton("Clean && Launch Training")
         self.btn_launch.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_launch.setMinimumWidth(200)
         self.btn_launch.setEnabled(False)
