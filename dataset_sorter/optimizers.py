@@ -497,7 +497,11 @@ class SOAP(Optimizer):
     def __init__(
         self,
         params: Iterable,
-        lr: float = 3e-4,
+        # Match the factory default in optimizer_factory.OPTIMIZER_DEFAULTS
+        # ("SOAP" → 5e-5). The previous 3e-4 was dead code — the factory
+        # always passed config.learning_rate — but it confused readers and
+        # produced a different result if SOAP was instantiated directly.
+        lr: float = 5e-5,
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = OPTIMIZER_EPSILON,
         weight_decay: float = DEFAULT_WEIGHT_DECAY,
