@@ -163,8 +163,11 @@ class AttentionMapDebugger:
                         )
                         if attn_map is not None:
                             debugger._attention_maps[layer_name] = attn_map.detach().cpu()
-                    except Exception:
-                        pass  # Skip layers we can't capture
+                    except Exception as e:
+                        # Skip layers we can't capture (different attention impl,
+                        # quantized weights, etc.). Log at debug — these failures
+                        # are common and not actionable for the user.
+                        log.debug("Skipping attention map for %s: %s", layer_name, e)
 
         return hook_fn
 

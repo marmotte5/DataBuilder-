@@ -309,7 +309,9 @@ def _get_blip_pipeline(model_id: str = "Salesforce/blip-image-captioning-large")
             model_id, torch_dtype=_dtype, local_files_only=True,
         ).to(device)
         log.info("BLIP loaded from local cache")
-    except Exception:
+    except Exception as e:
+        # Local cache miss or corrupted — fall back to download.
+        log.info("BLIP not in local cache (%s) — downloading from HuggingFace", e)
         processor = BlipProcessor.from_pretrained(model_id)
         model = BlipForConditionalGeneration.from_pretrained(
             model_id, torch_dtype=_dtype,
