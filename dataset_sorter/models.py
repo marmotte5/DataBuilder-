@@ -231,7 +231,6 @@ class _AdvancedView(_ConfigView):
         "loss_fn", "huber_delta",
         "x0_supervision",
         "timestep_sampling", "model_prediction_type",
-        "sigma_min", "sigma_max",
         "timestep_bias_strategy", "timestep_bias_multiplier",
         "timestep_bias_begin", "timestep_bias_end",
         "speed_asymmetric", "speed_change_aware",
@@ -268,14 +267,14 @@ class _AdvancedView(_ConfigView):
         "attention_rebalancing", "attention_rebalance_threshold",
         "attention_rebalance_boost",
         # Pipeline integration
-        "pipeline_integration", "auto_fix_config", "auto_dedup",
-        "auto_tag_analysis", "auto_history_apply", "auto_speed_opts",
+        "pipeline_integration",
+        "auto_tag_analysis", "auto_speed_opts",
         "live_loss_monitor", "live_monitor_interval",
         "live_monitor_auto_adjust",
         # Held-out validation
         "validation_dir", "validate_every_n_steps", "validation_samples_limit",
         # Masked training
-        "masked_training", "mask_weight", "unmasked_probability",
+        "masked_training", "unmasked_probability",
         # TensorBoard
         "tensorboard_logging",
         # ControlNet
@@ -498,8 +497,6 @@ class TrainingConfig:
     # Timestep sampling (flow-matching models)
     timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal, speed
     model_prediction_type: str = ""     # epsilon, v_prediction, raw, flow
-    sigma_min: float = 0.0
-    sigma_max: float = 0.0
 
     # Timestep bias strategy — shifts sampling toward low or high noise levels.
     # "none"    : uniform sampling (default)
@@ -634,10 +631,7 @@ class TrainingConfig:
 
     # ── Pipeline Integration ──────────────────────────────────────────
     pipeline_integration: bool = True       # Run pre-training pipeline (validation, dedup, tag analysis)
-    auto_fix_config: bool = True            # Auto-fix recoverable config errors
-    auto_dedup: bool = True                 # Auto-detect and de-weight duplicate images
     auto_tag_analysis: bool = True          # Analyze tag importance and adjust dropout
-    auto_history_apply: bool = True         # Apply suggestions from training history
     auto_speed_opts: bool = True            # Auto-enable speed optimizations for hardware
     live_loss_monitor: bool = True          # Monitor loss curve during training and auto-adjust
     live_monitor_interval: int = 200        # Steps between live loss curve checks
@@ -656,7 +650,6 @@ class TrainingConfig:
 
     # ── Masked Training ──────────────────────────────────────────────────
     masked_training: bool = False       # Enable masked loss (only train on masked regions)
-    mask_weight: float = 1.0           # Relative weight for masked vs unmasked regions
     # OneTrainer-style random unmasked steps: with this probability, skip
     # the mask for a batch and train on the full image. Prevents the model
     # from forgetting backgrounds / context when the subject is absent.

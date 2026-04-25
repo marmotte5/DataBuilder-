@@ -700,3 +700,141 @@ class TestMarmotteEdgeCases:
                 for p in model.parameters():
                     assert not torch.isnan(p).any(), f"NaN at step {i+1}"
                     assert not torch.isinf(p).any(), f"Inf at step {i+1}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Audit-found bug regression tests
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestStateDictRoundtrip:
+    """Bug A (BLOCKER): PyTorch's load_state_dict() casts state tensors to
+    the parameter's dtype. ``momentum_packed`` is uint8 BY DESIGN — a
+    packed bit array, not a tensor of floats — so the default cast
+    breaks every checkpoint resume with a "bitwise_and not implemented
+    for Float" error on the next step.
+
+    The Marmotte override of load_state_dict() must restore the uint8
+    dtype after super().load_state_dict() runs.
+    """
+
+    def _build_warmed_marmotte(self):
+        torch.manual_seed(0)
+        params = [torch.nn.Parameter(torch.randn(64, 64))]
+        opt = Marmotte(params, lr=1e-3, warmup_steps=2)
+        for _ in range(5):
+            opt.zero_grad()
+            loss = (params[0] ** 2).sum()
+            loss.backward()
+            opt.step()
+        return opt, params
+
+    def test_momentum_packed_stays_uint8_after_roundtrip(self):
+        import io
+        opt, params = self._build_warmed_marmotte()
+        assert opt.state[params[0]]["momentum_packed"].dtype == torch.uint8
+
+        sd = opt.state_dict()
+        buf = io.BytesIO()
+        torch.save(sd, buf)
+        buf.seek(0)
+        loaded = torch.load(buf, weights_only=True)
+
+        new_params = [torch.nn.Parameter(torch.randn(64, 64))]
+        opt2 = Marmotte(new_params, lr=1e-3, warmup_steps=2)
+        opt2.load_state_dict(loaded)
+
+        assert opt2.state[new_params[0]]["momentum_packed"].dtype == torch.uint8, (
+            "momentum_packed lost its uint8 dtype after load_state_dict — "
+            "subsequent step() will crash"
+        )
+
+    def test_step_after_load_state_dict_does_not_crash(self):
+        import io
+        opt, _ = self._build_warmed_marmotte()
+        sd = opt.state_dict()
+        buf = io.BytesIO()
+        torch.save(sd, buf)
+        buf.seek(0)
+        loaded = torch.load(buf, weights_only=True)
+
+        new_params = [torch.nn.Parameter(torch.randn(64, 64), requires_grad=True)]
+        opt2 = Marmotte(new_params, lr=1e-3, warmup_steps=2)
+        opt2.load_state_dict(loaded)
+
+        # The step that used to fail with "bitwise_and not implemented for Float"
+        opt2.zero_grad()
+        loss = (new_params[0] ** 2).sum()
+        loss.backward()
+        opt2.step()
+
+    def test_error_buffers_keep_param_dtype(self):
+        """Only momentum_packed should be coerced back to uint8; the
+        error feedback U/V matrices stay at the parameter's dtype."""
+        import io
+        opt, _ = self._build_warmed_marmotte()
+        sd = opt.state_dict()
+        buf = io.BytesIO()
+        torch.save(sd, buf)
+        buf.seek(0)
+        loaded = torch.load(buf, weights_only=True)
+
+        new_params = [torch.nn.Parameter(torch.randn(64, 64))]
+        opt2 = Marmotte(new_params, lr=1e-3, warmup_steps=2)
+        opt2.load_state_dict(loaded)
+
+        s = opt2.state[new_params[0]]
+        assert s["error_U"].dtype == torch.float32
+        assert s["error_V"].dtype == torch.float32
+
+
+class TestErrorFeedbackDormant:
+    """Bug B (KNOWN, DORMANT): rank-k error feedback is mathematically zero.
+
+    The audit identified that ``error_V`` is initialised to zeros and
+    the randomized power iteration produces zero forever:
+        U_new = error @ V_zero = 0
+        V_new = error.T @ U_zero = 0
+        U.lerp_(0, alpha) → still zero
+        V.lerp_(0, alpha) → still zero
+
+    Two fix attempts (random V init at construction, first-call
+    bootstrap-overwrite) caused convergence regressions because the
+    raw error scale at step 1 dominates the smaller gradients of
+    converging steps. The proper fix requires per-step error
+    normalisation or a slow-ramp schedule — left for a future change.
+
+    For now the optimizer trains correctly because the rank-k feedback
+    contributes mathematically zero to the gradient. These tests
+    document the CURRENT state honestly so a future re-enable doesn't
+    silently regress convergence.
+    """
+
+    def test_error_buffers_stay_zero_when_dormant(self):
+        """Lock the current behaviour: U and V remain zero across steps.
+
+        If a future commit accidentally activates error feedback without
+        the proper safeguards, this test fires — pointing the author at
+        the dormancy comment in optimizers.py for context."""
+        torch.manual_seed(0)
+        params = [torch.nn.Parameter(torch.randn(64, 64))]
+        opt = Marmotte(params, lr=1e-3, warmup_steps=2, error_rank=4)
+
+        # Run past warmup so _update_error_rank_k is reached
+        for _ in range(15):
+            opt.zero_grad()
+            loss = (params[0] ** 2).sum()
+            loss.backward()
+            opt.step()
+
+        s = opt.state[params[0]]
+        # Currently dormant: feedback stays at zero. If this fails, the
+        # feedback path is now active — confirm convergence didn't regress
+        # before celebrating.
+        assert s["error_U"].abs().sum().item() == 0, (
+            "error_U is non-zero — rank-k feedback was reactivated. "
+            "Verify convergence on the test_convergence_on_quadratic case "
+            "didn't regress before claiming this is intentional."
+        )
+        assert s["error_V"].abs().sum().item() == 0
+
