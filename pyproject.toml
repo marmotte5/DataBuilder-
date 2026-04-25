@@ -89,5 +89,10 @@ Repository = "https://github.com/marmotte5/DataBuilder-"
 [tool.setuptools.packages.find]
 include = ["dataset_sorter*"]
 
+[tool.setuptools.package-data]
+# Bundle the splash screen + any future static assets into the wheel so
+# show_splash() can locate them via importlib.resources.
+"dataset_sorter" = ["assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
