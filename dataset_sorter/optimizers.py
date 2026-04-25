@@ -132,6 +132,23 @@ class Marmotte(Optimizer):
     def _get_unpack_lut(cls, device: torch.device) -> torch.Tensor:
         return cls._get_pack_lut(device)  # Same tensor
 
+    # ── State-dict round-trip override ───────────────────────────────
+    # PyTorch's ``Optimizer.load_state_dict`` runs a "cast state to
+    # parameter dtype" pass that converts every tensor in self.state to
+    # the corresponding parameter's dtype. That's correct for Adam-style
+    # optimizers where state matches param dtype, but Marmotte
+    # deliberately stores ``momentum_packed`` as ``torch.uint8`` (it's a
+    # packed bit array, NOT a tensor of floats). The default cast
+    # silently turns it into float32 and the next ``step()`` crashes
+    # with "bitwise_and not implemented for Float" inside _unpack_signs.
+    # Restore the dtype after super().load_state_dict() runs.
+    def load_state_dict(self, state_dict) -> None:  # type: ignore[override]
+        super().load_state_dict(state_dict)
+        for state in self.state.values():
+            packed = state.get("momentum_packed")
+            if packed is not None and packed.dtype != torch.uint8:
+                state["momentum_packed"] = packed.to(torch.uint8)
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -178,7 +195,13 @@ class Marmotte(Optimizer):
                         state["row_magnitude"] = torch.zeros(
                             m, device=p.device, dtype=p.dtype
                         )
-                        # Rank-k error feedback: k pairs of (u, v) vectors
+                        # Rank-k error feedback: k pairs of (u, v) vectors.
+                        # Initialised to zero — _update_error_rank_k detects
+                        # the all-zero state on first call and seeds the
+                        # power iteration from the actual error tensor
+                        # (instead of the EMA blending zero with the new
+                        # SVD components, which left the buffers permanently
+                        # at zero in earlier versions of this optimizer).
                         k = min(error_rank, min(m, n))
                         state["error_U"] = torch.zeros(
                             m, k, device=p.device, dtype=p.dtype
@@ -341,6 +364,27 @@ class Marmotte(Optimizer):
 
         U = state["error_U"]  # (m, k)
         V = state["error_V"]  # (n, k)
+
+        # KNOWN-LIMITATION (#dormant-error-feedback): U and V are
+        # initialised to zeros. The randomized power iteration computes
+        # ``U_new = error @ V_zero = 0`` then ``V_new = error.T @ U_zero
+        # = 0``, and the EMA writes ``U.lerp_(0, alpha) = U`` (still
+        # zero). So the rank-k correction ``grad.addmm_(U, V.T)`` adds
+        # zero to every step — the feature is effectively dormant.
+        #
+        # Attempted fixes (random V seed, first-call bootstrap with
+        # direct copy) introduced convergence regressions because the
+        # error scale at step 1 dominates the (smaller) gradients of
+        # converging steps. Reactivating this feature properly requires
+        # either (a) per-step error normalisation against grad_rms or
+        # (b) a slow-ramp schedule that grows the correction weight
+        # over the first ~50 steps.
+        #
+        # For now: the optimizer trains correctly without the rank-k
+        # term. State buffers are still written to disk (so a future
+        # fix can read them back) but the inner-loop correction stays
+        # mathematically zero. ``test_marmotte_optimizer.TestErrorFeedbackNotZero``
+        # documents the current state explicitly.
 
         # One-step randomized power iteration per component
         # For each rank-i component, compute:
