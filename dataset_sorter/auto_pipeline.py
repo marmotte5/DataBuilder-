@@ -334,7 +334,11 @@ class AutoPipeline:
             for keep, remove in a.tags_to_merge:
                 if remove in self.deleted_tags:
                     continue  # Already removed
-                # Rename the less common tag to the more common one
+                # Track whether THIS (keep, remove) pair actually mutated any
+                # entry — incrementing the counter on every affected image
+                # gave inflated stats (a tag on 50 images reported 50 merges
+                # for what is logically ONE merge operation).
+                pair_did_merge = False
                 for idx in list(self.tag_to_entries.get(remove, [])):
                     entry = self.entries[idx]
                     if keep in entry.tags:
@@ -343,6 +347,8 @@ class AutoPipeline:
                         entry.tags = [keep if t == remove else t for t in entry.tags]
                         # Update tag_to_entries: idx now references 'keep'
                         self.tag_to_entries.setdefault(keep, set()).add(idx)
+                    pair_did_merge = True
+                if pair_did_merge:
                     tags_merged += 1
                 # Remove the merged tag from the index
                 self.tag_to_entries.pop(remove, None)
