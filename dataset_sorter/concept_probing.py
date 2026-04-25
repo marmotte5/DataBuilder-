@@ -248,11 +248,24 @@ class ConceptProber:
 
             with torch.no_grad():
                 outputs = clip_model(**inputs)
-                # outputs.logits_per_text: (1, num_images) — scaled cosine sims
-                # Use sigmoid instead of softmax: softmax forces scores to sum
-                # to 1 across images, making mean() always ≈ 0.5 regardless of
-                # actual similarity. Sigmoid gives independent per-image scores.
-                similarities = outputs.logits_per_text.sigmoid()
+                # outputs.logits_per_text is the temperature-scaled cosine
+                # similarity: ``logit_scale.exp() * cosine_sim`` where
+                # logit_scale.exp() ≈ 14–100 depending on the CLIP variant.
+                # Earlier code used ``logits.sigmoid()``: sigmoid(14) ≈ 1.0
+                # and sigmoid(-14) ≈ 0.0 saturate so hard that any "similar"
+                # image scored ≈ 1.0 regardless of HOW similar — the probe
+                # silently lost almost all gradation. Softmax across images
+                # also fails because it forces scores to sum to 1 (a single
+                # image always gets 1.0).
+                #
+                # Use the un-scaled cosine similarity directly: divide by
+                # the learned temperature to recover ``cos ∈ [-1, 1]``,
+                # then linearly map to ``[0, 1]``. Preserves the ranking
+                # AND the relative magnitude of matches.
+                logit_scale = float(clip_model.logit_scale.exp().detach())
+                cosine = outputs.logits_per_text / max(logit_scale, 1e-6)
+                # Cosine in [-1, 1] → [0, 1]
+                similarities = (cosine.clamp(-1.0, 1.0) + 1.0) * 0.5
                 score = float(similarities.mean())
 
             # Clean up CLIP model to free VRAM

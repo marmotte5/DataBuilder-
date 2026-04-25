@@ -85,13 +85,58 @@ def dpo_loss_ipo(
 
     L = (log_ratio - 1/(2*beta))^2
     """
-    if beta <= 0:
-        beta = 0.1  # fallback to default; zero causes ZeroDivisionError
+    # Note: dpo_training_step() validates beta > 0 before reaching here;
+    # callers that invoke this function directly are expected to do the same.
     log_ratio = (
         (chosen_logps - ref_chosen_logps) - (rejected_logps - ref_rejected_logps)
     )
     loss = (log_ratio - 1.0 / (2.0 * beta)) ** 2
     return loss.mean()
+
+
+def _validate_dpo_hyperparams(beta: float, label_smoothing: float, *, loss_type: str) -> None:
+    """Validate DPO hyperparameters and raise ``ValueError`` on bad input.
+
+    Catches three classes of misconfiguration that previously went silent:
+
+    1. **β ≤ 0**: a negative or zero KL-penalty coefficient flips the
+       sign of the implicit reward — the model would actively learn to
+       prefer the REJECTED images. Earlier versions silently fell back
+       to ``β=0.1`` for IPO only, which masked the misconfig from the
+       user. Now an explicit error fires for every loss variant.
+
+    2. **label_smoothing ≥ 0.5**: with smoothing 0.5 the preference
+       direction becomes ambiguous (50% weight on chosen vs 50% on
+       rejected). At 1.0 the loss is fully INVERTED — the model learns
+       to prefer the rejected images. The DPO paper recommends
+       ``label_smoothing ∈ [0, 0.2]``; we cap at 0.5 to allow some
+       experimentation with conservative smoothing while still
+       blocking the obvious misuse.
+
+    3. **NaN / Inf**: if the user fed invalid values from a config
+       file (e.g. parsed string), catch them up front rather than
+       producing NaN losses.
+    """
+    if not isinstance(beta, (int, float)) or not math.isfinite(beta):
+        raise ValueError(f"DPO beta must be a finite number, got {beta!r}")
+    if beta <= 0:
+        raise ValueError(
+            f"DPO {loss_type} requires beta > 0, got {beta}. A non-positive "
+            "beta inverts the implicit-reward signal and trains the model "
+            "to prefer rejected images."
+        )
+    if (
+        not isinstance(label_smoothing, (int, float))
+        or not math.isfinite(label_smoothing)
+    ):
+        raise ValueError(
+            f"DPO label_smoothing must be a finite number, got {label_smoothing!r}"
+        )
+    if not (0.0 <= label_smoothing < 0.5):
+        raise ValueError(
+            f"DPO label_smoothing must be in [0, 0.5), got {label_smoothing}. "
+            "Values ≥ 0.5 invert or eliminate the preference signal."
+        )
 
 
 DPO_LOSS_FNS = {
@@ -335,6 +380,29 @@ def dpo_training_step(
     Returns:
         DPO loss tensor
     """
+    # Up-front validation — fails loudly on misconfigured hyperparams
+    # rather than producing NaN losses or sign-flipped gradients.
+    _validate_dpo_hyperparams(beta, label_smoothing, loss_type=loss_type)
+
+    # Loud warning when policy and reference share parameters. This is
+    # an explicit design choice in DataBuilder (no separate frozen
+    # reference is maintained to save VRAM) but it COLLAPSES the DPO
+    # log-ratio: chosen_logps - ref_chosen_logps = 0 in value (the
+    # gradient flows only through chosen_logps). Effectively the loss
+    # becomes a simple "maximize chosen, minimize rejected" preference
+    # objective WITHOUT the regularisation that DPO's reference term
+    # provides — the model can drift further from its starting
+    # distribution than full DPO would allow. Users should know this.
+    if ref_backend is backend:
+        log.warning(
+            "DPO training: ref_backend is the SAME object as the policy "
+            "backend. The reference log-ratio collapses to zero, so the "
+            "loss reduces to a simple chosen-vs-rejected preference "
+            "objective without DPO's KL anchoring. For full DPO "
+            "regularisation, instantiate a separate frozen copy of the "
+            "policy at training start and pass it as ref_backend."
+        )
+
     bsz = chosen_latents.shape[0]
 
     # Validate shapes match — chosen and rejected must have identical spatial dims
