@@ -67,11 +67,18 @@ if _TRITON_AVAILABLE:
         offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
 
-        # Load all data in one memory trip
-        p = tl.load(param_ptr + offsets, mask=mask)
-        g = tl.load(grad_ptr + offsets, mask=mask)
-        m = tl.load(exp_avg_ptr + offsets, mask=mask)
-        v = tl.load(exp_avg_sq_ptr + offsets, mask=mask)
+        # Load all data in one memory trip.
+        # ``other=0.0`` is required: tl.load with a mask but no other=
+        # returns UNDEFINED values for masked-out lanes per Triton's
+        # spec. The downstream computation (``tl.sqrt(v)``,
+        # ``g * g``, etc.) then operates on garbage, which can produce
+        # NaN intermediates that propagate via SIMD even though the
+        # final tl.store is masked. Defensive zero-fill makes the
+        # entire compute lane deterministic.
+        p = tl.load(param_ptr + offsets, mask=mask, other=0.0)
+        g = tl.load(grad_ptr + offsets, mask=mask, other=0.0)
+        m = tl.load(exp_avg_ptr + offsets, mask=mask, other=0.0)
+        v = tl.load(exp_avg_sq_ptr + offsets, mask=mask, other=0.0)
 
         # Decoupled weight decay (AdamW style)
         p = p * (1.0 - lr * weight_decay)
@@ -216,7 +223,10 @@ if _TRITON_AVAILABLE:
         offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
 
-        g = tl.load(grad_ptr + offsets, mask=mask)
+        # other=0.0 prevents undefined values in masked lanes from
+        # contaminating the multiply (matters for the per-block
+        # operations that fold partial sums on some backends).
+        g = tl.load(grad_ptr + offsets, mask=mask, other=0.0)
 
         # Clip gradient
         g = g * clip_scale
