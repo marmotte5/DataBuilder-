@@ -65,11 +65,15 @@ MODEL_TYPE_LABELS = list(MODEL_TYPES.values())
 VRAM_TIERS = [8, 12, 16, 24, 48, 96]
 
 # Supported network types
+# Trainable variants — driven by `network_type` in TrainingConfig.
+# 'lora' uses HuggingFace PEFT (with optional DoRA/rsLoRA flags).
+# 'loha' / 'lokr' / 'locon' / 'dylora' use LyCORIS for training.
 NETWORK_TYPES = {
-    "lora":  "LoRA — Low-Rank Adaptation",
-    "dora":  "DoRA — Weight-Decomposed Low-Rank",
-    "loha":  "LoHa — Low-Rank Hadamard Product",
-    "lokr":  "LoKr — Low-Rank Kronecker Product",
+    "lora":   "LoRA — Low-Rank Adaptation (PEFT)",
+    "loha":   "LoHa — Low-Rank Hadamard Product (LyCORIS)",
+    "lokr":   "LoKr — Kronecker Product, 5-10x param-efficient (LyCORIS)",
+    "locon":  "LoCon — LoRA + Conv layers (LyCORIS)",
+    "dylora": "DyLoRA — Dynamic-rank LoRA (LyCORIS)",
 }
 
 # Supported optimizers

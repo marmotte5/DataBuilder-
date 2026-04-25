@@ -125,6 +125,12 @@ class TrainBackendBase(ABC):
         self._training_mask: Optional[torch.Tensor] = None  # Spatial mask [B,1,H,W] for masked training
         self._training_te: bool = False  # Set True when TE is being trained (disables no_grad in encode_text_batch)
 
+        # Adapter tracking — set by setup_lora()
+        # adapter_type ∈ {"peft", "lycoris", None}; lycoris_net holds the
+        # LycorisNetwork instance when training a LyCORIS adapter (LoKr/LoHa/LoCon/DyLoRA)
+        self.adapter_type: Optional[str] = None
+        self.lycoris_net = None
+
     # ── Abstract methods (model-specific) ──────────────────────────────
 
     @abstractmethod
@@ -169,13 +175,30 @@ class TrainBackendBase(ABC):
         return None
 
     def save_lora(self, save_dir: Path):
-        """Save LoRA adapter weights.
+        """Save adapter weights — dispatches PEFT vs LyCORIS based on adapter_type.
 
-        Handles wrapped models (MeBPWrapper, etc.) by unwrapping to find
-        the underlying PeftModel before calling save_pretrained().
+        PEFT path: save_pretrained() to a directory.
+        LyCORIS path: save_weights() to a single .safetensors inside save_dir.
         """
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # LyCORIS adapter — single file
+        if self.adapter_type == "lycoris" and self.lycoris_net is not None:
+            from safetensors.torch import save_file as _st_save  # noqa: F401  (presence check)
+            out_file = save_dir / "adapter_model.safetensors"
+            metadata = {
+                "ss_network_module": getattr(self.config, "network_type", "lokr"),
+                "ss_network_dim": str(self.config.lora_rank),
+                "ss_network_alpha": str(self.config.lora_alpha),
+                "ss_v2": "False",
+            }
+            self.lycoris_net.save_weights(str(out_file), self.dtype, metadata)
+            log.info("Saved %s LyCORIS adapter to %s", self.model_name, out_file)
+            return
+
+        # PEFT path (default) — directory with adapter_config.json + weights
         model = self.unet
-        # Unwrap any non-PEFT wrapper (MeBPWrapper stores model in .module)
         while hasattr(model, "module") and not hasattr(model, "save_pretrained"):
             model = model.module
         model.save_pretrained(str(save_dir))
@@ -483,13 +506,27 @@ class TrainBackendBase(ABC):
             log.warning("fp8_base_model: no frozen parameters found to convert")
 
     def setup_lora(self) -> nn.Module:
-        """Inject LoRA layers and return the wrapped model.
+        """Inject adapter layers and return the wrapped model.
 
-        Supports advanced PEFT variants:
-        - DoRA: weight-decomposed LoRA (ICML 2024) — `use_dora=True`
-        - rsLoRA: rank-stabilized scaling — `use_rslora=True`
-        - PiSSA: principal SVD init — `init_lora_weights="pissa"`
+        Dispatches based on ``config.network_type``:
+        - ``lora`` (default): HuggingFace PEFT path with optional DoRA / rsLoRA /
+          PiSSA / OLoRA / Gaussian init / LoRA-FA (frozen-A).
+        - ``loha`` / ``lokr`` / ``locon`` / ``dylora``: LyCORIS path
+          (Hadamard / Kronecker product / conv-extended / dynamic-rank).
+
+        Returns the wrapped UNet (or transformer). For LyCORIS variants,
+        ``self.lycoris_net`` holds the trainable adapter — it is what gets
+        passed to the optimizer rather than ``self.unet`` directly.
         """
+        network_type = (getattr(self.config, "network_type", "lora") or "lora").lower()
+
+        if network_type in ("loha", "lokr", "locon", "dylora"):
+            return self._setup_lycoris_adapter(network_type)
+        # Default + any unknown value → standard PEFT LoRA
+        return self._setup_peft_lora()
+
+    def _setup_peft_lora(self) -> nn.Module:
+        """Standard PEFT LoRA path with all 2024-2026 variants."""
         from peft import LoraConfig, get_peft_model
 
         config = self.config
@@ -531,9 +568,18 @@ class TrainBackendBase(ABC):
         self.unet = get_peft_model(self.unet, lora_config)
         self.unet.train()
 
+        # LoRA-FA: freeze the A matrix, train only B (~50% LoRA-param VRAM saving).
+        # Apply AFTER get_peft_model so PEFT has built the lora_A modules.
+        if getattr(config, "use_lora_fa", False):
+            frozen = 0
+            for name, param in self.unet.named_parameters():
+                if "lora_A" in name or "lora_down" in name:
+                    if param.requires_grad:
+                        param.requires_grad = False
+                        frozen += 1
+            log.info("LoRA-FA: froze %d lora_A tensors (only lora_B trains)", frozen)
+
         # fp16 mode: GradScaler requires trainable params to be float32.
-        # Cast only LoRA (requires_grad) params; frozen weights stay in fp16.
-        # torch.autocast handles mixed precision in the forward pass.
         if self.dtype == torch.float16:
             for param in self.unet.parameters():
                 if param.requires_grad:
@@ -541,8 +587,6 @@ class TrainBackendBase(ABC):
             log.info("fp16: LoRA parameters cast to float32 for GradScaler compatibility.")
 
         # Update pipeline reference (handle both UNet and transformer models).
-        # Check getattr value, not hasattr, because transformer pipelines
-        # define 'unet' as an optional component (exists but is None).
         if self.pipeline is not None:
             if hasattr(self.pipeline, "transformer") and getattr(self.pipeline, "unet", None) is None:
                 self.pipeline.transformer = self.unet
@@ -551,6 +595,85 @@ class TrainBackendBase(ABC):
             else:
                 self.pipeline.unet = self.unet
 
+        self.adapter_type = "peft"
+        return self.unet
+
+    def _setup_lycoris_adapter(self, algo: str) -> nn.Module:
+        """LyCORIS path for LoHa / LoKr / LoCon / DyLoRA training.
+
+        Wraps the frozen UNet/transformer with a LycorisNetwork that holds the
+        trainable adapter parameters. The base model stays frozen on-device;
+        only the LycorisNetwork is added to the optimizer (handled in trainer.py).
+        """
+        try:
+            from lycoris import LycorisNetwork
+        except ImportError as e:
+            raise RuntimeError(
+                f"network_type={algo!r} requires the 'lycoris-lora' package. "
+                "Install with `pip install lycoris-lora` or `pip install '.[all]'`."
+            ) from e
+
+        config = self.config
+
+        # Freeze the base model — LyCORIS adds its own trainable params via hooks.
+        self.unet.to(self.device, dtype=self.dtype)
+        self.unet.requires_grad_(False)
+        self.unet.eval()
+
+        # Build kwargs common to all LyCORIS algos.
+        ly_kwargs: dict = dict(
+            multiplier=1.0,
+            lora_dim=config.lora_rank,
+            alpha=config.lora_alpha,
+            conv_lora_dim=config.conv_rank if config.conv_rank > 0 else config.lora_rank,
+            conv_alpha=config.conv_alpha if config.conv_alpha > 0 else config.lora_alpha,
+            dropout=0.0,
+            rank_dropout=0.0,
+            module_dropout=0.0,
+            use_tucker=getattr(config, "lycoris_use_tucker", False),
+            network_module=algo,
+        )
+
+        # LoKr-specific: Kronecker factor and decomposition mode.
+        if algo == "lokr":
+            factor = getattr(config, "lycoris_factor", -1)
+            ly_kwargs["factor"] = factor
+            ly_kwargs["decompose_both"] = getattr(config, "lycoris_decompose_both", False)
+
+        # DoRA-style magnitude vector applied on top of LyCORIS.
+        if getattr(config, "lycoris_dora_wd", False):
+            ly_kwargs["dora_wd"] = True
+
+        net = LycorisNetwork(self.unet, **ly_kwargs)
+        net.apply_to()
+        net.to(self.device, dtype=self.dtype)
+        net.train()
+        net.requires_grad_(True)
+
+        # fp16: trainable adapter params must be float32 for GradScaler.
+        if self.dtype == torch.float16:
+            for param in net.parameters():
+                if param.requires_grad:
+                    param.data = param.data.float()
+            log.info("fp16: LyCORIS parameters cast to float32 for GradScaler compatibility.")
+
+        # Update pipeline reference (base model unchanged; LyCORIS hooks are active).
+        if self.pipeline is not None:
+            if hasattr(self.pipeline, "transformer") and getattr(self.pipeline, "unet", None) is None:
+                self.pipeline.transformer = self.unet
+            elif hasattr(self.pipeline, "prior") and getattr(self.pipeline, "unet", None) is None:
+                self.pipeline.prior = self.unet
+            else:
+                self.pipeline.unet = self.unet
+
+        n_train = sum(p.numel() for p in net.parameters() if p.requires_grad)
+        log.info(
+            "LyCORIS %s ready: rank=%d alpha=%d, %.2fM trainable params",
+            algo.upper(), config.lora_rank, config.lora_alpha, n_train / 1e6,
+        )
+
+        self.adapter_type = "lycoris"
+        self.lycoris_net = net
         return self.unet
 
     def _get_lora_target_modules(self) -> list[str]:
@@ -559,6 +682,17 @@ class TrainBackendBase(ABC):
         if self.config.conv_rank > 0:
             modules += ["conv1", "conv2", "conv_in", "conv_out"]
         return modules
+
+    def trainable_adapter_module(self) -> nn.Module:
+        """Return the module that owns trainable adapter parameters.
+
+        For PEFT LoRA / full finetune this is the wrapped unet/transformer.
+        For LyCORIS adapters (LoKr/LoHa/LoCon/DyLoRA) the unet is frozen and
+        the LycorisNetwork holds the trainable params.
+        """
+        if self.adapter_type == "lycoris" and self.lycoris_net is not None:
+            return self.lycoris_net
+        return self.unet
 
     def setup_full_finetune(self):
         """Setup full finetune (no LoRA)."""

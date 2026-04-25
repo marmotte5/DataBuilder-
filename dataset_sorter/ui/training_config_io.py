@@ -79,6 +79,11 @@ class TrainingConfigIOMixin:
         config.use_rslora = self.rslora_check.isChecked()
         config.lora_init = self.lora_init_combo.currentData() or "default"
         config.lora_plus_ratio = self.lora_plus_spin.value()
+        config.use_lora_fa = self.lora_fa_check.isChecked()
+        # LyCORIS-specific (LoKr factor, decompose-both, Tucker)
+        config.lycoris_factor = self.lycoris_factor_spin.value()
+        config.lycoris_decompose_both = self.lycoris_decompose_both_check.isChecked()
+        config.lycoris_use_tucker = self.lycoris_tucker_check.isChecked()
 
         # EMA
         config.use_ema = self.ema_check.isChecked()
@@ -314,6 +319,13 @@ class TrainingConfigIOMixin:
                 self.lora_init_combo.setCurrentIndex(i)
                 break
         self.lora_plus_spin.setValue(getattr(config, "lora_plus_ratio", 0.0))
+        self.lora_fa_check.setChecked(getattr(config, "use_lora_fa", False))
+        self.lycoris_factor_spin.setValue(getattr(config, "lycoris_factor", -1))
+        self.lycoris_decompose_both_check.setChecked(getattr(config, "lycoris_decompose_both", False))
+        self.lycoris_tucker_check.setChecked(getattr(config, "lycoris_use_tucker", False))
+        # Refresh visibility now that the network type is set
+        if hasattr(self, "_update_network_type_visibility"):
+            self._update_network_type_visibility()
 
         # EMA
         self.ema_check.setChecked(config.use_ema)
