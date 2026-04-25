@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -120,10 +120,25 @@ class WelcomeDialog(QDialog):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(16)
 
-        # Header
+        # Header — marmot logo + title side by side
+        from dataset_sorter.ui.splash import resolve_logo_path
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        logo_path = resolve_logo_path()
+        if logo_path is not None:
+            logo = QLabel()
+            pix = QPixmap(str(logo_path)).scaled(
+                48, 48,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo.setPixmap(pix)
+            header.addWidget(logo)
         title = QLabel("Welcome to DataBuilder")
         title.setFont(QFont(title.font().family(), 18, QFont.Weight.Bold))
-        root.addWidget(title)
+        header.addWidget(title)
+        header.addStretch(1)
+        root.addLayout(header)
 
         subtitle = QLabel(
             "A DataBuilder project keeps your dataset, training config, "
