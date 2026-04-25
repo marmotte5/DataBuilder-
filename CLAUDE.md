@@ -6,6 +6,91 @@ DataBuilder is a high-performance desktop application for text-to-image AI model
 
 **Goal: Be the fastest trainer and generator for text-to-image models.**
 
+## How to work on this codebase (LLM behavioral guidelines)
+
+Adapted from Andrej Karpathy's CLAUDE.md guidelines
+(https://github.com/forrestchang/andrej-karpathy-skills). These bias
+toward caution over speed; for trivial tasks use judgment.
+
+### 1. Think before coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity first
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+
+When your changes create orphans:
+- Remove imports / variables / functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: every changed line should trace directly to the user's request.
+
+### 4. Goal-driven execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+### 5. Project-specific reminders for these guidelines
+
+- **Never run user-facing destructive ops without confirmation** —
+  see "Security" + the trust_remote_code dialog precedent.
+- **Verify audit-agent findings before acting on them.** Recent rounds
+  showed ~60-85% false-positive rates on STE / FP8 / PEFT semantics
+  the agent didn't fully understand. Read the actual code at
+  the cited file:line, write a failing test that proves the bug,
+  THEN fix.
+- **Don't silently regress convergence.** When fixing optimizer or
+  loss bugs, run the existing convergence smoke tests — see
+  ``tests/test_marmotte_optimizer.py::TestMarmotteBasic`` for the
+  cautionary tale of "fixing" the dormant rank-k feedback only to
+  blow up gradients.
+- **Match the existing style of huge files** — ``trainer.py`` and
+  ``main_window.py`` are 3500-line god classes by design (UI signal
+  wiring + sequential setup steps). Don't refactor them mid-feature;
+  add to the right section instead.
+
+**These guidelines are working if:** fewer unnecessary changes in
+diffs, fewer rewrites due to overcomplication, and clarifying
+questions come before implementation rather than after mistakes.
+
 ## Security
 
 **NEVER commit API keys, tokens, or credentials.** This is a public open-source project (MIT). All secrets stay on the user's machine. No telemetry, no cloud calls except HuggingFace model downloads.
