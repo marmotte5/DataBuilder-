@@ -238,13 +238,14 @@ MODEL_RESOLUTION_FAMILY: dict[str, str] = {
 
 # ── LR Schedulers ─────────────────────────────────────────────────────
 LR_SCHEDULERS = {
-    "cosine":                  "Cosine — Smooth decay to zero",
-    "cosine_with_restarts":    "Cosine w/ Restarts — Periodic warm restarts",
-    "linear":                  "Linear — Steady linear decay",
-    "constant":                "Constant — Fixed LR (Prodigy/D-Adapt)",
-    "constant_with_warmup":    "Constant w/ Warmup — Flat after warmup",
-    "polynomial":              "Polynomial — Configurable power decay",
-    "rex":                     "REX — Reciprocal decay (2025)",
+    "cosine":                       "Cosine — Smooth decay to zero",
+    "cosine_with_terminal_anneal":  "Cosine + Terminal Anneal — Decay then flat-low tail (2026)",
+    "cosine_with_restarts":         "Cosine w/ Restarts — Periodic warm restarts",
+    "linear":                       "Linear — Steady linear decay",
+    "constant":                     "Constant — Fixed LR (Prodigy/D-Adapt)",
+    "constant_with_warmup":         "Constant w/ Warmup — Flat after warmup",
+    "polynomial":                   "Polynomial — Configurable power decay",
+    "rex":                          "REX — Reciprocal decay (2025)",
 }
 
 # ── Timestep Sampling ─────────────────────────────────────────────────

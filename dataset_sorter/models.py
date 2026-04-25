@@ -114,11 +114,13 @@ class _RunView(_ConfigView):
     """
     _FIELDS = (
         # Learning + LR schedule
-        "learning_rate", "lr_scheduler",
+        "learning_rate", "lr_scheduler", "terminal_anneal_fraction",
+        "lr_scale_with_batch", "lr_scale_reference_batch",
         # Text encoder
         "text_encoder_lr", "train_text_encoder", "train_text_encoder_2",
         # Batch
         "batch_size", "gradient_accumulation", "effective_batch_size",
+        "progressive_batch_warmup_steps",
         # Epochs / steps
         "epochs", "total_steps", "warmup_steps", "max_train_steps",
         # EMA
@@ -227,6 +229,7 @@ class _AdvancedView(_ConfigView):
         "multires_noise_discount", "multires_noise_iterations",
         "guidance_scale",
         "loss_fn", "huber_delta",
+        "x0_supervision",
         "timestep_sampling", "model_prediction_type",
         "sigma_min", "sigma_max",
         "timestep_bias_strategy", "timestep_bias_multiplier",
@@ -314,6 +317,20 @@ class TrainingConfig:
     # ── Learning ───────────────────────────────────────────────────────
     learning_rate: float = DEFAULT_LR_LORA
     lr_scheduler: str = "cosine"
+    # Fraction of total training kept at the final cosine LR as a flat
+    # "tail" — only consumed by ``lr_scheduler="cosine_with_terminal_anneal"``.
+    # 0.1 means the last 10% of training holds at the cosine-end LR rather
+    # than continuing to zero — empirically helps fine-detail convergence
+    # at large effective batch.
+    terminal_anneal_fraction: float = 0.1
+    # Auto-scale the user-supplied learning_rate by the effective batch.
+    # "none"   — use ``learning_rate`` as-is (default)
+    # "linear" — multiply by (effective_batch / lr_scale_reference_batch)
+    # "sqrt"   — multiply by sqrt(effective_batch / lr_scale_reference_batch)
+    # The reference batch is the batch size the user's ``learning_rate``
+    # was tuned for — typically 1 for kohya/OneTrainer-derived recipes.
+    lr_scale_with_batch: str = "none"
+    lr_scale_reference_batch: int = 1
 
     # ── Text encoder ───────────────────────────────────────────────────
     text_encoder_lr: float = DEFAULT_LR_TEXT_ENCODER
@@ -324,6 +341,12 @@ class TrainingConfig:
     batch_size: int = 1
     gradient_accumulation: int = 1
     effective_batch_size: int = 1
+    # Progressive batch scaling (2026 best practice for effective-batch 10–20).
+    # Linearly ramps the effective accumulation steps from 1 to
+    # ``gradient_accumulation`` over the first N optimizer steps, then
+    # holds at the configured value. 0 = disabled (default), typical value
+    # 50–200 for short runs, 500+ for full fine-tunes.
+    progressive_batch_warmup_steps: int = 0
 
     # ── Epochs & steps ─────────────────────────────────────────────────
     epochs: int = 1
@@ -464,6 +487,13 @@ class TrainingConfig:
     # - "smooth_l1" : alias for huber with delta=1.0
     loss_fn: str = "mse"
     huber_delta: float = 0.1  # Huber transition point; smaller = more robust
+
+    # x₀-supervision (2026 best practice — better at large effective batch).
+    # Predicts noise as usual but computes loss in CLEAN-IMAGE space rather
+    # than NOISE space. Stronger gradients, less variance across timesteps,
+    # fewer colour-saturation artefacts. No effect on flow-matching models
+    # (Flux, Z-Image, SD3) — those already operate on velocity / clean target.
+    x0_supervision: bool = False
 
     # Timestep sampling (flow-matching models)
     timestep_sampling: str = "uniform"  # uniform, sigmoid, logit_normal, speed

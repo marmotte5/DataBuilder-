@@ -278,9 +278,46 @@ class _CombinedOptimizer(torch.optim.Optimizer):
 # SECTION: Optimizer factory
 # ============================================================
 
+def effective_learning_rate(config: TrainingConfig) -> float:
+    """Apply auto-batch LR scaling to ``config.learning_rate``.
+
+    Mode is selected by ``config.lr_scale_with_batch``:
+    - "none" (default): return the configured LR untouched.
+    - "linear": multiply by (effective_batch / lr_scale_reference_batch)
+    - "sqrt":   multiply by sqrt(effective_batch / lr_scale_reference_batch)
+
+    The "effective batch" here is ``batch_size * gradient_accumulation`` —
+    what the optimizer actually sees per step. Reference batch defaults to 1
+    (kohya / OneTrainer convention) but can be overridden so users can preserve
+    a recipe tuned at, say, batch=4.
+
+    Returns the LR to actually pass to the optimizer.
+    """
+    base = float(config.learning_rate)
+    mode = (getattr(config, "lr_scale_with_batch", "none") or "none").lower()
+    if mode == "none":
+        return base
+    eff = max(1, int(config.batch_size) * int(config.gradient_accumulation))
+    ref = max(1, int(getattr(config, "lr_scale_reference_batch", 1)))
+    ratio = eff / ref
+    if mode == "linear":
+        scaled = base * ratio
+    elif mode == "sqrt":
+        from math import sqrt
+        scaled = base * sqrt(ratio)
+    else:
+        log.warning("Unknown lr_scale_with_batch=%r, using LR as-is", mode)
+        return base
+    log.info(
+        "Auto-LR scaling (%s): %.2e × %.3f = %.2e (effective batch %d, ref %d)",
+        mode, base, ratio if mode == "linear" else ratio ** 0.5, scaled, eff, ref,
+    )
+    return scaled
+
+
 def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
     """Create optimizer with proper parameter groups for different LR."""
-    lr = config.learning_rate
+    lr = effective_learning_rate(config)
 
     if config.optimizer == "Marmotte":
         from dataset_sorter.optimizers import Marmotte
@@ -527,6 +564,20 @@ def get_scheduler(config: TrainingConfig, optimizer, num_training_steps: int):
     if config.lr_scheduler == "rex":
         return _RexScheduler(optimizer, config.warmup_steps, num_training_steps)
 
+    # Cosine with terminal annealing — 2026 best practice. Cosine decays
+    # the LR for the first (1 - terminal_anneal_fraction) of training, then
+    # holds at the final cosine value for the last fraction. This "tail"
+    # phase lets the model converge fine details at low LR without the LR
+    # collapsing all the way to zero.
+    if config.lr_scheduler == "cosine_with_terminal_anneal":
+        anneal_fraction = float(getattr(config, "terminal_anneal_fraction", 0.1))
+        return _CosineWithTerminalAnnealScheduler(
+            optimizer,
+            num_warmup_steps=config.warmup_steps,
+            num_training_steps=num_training_steps,
+            terminal_anneal_fraction=anneal_fraction,
+        )
+
     # Supported scheduler names in diffusers
     supported = {
         "linear", "cosine", "cosine_with_restarts", "polynomial",
@@ -585,6 +636,88 @@ class _RexScheduler:
         return {"step_count": self._step_count, "base_lrs": self.base_lrs}
 
     def load_state_dict(self, state_dict):
+        self._step_count = state_dict["step_count"]
+        if "base_lrs" in state_dict:
+            self.base_lrs = state_dict["base_lrs"]
+
+
+# ============================================================
+# SECTION: Cosine with terminal annealing
+# ============================================================
+
+class _CosineWithTerminalAnnealScheduler:
+    """Cosine decay followed by a flat-low "tail" phase.
+
+    Schedule (let ``f`` = ``terminal_anneal_fraction``, default 0.1):
+      - steps [0, warmup):                 linear ramp from 0 to base_lr
+      - steps [warmup, (1-f)*total):       cosine decay from base_lr to lr_final
+      - steps [(1-f)*total, total]:        constant at lr_final
+
+    where ``lr_final`` is the cosine-evaluated value at the start of the
+    tail (so the curve is continuous). The tail gives the optimizer time
+    to converge fine details at a stable low LR — empirically beneficial
+    at large effective batch (10–20) where late-training gradients become
+    less noisy and a non-zero floor LR helps refine textures.
+    """
+
+    def __init__(
+        self,
+        optimizer,
+        num_warmup_steps: int,
+        num_training_steps: int,
+        terminal_anneal_fraction: float = 0.1,
+    ):
+        self.optimizer = optimizer
+        self.warmup_steps = max(0, int(num_warmup_steps))
+        self.total_steps = max(int(num_training_steps), 1)
+        # Clamp fraction to a sensible band — 0 means no tail (plain cosine);
+        # >0.5 makes the tail dominate which defeats the schedule.
+        self.tail_fraction = max(0.0, min(0.5, float(terminal_anneal_fraction)))
+        self.base_lrs = [pg["lr"] for pg in optimizer.param_groups]
+        self._step_count = 0
+
+        # Pre-compute the boundary between cosine decay and the tail.
+        decay_steps = self.total_steps - self.warmup_steps
+        self.tail_start_step = self.warmup_steps + int(
+            decay_steps * (1.0 - self.tail_fraction)
+        )
+        # LR multiplier at tail_start (continuity: tail starts where cosine ends).
+        progress_at_tail = (self.tail_start_step - self.warmup_steps) / max(
+            decay_steps, 1
+        )
+        # Standard half-cosine from 1 to 0
+        import math as _math
+        self._tail_lr_multiplier = 0.5 * (1.0 + _math.cos(_math.pi * progress_at_tail))
+
+    def step(self) -> None:
+        self._step_count += 1
+        import math as _math
+        for pg, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
+            step = self._step_count
+            if step <= self.warmup_steps:
+                # Linear warmup
+                pg["lr"] = base_lr * step / max(self.warmup_steps, 1)
+            elif step >= self.tail_start_step:
+                # Flat tail at the cosine-end value
+                pg["lr"] = base_lr * self._tail_lr_multiplier
+            else:
+                # Cosine decay between warmup and tail
+                progress = (step - self.warmup_steps) / max(
+                    self.total_steps - self.warmup_steps, 1
+                )
+                pg["lr"] = base_lr * 0.5 * (1.0 + _math.cos(_math.pi * progress))
+
+    def get_last_lr(self) -> list[float]:
+        return [pg["lr"] for pg in self.optimizer.param_groups]
+
+    def state_dict(self) -> dict:
+        return {
+            "step_count": self._step_count,
+            "base_lrs": self.base_lrs,
+            "tail_fraction": self.tail_fraction,
+        }
+
+    def load_state_dict(self, state_dict: dict) -> None:
         self._step_count = state_dict["step_count"]
         if "base_lrs" in state_dict:
             self.base_lrs = state_dict["base_lrs"]
