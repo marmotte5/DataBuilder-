@@ -785,6 +785,17 @@ class LibraryTab(QWidget):
         self._btn_use_train.setToolTip("Send this model to the Training tab as base model")
         self._btn_use_train.clicked.connect(self._emit_use_train)
 
+        self._btn_export_gguf = QPushButton("Export GGUF")
+        self._btn_export_gguf.setFixedHeight(30)
+        self._btn_export_gguf.setStyleSheet(nav_button_style())
+        self._btn_export_gguf.setToolTip(
+            "Convert this .safetensors model to llama.cpp's GGUF format "
+            "with quantization (Q4_0, Q5_1, Q8_0, ...). Compatible with "
+            "ComfyUI-GGUF, Forge, and other GGUF-aware loaders. "
+            "Drastically reduces disk size (Q4_0 ≈ 25% of fp16)."
+        )
+        self._btn_export_gguf.clicked.connect(self._export_gguf)
+
         self._btn_delete = QPushButton("Delete")
         self._btn_delete.setFixedHeight(30)
         self._btn_delete.setStyleSheet(danger_button_style())
@@ -792,7 +803,8 @@ class LibraryTab(QWidget):
         self._btn_delete.clicked.connect(self._delete_selected)
 
         for btn in (self._btn_copy_path, self._btn_open_folder,
-                     self._btn_use_generate, self._btn_use_train):
+                     self._btn_use_generate, self._btn_use_train,
+                     self._btn_export_gguf):
             btn.setEnabled(False)
             btn_row.addWidget(btn)
 
@@ -1085,8 +1097,17 @@ class LibraryTab(QWidget):
         has_selection = item is not None
 
         for btn in (self._btn_copy_path, self._btn_open_folder,
-                     self._btn_use_generate, self._btn_use_train, self._btn_delete):
+                     self._btn_use_generate, self._btn_use_train,
+                     self._btn_export_gguf, self._btn_delete):
             btn.setEnabled(has_selection)
+        # GGUF export only makes sense for single-file safetensors checkpoints
+        # — diffusers directories would need a different path (multi-file).
+        if has_selection and not getattr(item, "is_directory", False):
+            self._btn_export_gguf.setEnabled(
+                str(item.path).lower().endswith(".safetensors")
+            )
+        else:
+            self._btn_export_gguf.setEnabled(False)
         self._btn_favorite.setEnabled(has_selection)
         self._rating_combo.setEnabled(has_selection)
         self._note_edit.setEnabled(has_selection)
@@ -1168,6 +1189,43 @@ class LibraryTab(QWidget):
         if self._selected_item is not None:
             self.use_in_train.emit(self._selected_item.path)
             log.info("Sent to train: %s", self._selected_item.path)
+
+    def _export_gguf(self):
+        """Open the GGUF export dialog for the selected single-file safetensors model.
+
+        Pre-fills source + detected architecture so the user only picks the
+        quantization preset and output path. Conversion runs in a background
+        thread so the UI stays responsive on multi-GB models.
+        """
+        item = self._selected_item
+        if item is None:
+            return
+        if not str(item.path).lower().endswith(".safetensors"):
+            QMessageBox.information(
+                self, "GGUF export",
+                "GGUF export currently supports single-file .safetensors "
+                "models only. For diffusers directories, save the model "
+                "as a single .safetensors first.",
+            )
+            return
+        try:
+            from dataset_sorter.ui.gguf_export_dialog import GGUFExportDialog
+        except ImportError as e:
+            QMessageBox.critical(
+                self, "GGUF export unavailable",
+                f"The 'gguf' package is required: pip install gguf\n\n{e}",
+            )
+            return
+        # Map the library item's model_type back to a DataBuilder arch id.
+        arch = (getattr(item, "model_type", "") or "unknown").lower().strip()
+        # Some items report human-readable labels — try to canonicalize.
+        arch = arch.split()[0] if arch else "unknown"
+        dialog = GGUFExportDialog(
+            source_path=str(item.path),
+            arch=arch,
+            parent=self,
+        )
+        dialog.exec()
 
     def _delete_selected(self):
         """Delete the selected item after user confirmation."""
@@ -1401,6 +1459,7 @@ class LibraryTab(QWidget):
         self._btn_open_folder.setStyleSheet(nav_button_style())
         self._btn_use_generate.setStyleSheet(accent_button_style())
         self._btn_use_train.setStyleSheet(accent_button_style())
+        self._btn_export_gguf.setStyleSheet(nav_button_style())
         self._btn_delete.setStyleSheet(danger_button_style())
         # Toolbar widgets
         self._update_toggle_styles()
