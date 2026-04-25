@@ -3521,11 +3521,17 @@ class MainWindow(QMainWindow):
 def run():
     """Launch the DataBuilder application."""
     from dataset_sorter.ui.debug_console import CrashResilientApp
-    from dataset_sorter.ui.splash import show_splash
+    from dataset_sorter.ui.splash import resolve_logo_path, show_splash
 
     app = CrashResilientApp(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(get_stylesheet())
+
+    # App-wide window icon (taskbar / dock / Alt-Tab).
+    logo_path = resolve_logo_path()
+    if logo_path is not None:
+        from PyQt6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(logo_path)))
 
     # Show the splash screen BEFORE constructing MainWindow — the heavy
     # imports (PyTorch / diffusers / transformers) and tab construction
