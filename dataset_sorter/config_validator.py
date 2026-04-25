@@ -161,6 +161,31 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             f"Valid options: {', '.join(sorted(_DPO_LOSS_TYPES))}",
         ))
 
+    # ── 2026 best-practice training fields ──
+    _LR_SCALE_MODES = {"none", "linear", "sqrt"}
+    if (getattr(config, "lr_scale_with_batch", "none") or "none") not in _LR_SCALE_MODES:
+        errors.append(ConfigValidationError(
+            "lr_scale_with_batch",
+            f"Unknown LR scaling mode '{config.lr_scale_with_batch}'. "
+            f"Valid: {', '.join(sorted(_LR_SCALE_MODES))}",
+        ))
+    _check_range(
+        errors, "lr_scale_reference_batch",
+        getattr(config, "lr_scale_reference_batch", 1), 1, 1024,
+        "Reference batch must be at least 1",
+    )
+    _check_range(
+        errors, "terminal_anneal_fraction",
+        getattr(config, "terminal_anneal_fraction", 0.0), 0.0, 0.5,
+        "Terminal anneal fraction must be in [0, 0.5] (>0.5 makes the tail "
+        "dominate the schedule and defeats the cosine decay)",
+    )
+    _check_range(
+        errors, "progressive_batch_warmup_steps",
+        getattr(config, "progressive_batch_warmup_steps", 0), 0, 100_000,
+        "Progressive batch warmup steps must be ≥ 0 (0 = disabled)",
+    )
+
     # ── Cross-field consistency ──
     is_lora = config.model_type.endswith("_lora")
 

@@ -145,6 +145,32 @@ class Trainer:
         self.state = TrainingState()
         self.device = get_device()
 
+        # Run config validation up-front so direct API users (CLI, scripts,
+        # pytest) get the same protection as the UI flow. The Pipeline
+        # Integrator already runs this in setup() but only when
+        # ``config.pipeline_integration=True`` — disabling that integration
+        # used to silently skip validation.
+        try:
+            from dataset_sorter.config_validator import (
+                format_validation_errors, validate_config,
+            )
+            errors = validate_config(config)
+            blocking = [e for e in errors if e.severity == "error"]
+            if blocking:
+                msg = format_validation_errors(blocking)
+                # Raise a typed ValueError so callers can catch / surface it.
+                raise ValueError(
+                    f"TrainingConfig has {len(blocking)} blocking validation "
+                    f"error(s):\n{msg}"
+                )
+            warnings = [e for e in errors if e.severity == "warning"]
+            for w in warnings:
+                log.warning("Config warning [%s]: %s", w.field, w.message)
+        except ImportError:
+            # config_validator is part of the main install — log and skip
+            # if for some reason it's unavailable rather than blocking init.
+            log.debug("config_validator unavailable; skipping pre-init validation")
+
         # Set MPS watermark ratio before any Metal allocations to avoid OOM on
         # the first forward pass (especially with fp32). setdefault leaves user
         # overrides intact.
@@ -1397,8 +1423,16 @@ class Trainer:
         # for stability. 2026 best practice for effective-batch 10–20.
         _prog_batch_warmup = int(getattr(config, "progressive_batch_warmup_steps", 0))
 
-        def _current_grad_accum() -> int:
-            """Effective grad_accum for the current global step (with ramp)."""
+        def _compute_ramp_grad_accum() -> int:
+            """Compute the ramped grad_accum for the CURRENT global step.
+
+            Called at the start of each accumulation cycle (when
+            ``_accum_count`` rolls to 0) and the result is held for the
+            full cycle — recomputing per-micro-batch would scale early
+            micro-batches by N=k and later ones by N=k+1 within the same
+            cycle, leaving inconsistently divided gradients in the
+            optimizer buffer at .step() time.
+            """
             if _prog_batch_warmup <= 0 or grad_accum_steps <= 1:
                 return grad_accum_steps
             done = self.state.global_step
@@ -1408,6 +1442,16 @@ class Trainer:
             ratio = max(0.0, min(1.0, done / max(1, _prog_batch_warmup)))
             ramped = 1 + (grad_accum_steps - 1) * ratio
             return max(1, int(round(ramped)))
+
+        # Cached effective accumulation for the in-progress cycle. The
+        # "cycle" runs from one optimizer step to the next; refreshed at
+        # the start (see ``_refresh_cycle_grad_accum`` calls below) so all
+        # micro-batches in a cycle share the same denominator.
+        _cycle_grad_accum = _compute_ramp_grad_accum()
+
+        def _current_grad_accum() -> int:
+            """Return the cached cycle-level accumulation count."""
+            return _cycle_grad_accum
 
         # ── VJP Approximation (Feb 2026) ──
         vjp_scaler = None
@@ -1540,6 +1584,9 @@ class Trainer:
             # Used for gradient accumulation boundaries instead of raw
             # dataloader index, which misaligns after resume or NaN skips.
             _accum_count = 0
+            # Refresh the cycle-level cached grad_accum at epoch boundary
+            # so a new epoch picks up the latest ramp position.
+            _cycle_grad_accum = _compute_ramp_grad_accum()
 
             # Choose iteration source: zero-bottleneck loader or standard DataLoader
             if _zero_loader is not None:
@@ -1637,6 +1684,9 @@ class Trainer:
                     running_loss = 0.0
                     _valid_microbatches = 0
                     _accum_count = 0
+                    # Re-arm the cycle-level grad_accum cache for the fresh
+                    # cycle that starts after an OOM recovery.
+                    _cycle_grad_accum = _compute_ramp_grad_accum()
                     empty_cache()
                     log.warning(
                         "CUDA OOM at step %d — batch skipped, VRAM cleared",
@@ -1745,6 +1795,11 @@ class Trainer:
                         self.ema_model.update(self.backend.trainable_adapter_module().parameters())
 
                     self.state.global_step += 1
+                    # Refresh cycle-level grad_accum NOW that the previous
+                    # cycle is finished. Subsequent micro-batches (the next
+                    # cycle) use the updated ramp value uniformly — no more
+                    # off-by-one drift across a single cycle.
+                    _cycle_grad_accum = _compute_ramp_grad_accum()
                     # Each micro-batch loss was divided by grad_accum_steps.
                     # If NaN skips reduced the count, rescale to get the
                     # correct mean rather than a biased-low value.

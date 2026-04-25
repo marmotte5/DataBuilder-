@@ -48,6 +48,8 @@ def test_x0_loss_perfect_prediction_is_zero():
             self.config.model_prediction_type = ""  # epsilon path
             self.prediction_type = "epsilon"
             self._training_mask = None
+            # Cache slot used by the real ``_alphas_cumprod_on_device`` helper.
+            self._alphas_cumprod_cache = None
             # Mock noise scheduler with a simple alpha schedule
             self.noise_scheduler = type("S", (), {})()
             num_timesteps = 1000
@@ -60,6 +62,7 @@ def test_x0_loss_perfect_prediction_is_zero():
         _compute_x0_loss = TrainBackendBase._compute_x0_loss
         _apply_spatial_mask = TrainBackendBase._apply_spatial_mask
         _base_loss = TrainBackendBase._base_loss
+        _alphas_cumprod_on_device = TrainBackendBase._alphas_cumprod_on_device
 
     backend = _StubBackend()
     torch.manual_seed(0)
@@ -86,9 +89,11 @@ def test_x0_loss_wrong_prediction_is_positive():
         config = TrainingConfig(x0_supervision=True)
         prediction_type = "epsilon"
         _training_mask = None
+        _alphas_cumprod_cache = None
         _compute_x0_loss = TrainBackendBase._compute_x0_loss
         _apply_spatial_mask = TrainBackendBase._apply_spatial_mask
         _base_loss = TrainBackendBase._base_loss
+        _alphas_cumprod_on_device = TrainBackendBase._alphas_cumprod_on_device
         noise_scheduler = type("S", (), {})()
     s = _StubBackend()
     s.config.model_prediction_type = ""
