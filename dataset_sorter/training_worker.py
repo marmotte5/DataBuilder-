@@ -138,7 +138,7 @@ class TrainingWorker(QThread):
 
     def run(self):
         try:
-            from dataset_sorter.ui.debug_console import log_vram_state, PerfTimer
+            from dataset_sorter.diagnostics import log_vram_state, PerfTimer
 
             self.trainer = Trainer(self.config)
 
@@ -193,7 +193,7 @@ class TrainingWorker(QThread):
             self._emit(self.finished_training, True, "Training completed successfully!")
 
         except OSError as e:
-            from dataset_sorter.ui.debug_console import log_categorized_error
+            from dataset_sorter.diagnostics import log_categorized_error
             import sys
             log_categorized_error(e, "training", sys.exc_info()[2])
             if "c10" in str(e).lower() or "1114" in str(e):
@@ -206,7 +206,7 @@ class TrainingWorker(QThread):
                 self._emit(self.error, f"{e}\n\n{traceback.format_exc()}")
             self._emit(self.finished_training, False, str(e))
         except Exception as e:
-            from dataset_sorter.ui.debug_console import log_categorized_error
+            from dataset_sorter.diagnostics import log_categorized_error
             import sys
             log_categorized_error(e, "training", sys.exc_info()[2])
             log.error("Training failed: %s", e, exc_info=True)

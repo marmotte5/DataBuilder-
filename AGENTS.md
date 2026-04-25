@@ -276,3 +276,291 @@ LoRA checkpoint (.safetensors)
 - `generate_image` is synchronous and blocking — not suitable for large batches over MCP.
 - All paths must be absolute.
 - The MCP server writes logs to stderr; stdout is reserved for JSON-RPC.
+
+
+# Part 2 — Codebase Maintenance (for AI coding agents)
+
+The section above is for AI agents *using* DataBuilder via MCP. This part is for
+AI coding agents *editing* the codebase — copy-pastable recipes for the most
+common changes plus a list of pitfalls.
+
+---
+
+## 30-second tour
+
+```
+dataset_sorter/
+├── __main__.py              # entry point: python -m dataset_sorter
+├── constants.py             # ⭐ single source of truth — MODEL_CAPABILITIES,
+│                            #    NETWORK_TYPES, OPTIMIZERS, defaults, paths
+├── models.py                # TrainingConfig dataclass (229 fields)
+├── model_detection.py       # ⭐ unified arch detection (keys + filename + LoRA)
+├── diagnostics.py           # ⭐ Qt-free PerfTimer, log_vram_state, etc.
+├── trainer.py               # core training loop (3500 lines)
+├── train_backend_base.py    # backend ABC + shared loss / setup logic
+├── train_backend_*.py       # 17 model-specific backends
+├── backend_registry.py      # auto-discovery of backends by glob pattern
+├── generate_worker.py       # inference QThread
+├── training_worker.py       # training QThread
+├── optimizers.py            # Marmotte, SOAP, Muon
+└── ui/
+    ├── main_window.py       # MainWindow + nav routing (3500 lines)
+    ├── training_tab*.py     # training UI (split into tab + builders + io)
+    ├── generate_tab.py      # generation UI
+    └── ...                  # one file per major tab/feature
+```
+
+**Top tip**: when you see a model id like `"sdxl"` in code, look up
+`MODEL_CAPABILITIES["sdxl"]` in `constants.py` first — that one
+dataclass tells you what features the arch supports without reading
+17 backend files.
+
+---
+
+## Recipe — add a new model architecture
+
+Adding `mymodel` (an imaginary new diffusion model) takes 5 file edits:
+
+### 1. Register in `constants.MODEL_CAPABILITIES`
+
+```python
+"mymodel": ModelCapabilities(
+    pipeline_class="MyModelPipeline",
+    pag_pipeline_class=None,            # or "MyModelPAGPipeline"
+    uses_cfg=True,                       # XOR with uses_flow_guidance
+    uses_flow_guidance=False,
+    supports_clip_skip=False,
+    supports_taylorseer=True,
+    trust_remote_code=False,
+),
+```
+
+That ONE entry auto-populates `PIPELINE_MAP`, `CFG_MODELS`,
+`FLOW_GUIDANCE_MODELS`, `CLIP_SKIP_MODELS`, `TAYLORSEER_MODELS`,
+`PAG_MODELS`, `TRUST_REMOTE_CODE_MODELS`. **Don't** edit those derived
+sets — they're computed views.
+
+### 2. Add detection in `model_detection.py`
+
+```python
+# in detect_arch_from_keys():
+if _any("mymodel_distinctive_key."):
+    return "mymodel"
+
+# in _FILENAME_KEYWORDS (longest patterns first):
+("mymodel", "mymodel"),
+```
+
+### 3. Create the backend `dataset_sorter/train_backend_mymodel.py`
+
+```python
+from dataset_sorter.train_backend_base import TrainBackendBase
+
+class MyModelTrainBackend(TrainBackendBase):
+    model_name = "MyModel"
+    default_resolution = 1024
+    prediction_type = "flow"  # or "epsilon" or "v_prediction"
+
+    def load_model(self, model_path: str) -> None:
+        self.pipeline, self.unet = self._load_single_file_or_pretrained(
+            model_path,
+            pipeline_class="diffusers.MyModelPipeline",
+            fallback_repo="org/mymodel-base",
+        )
+        self.vae = self.pipeline.vae
+        self.tokenizer = self.pipeline.tokenizer
+        self.text_encoder = self.pipeline.text_encoder
+        self.noise_scheduler = self.pipeline.scheduler
+
+    def encode_text_batch(self, captions: list[str]) -> tuple:
+        ...
+```
+
+**Backends are auto-discovered** by `backend_registry.py`. No registration call.
+
+### 4. Add to `MODEL_TYPE_KEYS` in `constants.py`
+
+```python
+MODEL_TYPE_KEYS = [
+    # ...
+    "mymodel_lora",
+    "mymodel_full",
+]
+```
+
+### 5. Run the test suite
+
+```bash
+pytest tests/test_model_capabilities.py tests/test_model_detection.py -v
+```
+
+The parametrized tests will exercise the new entry automatically.
+
+---
+
+## Recipe — add a new optimizer
+
+1. **Register** in `constants.OPTIMIZERS`:
+   ```python
+   "MyOptimizer": "MyOptimizer — short description for the UI dropdown",
+   ```
+2. **Build branch** in `optimizer_factory.build_optimizer()`:
+   ```python
+   elif name == "MyOptimizer":
+       from my_optimizer_pkg import MyOptimizer
+       return MyOptimizer(param_groups, lr=base_lr,
+                          weight_decay=config.weight_decay)
+   ```
+3. **Config fields** in `models.TrainingConfig` if optimizer-specific.
+4. **UI** in `training_tab_builders._build_optimizer_tab()` — gated by
+   `_update_optimizer_visibility()`.
+5. **Smoke test** in `tests/test_optimizer_defaults.py`.
+
+---
+
+## Recipe — add a new tab in the More menu
+
+1. **Build the widget** in `dataset_sorter/ui/my_tab.py` with a
+   `refresh_theme(self) -> None` method (required for theme toggle).
+2. **List entry** in `main_window._build_ui()` (around line 1010):
+   ```python
+   _more_pages = [..., ("My Tab", "mytab")]
+   ```
+3. **Content stack** + nav routing in `main_window`:
+   ```python
+   self.my_tab = MyTab()
+   self._content_stack.addWidget(self.my_tab)  # remember the index!
+   # in _switch_nav:
+   nav_to_page = {..., "mytab": <new_index>}
+   ```
+4. **Theme refresh loop** in `_refresh_theme_styles()`:
+   ```python
+   for attr in ('override_panel', ..., 'my_tab'):
+       ...
+   ```
+
+---
+
+## Recipe — add a new TrainingConfig field
+
+1. **Add the field with a default** in `models.py`:
+   ```python
+   my_new_flag: bool = False    # ⭐ ALWAYS provide a default
+   ```
+2. **Capture from UI** in `ui/training_config_io.build_config_from_ui()`.
+3. **Restore to UI** in `apply_config_to_ui()`. Use `getattr(config, "x", default)`
+   so old saved profiles without the field still load.
+4. **Add the widget** in `training_tab_builders.py`.
+5. **Use the flag** in trainer / backend, again with `getattr` for safety.
+
+---
+
+## Recipe — diagnostic logging in core code
+
+**Don't** import `dataset_sorter.ui.*` from core modules — use
+`dataset_sorter.diagnostics` instead:
+
+```python
+from dataset_sorter.diagnostics import (
+    PerfTimer, log_vram_state, log_categorized_error,
+)
+
+with PerfTimer("Model setup"):
+    setup_model()
+log_vram_state("after model setup")
+
+try:
+    risky_op()
+except Exception as e:
+    log_categorized_error(e, context="risky_op", exc_tb=sys.exc_info()[2])
+    raise
+```
+
+The UI debug console registers itself as a handler at startup so events
+still appear in the F12 panel. No Qt dependency in core.
+
+---
+
+## Pitfalls — read before editing
+
+1. **MOD-1 single source of truth.** Architecture metadata lives ONLY in
+   `constants.MODEL_CAPABILITIES`. Don't add a model-id to a hand-coded set
+   elsewhere — the derived views in `generate_worker.py` will silently miss
+   it (this happened with PAG before MAJ-4).
+
+2. **MOD-2 detection module is shared.** `model_detection.py` is used by
+   `generate_worker`, `model_scanner`, and `model_library`. If you add a
+   detection rule, all three benefit. Don't reintroduce duplication.
+
+3. **MOD-3 weights_only=True for `torch.load`.** Hard rule across the codebase.
+   The one exception was a CRITICAL RCE in `training_state.py:203` — now
+   fixed by splitting non-tensor data into a JSON sidecar. Don't bring
+   back `weights_only=False` even "temporarily".
+
+4. **MOD-4 trust_remote_code requires UI consent.** When a model needs
+   `trust_remote_code=True`, route through
+   `ui/security_prompts.confirm_trust_remote_code()` first.
+
+5. **MOD-5 `.gitignore` covers training artifacts.** `random_states.pt`,
+   `random_states_aux.json`, `.last_session.json`, `checkpoint-*/`,
+   `training_state.json` are all ignored.
+
+6. **MOD-6 `print()` in CLI / API is intentional.** `cli.py`, `api.py`, and
+   `quick_train.py` use `print()` for stdout output (the program's contract
+   with shells / pipelines). Don't convert these to `logger.info()` — that
+   breaks the CLI. The "no print" rule applies to library code only.
+
+7. **MOD-7 lazy heavy imports.** PyTorch (3s) and diffusers (2s) imports
+   stay lazy inside methods. Don't move them to top-level — startup time
+   matters for an interactive desktop app.
+
+---
+
+## Where things live (quick lookup)
+
+| What you want to change | File |
+|---|---|
+| Add a model architecture | `constants.MODEL_CAPABILITIES` + `train_backend_*.py` |
+| Add a network type (LoRA / LoKr / DyLoRA) | `constants.NETWORK_TYPES` + `train_backend_base.setup_lora` |
+| Add an optimizer | `constants.OPTIMIZERS` + `optimizer_factory.py` |
+| Add a TrainingConfig field | `models.py` + `training_config_io.py` |
+| Add a UI tab in More menu | `ui/main_window.py` + new `ui/<name>_tab.py` |
+| Change generation params (CFG / PAG / scheduler) | `generate_worker.py` + `ui/generate_tab.py` |
+| Add diagnostic logging in core | `diagnostics.py` (NOT `ui.debug_console`) |
+| Detect new model from .safetensors | `model_detection.py` |
+| Add an audit invariant test | `tests/test_security_audit_fixes.py` |
+
+---
+
+## Test suite
+
+```bash
+# Full suite (currently 1336 passed)
+pytest tests/ -q
+
+# Skip known-fragile tests (network, missing optional deps)
+pytest tests/ -q --ignore=tests/test_comparison_viewer.py \
+                --ignore=tests/test_new_features.py
+```
+
+Always run the audit-fix tests before committing —
+`tests/test_security_audit_fixes.py`, `tests/test_model_capabilities.py`,
+`tests/test_model_detection.py` lock in critical invariants.
+
+---
+
+## When to ask vs. just do it
+
+**Just do it** (no need to ask):
+- Adding a unit test that doesn't require a new dependency
+- Renaming a private function (`_underscore_prefixed`)
+- Fixing a typo in a string or comment
+- Adding type hints to existing untyped functions
+- Splitting a long function into smaller helpers (same module)
+
+**Ask first** (material consequences):
+- Adding a new top-level dependency (changes `pyproject.toml`)
+- Removing a public API or renaming a `TrainingConfig` field
+- Major UI restructuring (visible behavior change)
+- Anything that requires running training / generating images to verify
+- Anything touching the security gates (`weights_only`, `trust_remote_code`)

@@ -134,8 +134,20 @@ class TrainBackendBase(ABC):
     # ── Abstract methods (model-specific) ──────────────────────────────
 
     @abstractmethod
-    def load_model(self, model_path: str):
-        """Load model pipeline and extract components."""
+    def load_model(self, model_path: str) -> None:
+        """Load model pipeline and extract components.
+
+        After this call, the following attributes must be populated:
+        ``self.pipeline``, ``self.unet`` (or ``self.transformer``),
+        ``self.vae``, ``self.tokenizer``, ``self.text_encoder``, and
+        ``self.noise_scheduler``. Backends that use multiple text
+        encoders (SDXL, SD3, Flux) also populate ``text_encoder_2``
+        and optionally ``text_encoder_3``.
+
+        Implementations should support both diffusers directories AND
+        single-file ``.safetensors`` / ``.ckpt`` checkpoints, falling
+        back to ``_load_single_file_or_pretrained()`` from the base.
+        """
         ...
 
     @abstractmethod
@@ -174,7 +186,7 @@ class TrainBackendBase(ABC):
         log.warning(f"{self.model_name}: no pipeline available for sample generation")
         return None
 
-    def save_lora(self, save_dir: Path):
+    def save_lora(self, save_dir: Path) -> None:
         """Save adapter weights — dispatches PEFT vs LyCORIS based on adapter_type.
 
         PEFT path: save_pretrained() to a directory.
@@ -387,7 +399,7 @@ class TrainBackendBase(ABC):
 
     # ── Shared speed optimizations ─────────────────────────────────────
 
-    def apply_speed_optimizations(self):
+    def apply_speed_optimizations(self) -> None:
         """Apply all speed optimizations after model loading."""
         config = self.config
 
@@ -694,7 +706,7 @@ class TrainBackendBase(ABC):
             return self.lycoris_net
         return self.unet
 
-    def setup_full_finetune(self):
+    def setup_full_finetune(self) -> None:
         """Setup full finetune (no LoRA)."""
         self.unet.to(self.device, dtype=self.dtype)
         self.unet.train()
@@ -728,14 +740,14 @@ class TrainBackendBase(ABC):
                 log.warning("bitsandbytes not installed; skipping INT4 TE quantization")
         return {}
 
-    def freeze_text_encoders(self):
+    def freeze_text_encoders(self) -> None:
         """Freeze text encoders and move off GPU if caching."""
         for te in (self.text_encoder, self.text_encoder_2, self.text_encoder_3):
             if te is not None:
                 te.eval()  # Disable dropout/batchnorm training behavior
                 te.requires_grad_(False)
 
-    def unfreeze_text_encoder(self, which: int = 1):
+    def unfreeze_text_encoder(self, which: int = 1) -> None:
         """Enable training for a specific text encoder."""
         te = {1: self.text_encoder, 2: self.text_encoder_2, 3: self.text_encoder_3}.get(which)
         if te is not None:
@@ -755,13 +767,13 @@ class TrainBackendBase(ABC):
             return torch.enable_grad()
         return torch.no_grad()
 
-    def offload_vae(self):
+    def offload_vae(self) -> None:
         """Move VAE to CPU after latent caching to free VRAM."""
         if self.vae is not None:
             self.vae.cpu()
             empty_cache()
 
-    def offload_text_encoders(self):
+    def offload_text_encoders(self) -> None:
         """Move text encoders to CPU after caching to free VRAM."""
         for te in (self.text_encoder, self.text_encoder_2, self.text_encoder_3):
             if te is not None:
@@ -1303,7 +1315,7 @@ class TrainBackendBase(ABC):
         # No dominant prefix found — return as-is (unprefixed weights)
         return state_dict
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Free all resources."""
         for attr in ("pipeline", "unet", "vae", "text_encoder",
                       "text_encoder_2", "text_encoder_3", "noise_scheduler"):

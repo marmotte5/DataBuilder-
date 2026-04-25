@@ -99,37 +99,21 @@ _LEVEL_COLORS = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PERFORMANCE TIMER — measures wall-clock time for operations
+# DIAGNOSTICS — re-export Qt-free helpers from dataset_sorter.diagnostics
 # ═══════════════════════════════════════════════════════════════════════════════
-
-class PerfTimer:
-    """Context manager that logs elapsed time for an operation.
-
-    Usage:
-        with PerfTimer("Model loading"):
-            load_model()
-        # Logs: [PERF] Model loading: 12.34s
-    """
-
-    def __init__(self, label: str, log_fn: Optional[callable] = None):
-        self.label = label
-        self._log_fn = log_fn
-        self._start: float = 0.0
-        self.elapsed: float = 0.0
-
-    def __enter__(self):
-        self._start = time.perf_counter()
-        return self
-
-    def __exit__(self, *exc):
-        self.elapsed = time.perf_counter() - self._start
-        msg = f"[PERF] {self.label}: {self.elapsed:.2f}s"
-        if self._log_fn:
-            self._log_fn(msg)
-        elif _console_instance is not None:
-            _console_instance._log_signal.emit(msg, "PERF")
-        logging.getLogger("perf").info(msg)
-        return False
+# PerfTimer, log_vram_state, log_categorized_error, categorize_error and
+# log_worker_event live in dataset_sorter/diagnostics.py so the training and
+# generation cores don't have to import this UI module. The console
+# registers itself as the diagnostic handler at startup so events still
+# show up in the F12 panel.
+from dataset_sorter.diagnostics import (  # noqa: E402, F401  (re-exports)
+    ERROR_CATEGORIES as _ERROR_CATEGORIES,
+    PerfTimer,
+    categorize_error,
+    log_categorized_error,
+    log_vram_state,
+    log_worker_event,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -754,6 +738,13 @@ def install_exception_hooks(console: DebugConsole):
     global _console_instance
     _console_instance = console
 
+    # Register the console as the receiver for Qt-free diagnostic events
+    # emitted by the training / generation cores via dataset_sorter.diagnostics.
+    from dataset_sorter.diagnostics import set_diagnostic_handler
+    set_diagnostic_handler(
+        lambda msg, level: console._log_signal.emit(msg, level)
+    )
+
     def _main_thread_hook(exc_type, exc_value, exc_tb):
         """Catch uncaught exceptions in the main thread without crashing."""
         console.log_exception(exc_type, exc_value, exc_tb, "Uncaught (main thread)")
@@ -883,45 +874,9 @@ def instrument_widget(widget: QWidget, console: DebugConsole):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# VRAM SNAPSHOT LOGGING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def log_vram_state(context: str = ""):
-    """Log current GPU VRAM state to the debug console."""
-    if _console_instance is None:
-        return
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return
-        allocated = torch.cuda.memory_allocated() / (1024**3)
-        reserved = torch.cuda.memory_reserved() / (1024**3)
-        peak = torch.cuda.max_memory_allocated() / (1024**3)
-        total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        msg = (
-            f"[VRAM] {context}: "
-            f"alloc={allocated:.2f}GB, reserved={reserved:.2f}GB, "
-            f"peak={peak:.2f}GB, total={total:.1f}GB, "
-            f"free≈{total - reserved:.2f}GB"
-        )
-        _console_instance._log_signal.emit(msg, "VRAM")
-        logging.getLogger("vram").debug(msg)
-    except Exception:
-        pass
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # WORKER LIFECYCLE HOOKS — track QThread workers from creation to cleanup
+# (log_vram_state and log_worker_event are re-exported from diagnostics.py)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def log_worker_event(worker_name: str, event: str, detail: str = ""):
-    """Log a worker lifecycle event (created, started, finished, error, cleanup)."""
-    msg = f"[WORKER] {worker_name}: {event}"
-    if detail:
-        msg += f" — {detail}"
-    if _console_instance is not None:
-        _console_instance._log_signal.emit(msg, "WORKER")
-    logging.getLogger("worker").info(msg)
 
 
 def hook_training_worker(worker, console: "DebugConsole"):
@@ -1006,68 +961,9 @@ def hook_merge_worker(worker, console: "DebugConsole"):
 # ERROR CATEGORIZATION — structured error IDs for common failure modes
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_ERROR_CATEGORIES = {
-    "ERR_MODEL_LOAD":    "Model loading failed",
-    "ERR_VRAM_OOM":      "Out of VRAM (GPU memory)",
-    "ERR_CUDA_DLL":      "PyTorch DLL / CUDA driver issue",
-    "ERR_LORA_LOAD":     "LoRA adapter loading failed",
-    "ERR_SHAPE_MISMATCH":"Tensor shape mismatch",
-    "ERR_FILE_IO":       "File I/O error (read/write/permission)",
-    "ERR_NETWORK":       "Network error (HuggingFace download)",
-    "ERR_IMPORT":        "Missing dependency (ImportError)",
-    "ERR_GENERATION":    "Image generation failed",
-    "ERR_TRAINING":      "Training step failed",
-    "ERR_CHECKPOINT":    "Checkpoint save/load failed",
-    "ERR_MERGE":         "Model merge failed",
-    "ERR_RLHF":          "RLHF/DPO operation failed",
-    "ERR_UNKNOWN":       "Unexpected error",
-}
-
-
-def categorize_error(exc: BaseException) -> str:
-    """Return a structured error ID based on exception type and message."""
-    msg = str(exc).lower()
-    exc_type = type(exc).__name__
-
-    if "out of memory" in msg or "oom" in msg or "cuda out of memory" in msg:
-        return "ERR_VRAM_OOM"
-    if "c10" in msg or "1114" in msg or "dll" in msg:
-        return "ERR_CUDA_DLL"
-    if "lora" in msg and ("load" in msg or "adapter" in msg):
-        return "ERR_LORA_LOAD"
-    if "shape" in msg and "mismatch" in msg:
-        return "ERR_SHAPE_MISMATCH"
-    if exc_type == "ImportError" or exc_type == "ModuleNotFoundError":
-        return "ERR_IMPORT"
-    if isinstance(exc, (PermissionError, FileNotFoundError)):
-        return "ERR_FILE_IO"
-    if isinstance(exc, OSError) and ("errno" in msg or "permission" in msg):
-        return "ERR_FILE_IO"
-    if "connection" in msg or "timeout" in msg or "urlopen" in msg:
-        return "ERR_NETWORK"
-    return "ERR_UNKNOWN"
-
-
-def log_categorized_error(
-    exc: BaseException,
-    context: str = "",
-    exc_tb=None,
-):
-    """Log an exception with its error category ID and optional traceback."""
-    cat = categorize_error(exc)
-    cat_label = _ERROR_CATEGORIES.get(cat, cat)
-    header = f"[{cat}] {cat_label}"
-    if context:
-        header += f" — {context}"
-    header += f": {type(exc).__name__}: {exc}"
-
-    if exc_tb is not None:
-        tb_text = "".join(traceback.format_tb(exc_tb))
-        header += f"\n{tb_text}"
-
-    if _console_instance is not None:
-        _console_instance._log_signal.emit(header, "ERROR")
-    logging.getLogger("error.categorized").error(header)
+# Error categorization (categorize_error, log_categorized_error,
+# _ERROR_CATEGORIES) is now re-exported from diagnostics.py — see imports
+# at the top of this module.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

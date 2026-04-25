@@ -63,6 +63,10 @@ import logging
 import mmap
 import os
 import struct
+
+from dataset_sorter.constants import (
+    DISK_CACHE_DIR, TMPFS_CACHE_ROOT, TMPFS_CACHE_SUBDIR,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Callable
@@ -347,43 +351,43 @@ atexit.register(_cleanup_tmpfs_caches)
 def get_tmpfs_cache_dir(size_hint_gb: float = 2.0) -> Optional[Path]:
     """Get a tmpfs (RAM-backed) directory for ultra-fast cache I/O.
 
-    On Linux, /dev/shm is a tmpfs mount that uses the user's RAM directly.
-    This eliminates all disk I/O for cache reads/writes, trading RAM for speed.
+    Uses ``constants.TMPFS_CACHE_ROOT`` (defaults to /dev/shm on Linux) which
+    can be overridden via the ``DATABUILDER_TMPFS_DIR`` environment variable
+    for CI / Docker / user customisation.
 
-    Returns None if tmpfs is not available or lacks capacity.
+    Returns None if no tmpfs is available or it lacks capacity.
     """
-    # Linux: /dev/shm is typically available and fast
-    shm_path = Path("/dev/shm")
+    shm_path = Path(TMPFS_CACHE_ROOT)
     if shm_path.exists() and shm_path.is_dir():
-        # Check available space before using
         try:
             stat = os.statvfs(str(shm_path))
             avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             if avail_gb < size_hint_gb:
                 log.warning(
-                    f"/dev/shm has only {avail_gb:.1f} GB free "
+                    f"{shm_path} has only {avail_gb:.1f} GB free "
                     f"(need {size_hint_gb:.1f} GB), skipping tmpfs cache"
                 )
                 return None
         except OSError:
             return None
-        cache_dir = shm_path / "databuilder_cache"
+        cache_dir = shm_path / TMPFS_CACHE_SUBDIR
         cache_dir.mkdir(exist_ok=True)
         _tmpfs_cache_dirs.append(cache_dir)
         log.info(f"Using tmpfs RAM disk cache: {cache_dir} ({avail_gb:.1f} GB available)")
         return cache_dir
 
-    # Fallback: check if /tmp is tmpfs
-    if os.path.exists("/tmp"):
+    # Fallback: check if /tmp is tmpfs (some Linux distros mount it that way).
+    tmp_root = Path("/tmp")
+    if tmp_root.exists():
         try:
-            stat = os.statvfs("/tmp")
+            stat = os.statvfs(str(tmp_root))
             total_mb = (stat.f_blocks * stat.f_frsize) / (1024 * 1024)
             if total_mb < 50000:  # Likely tmpfs if < 50 GB
                 avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
                 if avail_gb < size_hint_gb:
                     return None
-                cache_dir = Path("/tmp/databuilder_cache")
-                cache_dir.mkdir(exist_ok=True)
+                cache_dir = Path(DISK_CACHE_DIR)
+                cache_dir.mkdir(parents=True, exist_ok=True)
                 _tmpfs_cache_dirs.append(cache_dir)
                 return cache_dir
         except OSError:

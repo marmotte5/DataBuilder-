@@ -629,6 +629,22 @@ DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off,
 DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset
 
 
+# ── Filesystem paths (override via env vars in CI / Docker) ────────────────
+# Cache dirs that we'd like to back with RAM (tmpfs) when possible.
+# Linux: /dev/shm is the standard tmpfs mount and works without sudo.
+# Override by setting ``DATABUILDER_TMPFS_DIR`` to point elsewhere.
+# Override the on-disk fallback with ``DATABUILDER_DISK_CACHE_DIR``.
+import os as _os
+_DEFAULT_TMPFS_PATH = _os.environ.get("DATABUILDER_TMPFS_DIR", "/dev/shm")
+_DEFAULT_DISK_CACHE = _os.environ.get(
+    "DATABUILDER_DISK_CACHE_DIR", "/tmp/databuilder_cache"
+)
+TMPFS_CACHE_ROOT: str = _DEFAULT_TMPFS_PATH
+TMPFS_CACHE_SUBDIR: str = "databuilder_cache"   # appended under TMPFS_CACHE_ROOT
+DISK_CACHE_DIR: str = _DEFAULT_DISK_CACHE
+del _os
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Unified model capabilities registry — single source of truth.
 #
