@@ -470,6 +470,46 @@ class GenerateTab(QWidget):
         self.custom_h_spin.setSingleStep(64)
         self.custom_h_spin.setValue(0)
         self.custom_h_spin.setSpecialValueText("—")
+
+        # ── PAG (Perturbed Attention Guidance) ──────────────────────────
+        # Massively improves structural quality (hands, faces, anatomy)
+        # without the saturation artefacts of a high CFG. Only active for
+        # supported architectures (set in PAG_MODELS); slider stays visible
+        # but disabled for unsupported models with a clear tooltip.
+        self._lbl_pag = _param_label("PAG Scale", "0=off, 3.0 typical")
+        params.addWidget(self._lbl_pag, 5, 0)
+        self.pag_scale_spin = QDoubleSpinBox()
+        self.pag_scale_spin.setRange(0.0, 10.0)
+        self.pag_scale_spin.setSingleStep(0.5)
+        self.pag_scale_spin.setValue(0.0)
+        self.pag_scale_spin.setSpecialValueText("Off")
+        self.pag_scale_spin.setToolTip(
+            "Perturbed Attention Guidance — improves anatomy and structure "
+            "without saturating colors like high CFG does.\n\n"
+            "0   = disabled (standard diffusion)\n"
+            "1-2 = subtle improvement\n"
+            "3   = recommended sweet spot for hands/faces\n"
+            "5+  = aggressive, may flatten composition\n\n"
+            "Available for: SD 1.5/2/XL, Pony, SD3/3.5, PixArt, Sana, "
+            "Kolors, HunyuanDiT.\n"
+            "Reload the model after changing PAG scale from 0 to non-zero."
+        )
+        params.addWidget(self.pag_scale_spin, 5, 1)
+
+        self._lbl_pag_layers = _param_label("PAG Layers", "Where to perturb")
+        params.addWidget(self._lbl_pag_layers, 5, 2)
+        self.pag_layers_combo = QComboBox()
+        from dataset_sorter.constants import PAG_LAYER_PRESETS
+        for preset in PAG_LAYER_PRESETS.keys():
+            self.pag_layers_combo.addItem(preset, preset)
+        self.pag_layers_combo.setCurrentText("mid")
+        self.pag_layers_combo.setToolTip(
+            "Which U-Net / transformer layers receive the perturbed attention.\n"
+            "'mid' (default) = middle block, most balanced.\n"
+            "'down.2' / 'up.0' = subtler effect.\n"
+            "'all' = strongest, may slow generation."
+        )
+        params.addWidget(self.pag_layers_combo, 5, 3)
         self.custom_h_spin.setToolTip("0 = use preset above. Set both W and H to override.")
         params.addWidget(self.custom_h_spin, 4, 3)
 
@@ -751,6 +791,35 @@ class GenerateTab(QWidget):
         """Refresh resolution presets when the user changes the model type."""
         arch = self.model_type_combo.itemData(index) or "auto"
         self._populate_resolution_combo(arch)
+        self._update_pag_availability(arch)
+
+    def _update_pag_availability(self, arch: str) -> None:
+        """Enable PAG controls only for architectures that support it.
+
+        For unsupported models (Flux, Z-Image, HiDream, etc.) the slider stays
+        visible but disabled with a clear explanation, so users learn what's
+        possible without the controls disappearing on them.
+        """
+        from dataset_sorter.constants import PAG_MODELS
+        is_supported = arch in PAG_MODELS or arch == "auto"
+        self.pag_scale_spin.setEnabled(is_supported)
+        self.pag_layers_combo.setEnabled(is_supported)
+        if is_supported:
+            self.pag_scale_spin.setToolTip(
+                "Perturbed Attention Guidance — improves anatomy and structure "
+                "without saturating colors like high CFG does.\n\n"
+                "0   = disabled\n"
+                "1-2 = subtle improvement\n"
+                "3   = recommended sweet spot\n"
+                "5+  = aggressive\n\n"
+                "Reload the model after changing PAG scale from 0 to non-zero."
+            )
+        else:
+            self.pag_scale_spin.setToolTip(
+                f"PAG is not available for the {arch!r} architecture in "
+                "diffusers 0.37. Supported: SD 1.5/2/XL, Pony, SD3/3.5, "
+                "PixArt, Sana, Kolors, HunyuanDiT."
+            )
 
     # ── LoRA management ─────────────────────────────────────────────────
 
@@ -1024,6 +1093,8 @@ class GenerateTab(QWidget):
         self._worker.num_images = self.batch_spin.value()
         self._worker.clip_skip = self.clip_skip_spin.value()
         self._worker.strength = self.strength_spin.value()
+        self._worker.pag_scale = self.pag_scale_spin.value()
+        self._worker.pag_layers = self.pag_layers_combo.currentData() or "mid"
 
         # Resolution: custom overrides preset
         custom_w = self.custom_w_spin.value()

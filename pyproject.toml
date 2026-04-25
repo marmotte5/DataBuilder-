@@ -66,8 +66,12 @@ speed = [
 dev = [
     "pytest>=7.0",
 ]
+analysis = [
+    "umap-learn>=0.5",
+    "scikit-learn>=1.3",
+]
 all = [
-    "dataset-sorter[training,optimizers,speed]",
+    "dataset-sorter[training,optimizers,speed,analysis]",
 ]
 
 [project.scripts]
