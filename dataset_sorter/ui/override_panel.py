@@ -25,7 +25,12 @@ class CollapsibleSection(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._toggle_btn = QPushButton(f"{'v' if expanded else '>'} {title}")
+        # QPushButton treats "&" as a mnemonic, so "Export & Config" would
+        # render as "Export _Config" with the C underlined. Escape it.
+        self._title_escaped = title.replace("&", "&&")
+        self._toggle_btn = QPushButton(
+            f"{'v' if expanded else '>'} {self._title_escaped}"
+        )
         self._toggle_btn.setProperty("class", "collapsible-header")
         self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle_btn.clicked.connect(self._toggle)
@@ -46,7 +51,7 @@ class CollapsibleSection(QWidget):
         self._expanded = not self._expanded
         self._content.setVisible(self._expanded)
         arrow = "v" if self._expanded else ">"
-        self._toggle_btn.setText(f"{arrow} {self._title}")
+        self._toggle_btn.setText(f"{arrow} {self._title_escaped}")
 
     def content_layout(self) -> QVBoxLayout:
         return self._content_layout
@@ -141,17 +146,20 @@ class OverridePanel(QWidget):
         self._sections.append(sec_del)
         cl = sec_del.content_layout()
         dr = QHBoxLayout()
-        bd = QPushButton("Delete Selected")
+        # Short labels — the override panel is a narrow sidebar, so
+        # "Delete Selected" / "Restore Selected" used to clip mid-word.
+        # Tooltips carry the full meaning.
+        bd = QPushButton("Delete")
         bd.setToolTip("Mark selected tag(s) for removal from export")
         bd.setStyleSheet(DANGER_BUTTON_STYLE)
         bd.clicked.connect(self.delete_tags.emit)
         dr.addWidget(bd)
-        br = QPushButton("Restore Selected")
+        br = QPushButton("Restore")
         br.setToolTip("Bring back the selected deleted tag(s)")
         br.clicked.connect(self.restore_tags.emit)
         dr.addWidget(br)
         bra = QPushButton("Restore All")
-        bra.setToolTip("Undo all deletions")
+        bra.setToolTip("Undo all deletions — restores every tag to the export")
         bra.clicked.connect(self.restore_all_tags.emit)
         dr.addWidget(bra)
         cl.addLayout(dr)

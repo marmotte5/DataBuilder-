@@ -183,6 +183,9 @@ class TagPanel(QWidget):
         header_row.addStretch()
         self.tag_count_badge = QLabel("")
         self.tag_count_badge.setStyleSheet(TAG_BADGE_STYLE)
+        # Hide the badge until there are tags — an empty pill in the top-right
+        # corner just looks like a stray button.
+        self.tag_count_badge.setVisible(False)
         header_row.addWidget(self.tag_count_badge)
         layout.addLayout(header_row)
 
@@ -292,7 +295,9 @@ class TagPanel(QWidget):
         elif sel is not None:
             # Model wasn't replaced — unblock the original
             sel.blockSignals(False)
-        self.tag_count_badge.setText(f"{self._model.rowCount()} tags")
+        n = self._model.rowCount()
+        self.tag_count_badge.setText(f"{n} tags")
+        self.tag_count_badge.setVisible(n > 0)
 
     def restore_selection(self, tag_names: list[str]):
         """Re-select previously selected tags by name after a model reset.
