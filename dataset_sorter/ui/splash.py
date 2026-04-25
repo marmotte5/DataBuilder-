@@ -42,6 +42,7 @@ log = logging.getLogger(__name__)
 
 _SPLASH_ASSET = "splashscreen.webp"
 _LOGO_ASSET = "marmot_logo.png"
+_LOGO_SIMPLE_ASSET = "marmot_logosimp.png"
 
 
 def _resolve_asset_path(filename: str) -> Optional[Path]:
@@ -66,9 +67,21 @@ def _resolve_splash_path() -> Optional[Path]:
 
 
 def resolve_logo_path() -> Optional[Path]:
-    """Public helper so other UI code (window icon, About dialog, …) can locate
-    the marmot logo without re-implementing the asset search."""
+    """Locate the colored marmot logo (matches the splash artwork's blue glow).
+
+    Use this for the app/window icon and any header where the splash's
+    branding palette is appropriate.
+    """
     return _resolve_asset_path(_LOGO_ASSET)
+
+
+def resolve_logo_simple_path() -> Optional[Path]:
+    """Locate the monochrome marmot logo (black silhouette, transparent bg).
+
+    Use this for places where the colored glow would clash — light themes,
+    print-style contexts, or QPixmap masks that need a single-channel source.
+    """
+    return _resolve_asset_path(_LOGO_SIMPLE_ASSET)
 
 
 class DataBuilderSplash(QSplashScreen):
