@@ -683,7 +683,10 @@ class LibraryTab(QWidget):
             f"border: 1px solid {COLORS['border']}; "
             f"border-radius: 12px; padding: 14px;"
         )
-        self._detail_frame.setFixedHeight(180)
+        # Height grew slightly because Note/Tags moved to their own row for
+        # proper alignment (the previous inline layout collapsed badly when
+        # the metadata label was empty).
+        self._detail_frame.setFixedHeight(220)
 
         layout = QVBoxLayout(self._detail_frame)
         layout.setContentsMargins(16, 10, 16, 10)
@@ -729,33 +732,36 @@ class LibraryTab(QWidget):
         self._detail_path.setWordWrap(True)
         layout.addWidget(self._detail_path)
 
-        # Metadata + user tags row
-        meta_row = QHBoxLayout()
+        # Metadata row (size, type, date — full width, wraps)
         self._detail_meta = QLabel("")
         self._detail_meta.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;"
         )
-        meta_row.addWidget(self._detail_meta, 1)
+        layout.addWidget(self._detail_meta)
 
-        # User note inline
-        meta_row.addWidget(QLabel("Note:"))
+        # User-metadata row: Note + Tags side-by-side, both stretch evenly so
+        # the inputs aren't cramped at fixed 200px and don't drift to the
+        # right edge when the parent metadata label is empty.
+        user_meta_row = QHBoxLayout()
+        user_meta_row.setSpacing(8)
+
+        user_meta_row.addWidget(QLabel("Note:"))
         self._note_edit = QLineEdit()
         self._note_edit.setPlaceholderText("Add a note...")
-        self._note_edit.setFixedWidth(200)
+        self._note_edit.setMinimumWidth(180)
         self._note_edit.setEnabled(False)
         self._note_edit.editingFinished.connect(self._save_note)
-        meta_row.addWidget(self._note_edit)
+        user_meta_row.addWidget(self._note_edit, 1)
 
-        # User tags inline
-        meta_row.addWidget(QLabel("Tags:"))
+        user_meta_row.addWidget(QLabel("Tags:"))
         self._tags_edit = QLineEdit()
         self._tags_edit.setPlaceholderText("tag1, tag2...")
-        self._tags_edit.setFixedWidth(200)
+        self._tags_edit.setMinimumWidth(180)
         self._tags_edit.setEnabled(False)
         self._tags_edit.editingFinished.connect(self._save_user_tags)
-        meta_row.addWidget(self._tags_edit)
+        user_meta_row.addWidget(self._tags_edit, 1)
 
-        layout.addLayout(meta_row)
+        layout.addLayout(user_meta_row)
 
         # Action buttons
         btn_row = QHBoxLayout()

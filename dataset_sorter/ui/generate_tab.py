@@ -237,6 +237,10 @@ class GenerateTab(QWidget):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Lock a sensible minimum so form labels ("Positive prompt", "Model
+        # type") don't clip when the splitter is dragged narrow or the
+        # window is rendered before setSizes() applies.
+        left_scroll.setMinimumWidth(380)
         left_widget = QWidget()
         left = QVBoxLayout(left_widget)
         left.setContentsMargins(4, 4, 4, 4)
