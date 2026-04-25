@@ -621,6 +621,8 @@ class SpellCheckSection(QWidget):
         ctrl.addStretch()
         self.result_badge = QLabel("")
         self.result_badge.setStyleSheet(TAG_BADGE_STYLE)
+        # Empty badge has padding so it shows as a tiny pill — hide until used.
+        self.result_badge.setVisible(False)
         ctrl.addWidget(self.result_badge)
         layout.addLayout(ctrl)
 
@@ -662,6 +664,7 @@ class SpellCheckSection(QWidget):
         self.btn_check.setEnabled(False)
         self.btn_check.setText("Checking...")
         self.result_badge.setText("")
+        self.result_badge.setVisible(False)
 
         self._worker = _SpellCheckWorker(self._tag_counts, self)
         self._worker.finished.connect(self._on_check_done)
@@ -676,6 +679,7 @@ class SpellCheckSection(QWidget):
             f"{len(suggestions)} suggestion(s)" if suggestions
             else "No issues found"
         )
+        self.result_badge.setVisible(True)
 
         self.table.setRowCount(len(suggestions))
         for row, s in enumerate(suggestions):
@@ -984,6 +988,8 @@ class DuplicateSection(QWidget):
 
         self.result_badge = QLabel("")
         self.result_badge.setStyleSheet(TAG_BADGE_STYLE)
+        # Empty badge has padding so it shows as a stray pill — hide until used.
+        self.result_badge.setVisible(False)
         ctrl.addWidget(self.result_badge)
         layout.addLayout(ctrl)
 
@@ -1003,6 +1009,7 @@ class DuplicateSection(QWidget):
 
         self.btn_detect.setEnabled(False)
         self.result_badge.setText("Scanning...")
+        self.result_badge.setVisible(True)
         self.results_text.setPlainText("Analyzing images for duplicates...")
 
         paths = [e.image_path for e in self._entries]
@@ -1019,6 +1026,7 @@ class DuplicateSection(QWidget):
         """Display the duplicate detection report and re-enable the detect button."""
         self.results_text.setPlainText(report)
         self.result_badge.setText(f"{len(duplicates)} pair(s)")
+        self.result_badge.setVisible(True)
         self.btn_detect.setEnabled(True)
         self._worker = None
 
@@ -1128,6 +1136,7 @@ class ConceptCoverageSection(QWidget):
 
         self.status_badge = QLabel("")
         self.status_badge.setStyleSheet(TAG_BADGE_STYLE)
+        self.status_badge.setVisible(False)
         ctrl.addWidget(self.status_badge)
         layout.addLayout(ctrl)
 
@@ -1222,6 +1231,8 @@ class ConceptCoverageSection(QWidget):
         self.btn_analyze.setEnabled(False)
         self.status_badge.setText("Analyzing...")
 
+        self.status_badge.setVisible(True)
+
         self._worker = _ConceptAnalysisWorker(
             self._entries,
             self._tag_counts,
@@ -1238,6 +1249,8 @@ class ConceptCoverageSection(QWidget):
         self._analysis = result
         self.btn_analyze.setEnabled(True)
         self.status_badge.setText("Done")
+
+        self.status_badge.setVisible(True)
 
         # Update stat cards
         overall = result.get("overall_score", 0)
@@ -1566,6 +1579,7 @@ class TagSpecificitySection(QWidget):
 
         self.status_badge = QLabel("")
         self.status_badge.setStyleSheet(TAG_BADGE_STYLE)
+        self.status_badge.setVisible(False)
         ctrl.addWidget(self.status_badge)
         layout.addLayout(ctrl)
 
@@ -1657,6 +1671,8 @@ class TagSpecificitySection(QWidget):
         self.btn_analyze.setEnabled(False)
         self.status_badge.setText("Analyzing...")
 
+        self.status_badge.setVisible(True)
+
         self._worker = _SpecificityWorker(
             self._entries,
             self._tag_counts,
@@ -1672,6 +1688,8 @@ class TagSpecificitySection(QWidget):
         self._analysis = result
         self.btn_analyze.setEnabled(True)
         self.status_badge.setText("Done")
+
+        self.status_badge.setVisible(True)
 
         stats = result.get("stats", {})
         self.hierarchies_val.setText(str(stats.get("hierarchies_found", 0)))
@@ -2102,6 +2120,8 @@ class TagImportanceSection(QWidget):
         self.btn_analyze.setEnabled(False)
         self.status_badge.setText("Analyzing...")
 
+        self.status_badge.setVisible(True)
+
         self._worker = _ImportanceWorker(
             self._entries, self._tag_counts, self._deleted_tags, parent=self,
         )
@@ -2115,6 +2135,8 @@ class TagImportanceSection(QWidget):
         self.btn_apply_buckets.setEnabled(True)
         self.btn_clean.setEnabled(True)
         self.status_badge.setText("Done")
+
+        self.status_badge.setVisible(True)
 
         # Update stat cards
         if report.concept_roots:

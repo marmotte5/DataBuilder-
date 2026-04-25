@@ -275,15 +275,25 @@ class GenerateTab(QWidget):
         btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
+        # Tight icon buttons need a per-button style override — global
+        # QPushButton padding is 8px 20px so a 28px fixed width swallows
+        # the glyph entirely and the button renders blank. Same fix as
+        # training_tab.py.
+        _icon_btn_style = (
+            "QPushButton { padding: 4px 0px; min-width: 28px; "
+            "font-size: 14px; }"
+        )
         btn_copy_model = QPushButton("📋")
-        btn_copy_model.setFixedWidth(28)
+        btn_copy_model.setStyleSheet(_icon_btn_style)
+        btn_copy_model.setFixedWidth(36)
         btn_copy_model.setToolTip("Copy model path to clipboard")
         btn_copy_model.clicked.connect(
             lambda: QApplication.clipboard().setText(self.model_path_edit.text())
         )
         mg.addWidget(btn_copy_model, 0, 4)
         self._btn_scan_gen = QPushButton("⟳")
-        self._btn_scan_gen.setFixedWidth(28)
+        self._btn_scan_gen.setStyleSheet(_icon_btn_style)
+        self._btn_scan_gen.setFixedWidth(36)
         self._btn_scan_gen.setToolTip("Scan for local model files")
         self._btn_scan_gen.clicked.connect(self._start_model_scan)
         mg.addWidget(self._btn_scan_gen, 0, 5)
@@ -622,7 +632,10 @@ class GenerateTab(QWidget):
         btn_browse_output.clicked.connect(self._browse_output_folder)
         save_layout.addWidget(btn_browse_output, 1, 2)
         btn_copy_output = QPushButton("📋")
-        btn_copy_output.setFixedWidth(28)
+        btn_copy_output.setStyleSheet(
+            "QPushButton { padding: 4px 0px; min-width: 28px; font-size: 14px; }"
+        )
+        btn_copy_output.setFixedWidth(36)
         btn_copy_output.setToolTip("Copy output path to clipboard")
         btn_copy_output.clicked.connect(
             lambda: QApplication.clipboard().setText(self.output_folder_edit.text())
