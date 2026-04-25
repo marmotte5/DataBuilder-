@@ -395,7 +395,9 @@ class MainWindow(QMainWindow):
         """Initialize the main window, build UI, wire signals, and restore previous session state."""
         super().__init__()
         self.setWindowTitle("DataBuilder")
-        self.setMinimumSize(1400, 900)
+        # Min size sized for 1366×768 laptops (the most common low-end target).
+        # Above that the layout can stretch comfortably; below we'd force scrolling.
+        self.setMinimumSize(1200, 780)
         self.setAcceptDrops(True)
 
         # State
@@ -2070,7 +2072,10 @@ class MainWindow(QMainWindow):
     def _setup_shortcuts(self):
         """Register global keyboard shortcuts."""
         QShortcut(QKeySequence("Ctrl+S"), self, self._save_config)
-        QShortcut(QKeySequence("Ctrl+O"), self, self._load_config)
+        # Ctrl+O is owned by the Project → Open project… menu action; binding
+        # it again here would fire BOTH actions on a single press. Use
+        # Ctrl+Shift+L for "Load training config" (the previous Ctrl+O target).
+        QShortcut(QKeySequence("Ctrl+Shift+L"), self, self._load_config)
         QShortcut(QKeySequence("Ctrl+E"), self, self._start_export)
         QShortcut(QKeySequence("Ctrl+R"), self, self._start_scan)
         QShortcut(QKeySequence("Ctrl+T"), self, self._toggle_theme)
@@ -2474,7 +2479,8 @@ class MainWindow(QMainWindow):
         source = self.source_input.text().strip()
         if not source or not Path(source).is_dir():
             self.statusBar().showMessage(
-                "Please enter a valid source folder path above before scanning."
+                "Please enter a valid source folder path above before scanning.",
+                5000,
             )
             return
 
@@ -2521,7 +2527,9 @@ class MainWindow(QMainWindow):
 
     def _on_scan_errors(self, count):
         """Notify the user about errors encountered during the scan."""
-        self.statusBar().showMessage(f"Scan had {count} error(s) — check logs for details.")
+        self.statusBar().showMessage(
+            f"Scan had {count} error(s) — check logs for details.", 8000,
+        )
 
     def _on_scan_finished(self, entries):
         """Process scan results: filter invalid entries, rebuild indexes, assign buckets, and refresh UI."""
