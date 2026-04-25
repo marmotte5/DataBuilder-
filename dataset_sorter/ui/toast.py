@@ -4,7 +4,9 @@ Slides in from the top-right corner of the parent window, auto-dismisses after
 a configurable duration, and supports success/info/warning/error variants.
 """
 
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtCore import (
+    Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QEvent, QObject,
+)
 from PyQt6.QtWidgets import QLabel, QWidget, QGraphicsOpacityEffect
 
 from dataset_sorter.ui.theme import COLORS
@@ -108,6 +110,10 @@ class ToastNotification(QLabel):
 # Stack offset management: keeps multiple toasts from overlapping
 _active_toasts: list[ToastNotification] = []
 
+# Parents we've already attached the resize filter to. Stored as ids
+# (not refs) to avoid keeping deleted parents alive.
+_resize_filtered_parents: set[int] = set()
+
 
 def _is_toast_alive(t: ToastNotification) -> bool:
     """Return True if the underlying C++ object is still valid."""
@@ -120,6 +126,30 @@ def _is_toast_alive(t: ToastNotification) -> bool:
 def _cleanup_dead_toasts():
     """Remove toasts that have been deleted."""
     _active_toasts[:] = [t for t in _active_toasts if _is_toast_alive(t)]
+
+
+class _ToastResizeFilter(QObject):
+    """Reposition active toasts when their parent resizes.
+
+    Without this, toasts pin to the parent's width at launch — a window
+    resize leaves them off-screen or floating in the middle of the layout.
+    """
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: D401
+        if event.type() == QEvent.Type.Resize:
+            _cleanup_dead_toasts()
+            try:
+                pw = obj.width()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pw = 800
+            for t in _active_toasts:
+                if t.parent() is obj:
+                    new_x = pw - t.width() - 20
+                    t.move(new_x, t.y())
+        return False  # never consume the event
+
+
+_resize_filter = _ToastResizeFilter()
 
 
 def show_toast(
@@ -142,6 +172,13 @@ def show_toast(
         How long the toast stays visible before fading out.
     """
     _cleanup_dead_toasts()
+
+    # Install the resize filter once per parent so toasts re-anchor to the
+    # right edge when the parent window is resized after they appeared.
+    if parent is not None and id(parent) not in _resize_filtered_parents:
+        parent.installEventFilter(_resize_filter)
+        _resize_filtered_parents.add(id(parent))
+
     toast = ToastNotification(text, parent, variant, duration_ms)
 
     # Offset vertically so stacked toasts don't overlap

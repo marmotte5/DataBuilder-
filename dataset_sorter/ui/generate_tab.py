@@ -686,7 +686,7 @@ class GenerateTab(QWidget):
         self.btn_prev.clicked.connect(self._prev_image)
         nav_row.addWidget(self.btn_prev)
 
-        self.gallery_label = QLabel("0 / 0")
+        self.gallery_label = QLabel("No images yet — set a prompt and click Generate")
         self.gallery_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nav_row.addWidget(self.gallery_label)
 
@@ -1221,7 +1221,10 @@ class GenerateTab(QWidget):
     def _update_nav(self):
         """Refresh gallery navigation label and prev/next/save button states."""
         n = len(self._generated_images)
-        self.gallery_label.setText(f"{self._current_gallery_idx + 1} / {n}" if n else "0 / 0")
+        self.gallery_label.setText(
+            f"{self._current_gallery_idx + 1} / {n}" if n
+            else "No images yet — set a prompt and click Generate"
+        )
         self.btn_prev.setEnabled(self._current_gallery_idx > 0)
         self.btn_next.setEnabled(self._current_gallery_idx < n - 1)
         self.btn_save.setEnabled(n > 0)
