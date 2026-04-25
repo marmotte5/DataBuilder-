@@ -1296,28 +1296,42 @@ class LibraryTab(QWidget):
     # ── Drag and drop (folders) ────────────────────────────────────────
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Accept drag events that contain directory URLs."""
+        """Accept drags of directories OR model files (.safetensors / .ckpt / .pt / .bin).
+
+        Dropping a file adds its parent directory to the watched folders so
+        the file (and its siblings) appear in the library after refresh.
+        """
         mime = event.mimeData()
         if mime is not None and mime.hasUrls():
             for url in mime.urls():
-                if url.isLocalFile() and Path(url.toLocalFile()).is_dir():
+                if not url.isLocalFile():
+                    continue
+                p = Path(url.toLocalFile())
+                if p.is_dir() or (p.is_file() and p.suffix.lower() in MODEL_EXTENSIONS):
                     event.acceptProposedAction()
                     return
         event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Add dropped directories to the folder list."""
+        """Add dropped directories — or the parent of a dropped model file —
+        to the watched folder list."""
         mime = event.mimeData()
         if mime is None:
             return
         folders = self._load_folders()
         added = False
         for url in mime.urls():
-            if url.isLocalFile():
-                path = url.toLocalFile()
-                if Path(path).is_dir() and path not in folders:
-                    folders.append(path)
-                    added = True
+            if not url.isLocalFile():
+                continue
+            p = Path(url.toLocalFile())
+            target: Path | None = None
+            if p.is_dir():
+                target = p
+            elif p.is_file() and p.suffix.lower() in MODEL_EXTENSIONS:
+                target = p.parent
+            if target is not None and str(target) not in folders:
+                folders.append(str(target))
+                added = True
         if added:
             self._save_folders(folders)
             self._update_folder_display()

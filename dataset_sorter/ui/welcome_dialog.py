@@ -98,7 +98,8 @@ class WelcomeDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("DataBuilder — Welcome")
-        self.setMinimumSize(720, 520)
+        # 640×440 fits 1366×768 laptops with a docked taskbar / split-screen.
+        self.setMinimumSize(640, 440)
 
         self.settings = AppSettings.load()
         self.manager = ProjectManager()
@@ -112,6 +113,24 @@ class WelcomeDialog(QDialog):
             self.tabs.setCurrentIndex(1)
         else:
             self.tabs.setCurrentIndex(0)
+
+        # Continue is enabled only when the current tab has a valid selection,
+        # so pressing Enter on an empty Recent tab can't silently fail.
+        self.tabs.currentChanged.connect(self._update_continue_state)
+        self._name_edit.textChanged.connect(self._update_continue_state)
+        self._browse_path_edit.textChanged.connect(self._update_continue_state)
+        self._recent_list.itemSelectionChanged.connect(self._update_continue_state)
+        self._update_continue_state()
+
+    def _update_continue_state(self) -> None:
+        idx = self.tabs.currentIndex()
+        if idx == 0:
+            ok = bool(self._name_edit.text().strip())
+        elif idx == 1:
+            ok = self._recent_list.currentItem() is not None
+        else:
+            ok = bool(self._browse_path_edit.text().strip())
+        self._primary_btn.setEnabled(ok)
 
     # ── UI construction ────────────────────────────────────────────────
 
