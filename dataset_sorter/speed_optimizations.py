@@ -677,7 +677,23 @@ class FusedBackwardPass:
         self._grads_received: int = 0
 
     def install_hooks(self, parameters):
-        """Register post-accumulate-grad hooks on trainable parameters."""
+        """Register post-accumulate-grad hooks on trainable parameters.
+
+        Idempotent: a previous installation is removed first so that
+        ``install_hooks(...)`` can be called multiple times (e.g., after
+        the trainer changes the parameter set, or in test fixtures that
+        re-run setup) without doubling up the hook chain. Without this
+        guard, calling install_hooks twice would register two hooks per
+        parameter and apply optimizer.step() TWICE per backward pass —
+        silently corrupting weight updates.
+        """
+        # Reset any prior installation so the bookkeeping below starts fresh.
+        if self._hooks:
+            self.remove_hooks()
+        self._param_to_group.clear()
+        self._grad_norms_sq.clear()
+        self._grads_received = 0
+
         trainable = [p for p in parameters if p.requires_grad]
 
         # Map each parameter to its optimizer param_group index
