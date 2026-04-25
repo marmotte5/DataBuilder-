@@ -114,10 +114,13 @@ class TestConstants:
 
     def test_network_types(self):
         from dataset_sorter.constants import NETWORK_TYPES
+        # PEFT-driven (DoRA / rsLoRA are flags on `lora`, not separate types)
         assert "lora" in NETWORK_TYPES
-        assert "dora" in NETWORK_TYPES
+        # LyCORIS-driven trainable variants
         assert "loha" in NETWORK_TYPES
         assert "lokr" in NETWORK_TYPES
+        assert "locon" in NETWORK_TYPES
+        assert "dylora" in NETWORK_TYPES
 
     def test_optimizers(self):
         from dataset_sorter.constants import OPTIMIZERS

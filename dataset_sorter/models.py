@@ -65,6 +65,13 @@ class TrainingConfig:
     use_rslora: bool = False        # rsLoRA: rank-stabilized scaling (alpha/sqrt(r))
     lora_init: str = "default"      # Initialization: default, pissa, olora, gaussian
     lora_plus_ratio: float = 0.0    # LoRA+: LR multiplier for lora_B (0=disabled, 16=recommended)
+    use_lora_fa: bool = False       # LoRA-FA: freeze lora_A, train only lora_B (~50% VRAM)
+
+    # LyCORIS variants (LoHa / LoKr / LoCon / DyLoRA)
+    lycoris_factor: int = -1            # LoKr Kronecker factor (-1 = auto, typical 8-16)
+    lycoris_decompose_both: bool = False  # LoKr: decompose both A and B sides
+    lycoris_use_tucker: bool = False      # Tucker decomposition for conv layers
+    lycoris_dora_wd: bool = False         # Apply DoRA-style magnitude vector to LyCORIS
 
     # ── Optimizer ──────────────────────────────────────────────────────
     optimizer: str = "Adafactor"

@@ -174,20 +174,64 @@ class TrainingTabBuildersMixin:
         self.rslora_check = QCheckBox("rsLoRA — Rank-stabilized scaling (stable at high ranks)")
         g2l.addWidget(self.rslora_check, 6, 0, 1, 2)
 
-        g2l.addWidget(QLabel("Init Method"), 7, 0)
+        # LoRA-FA: freeze A matrix, train only B (~50% LoRA-param VRAM saving).
+        self.lora_fa_check = QCheckBox(
+            "LoRA-FA — Freeze A matrix, train only B (~50% LoRA-param VRAM)"
+        )
+        self.lora_fa_check.setToolTip(
+            "LoRA-FA (Frozen-A): keeps the random A projection fixed and trains "
+            "only the B matrix. Saves ~50% of LoRA parameter VRAM with negligible "
+            "quality impact — lets you double the rank or batch size on a 24 GB GPU.\n\n"
+            "Compatible with DoRA / rsLoRA / PiSSA. Disables LoRA+ asymmetric LR "
+            "(only B is trainable, so A's LR is moot)."
+        )
+        g2l.addWidget(self.lora_fa_check, 7, 0, 1, 2)
+
+        g2l.addWidget(QLabel("Init Method"), 8, 0)
         self.lora_init_combo = QComboBox()
         for key, label in LORA_INIT_METHODS.items():
             self.lora_init_combo.addItem(label, key)
-        g2l.addWidget(self.lora_init_combo, 7, 1)
+        g2l.addWidget(self.lora_init_combo, 8, 1)
 
-        g2l.addWidget(_param_label("LoRA+ Ratio", "0 = off, 16 typical"), 8, 0)
+        g2l.addWidget(_param_label("LoRA+ Ratio", "0 = off, 16 typical"), 9, 0)
         self.lora_plus_spin = QDoubleSpinBox()
         self.lora_plus_spin.setRange(0, 64.0)
         self.lora_plus_spin.setDecimals(1)
         self.lora_plus_spin.setSingleStep(1.0)
         self.lora_plus_spin.setValue(0.0)
         self.lora_plus_spin.setToolTip("LoRA+ learning rate multiplier for lora_B weights. 0=off. 16=typical. Speeds up convergence.")
-        g2l.addWidget(self.lora_plus_spin, 8, 1)
+        g2l.addWidget(self.lora_plus_spin, 9, 1)
+
+        # LyCORIS-specific controls (visible only for LoKr/LoHa/LoCon/DyLoRA)
+        self.lycoris_factor_label = _param_label("LoKr Factor", "Kronecker factor (-1 = auto, 8-16 typical)")
+        g2l.addWidget(self.lycoris_factor_label, 10, 0)
+        self.lycoris_factor_spin = QSpinBox()
+        self.lycoris_factor_spin.setRange(-1, 64)
+        self.lycoris_factor_spin.setValue(-1)
+        self.lycoris_factor_spin.setSpecialValueText("Auto")
+        self.lycoris_factor_spin.setToolTip(
+            "LoKr Kronecker decomposition factor. -1 lets LyCORIS pick automatically.\n"
+            "Lower factor = fewer params but coarser approximation."
+        )
+        g2l.addWidget(self.lycoris_factor_spin, 10, 1)
+
+        self.lycoris_decompose_both_check = QCheckBox(
+            "LoKr — Decompose both sides (more params, finer detail)"
+        )
+        self.lycoris_decompose_both_check.setToolTip(
+            "When enabled, LoKr decomposes both factors of the Kronecker product. "
+            "Adds parameters but captures finer detail."
+        )
+        g2l.addWidget(self.lycoris_decompose_both_check, 11, 0, 1, 2)
+
+        self.lycoris_tucker_check = QCheckBox(
+            "Tucker decomposition (for conv layers)"
+        )
+        self.lycoris_tucker_check.setToolTip(
+            "Use Tucker decomposition for convolutional layers. Improves expressivity "
+            "of LoCon-style adapters at minimal extra cost."
+        )
+        g2l.addWidget(self.lycoris_tucker_check, 12, 0, 1, 2)
 
         g2.setLayout(g2l)
         layout.addWidget(g2)
@@ -203,6 +247,7 @@ class TrainingTabBuildersMixin:
 
         # Wire signals for dynamic network advice and LoRA visibility
         self.train_network_combo.currentIndexChanged.connect(self._update_network_advice)
+        self.train_network_combo.currentIndexChanged.connect(self._update_network_type_visibility)
         self.train_model_combo.currentIndexChanged.connect(self._update_network_advice)
         self.train_model_combo.currentIndexChanged.connect(self._update_lora_visibility)
         self.rank_spin.valueChanged.connect(self._update_network_advice)
@@ -213,6 +258,12 @@ class TrainingTabBuildersMixin:
         self.rslora_check.stateChanged.connect(
             lambda checked: self.dora_check.setChecked(False) if checked else None
         )
+        # LoRA-FA disables LoRA+ ratio (B-only training makes A LR irrelevant)
+        self.lora_fa_check.stateChanged.connect(
+            lambda checked: self.lora_plus_spin.setEnabled(not bool(checked))
+        )
+        # Set initial visibility for LyCORIS-specific controls
+        self._update_network_type_visibility()
 
         # EMA
         g3 = self._group("EMA")
@@ -563,6 +614,33 @@ class TrainingTabBuildersMixin:
         is_lora = model_key.endswith("_lora")
         self.network_group.setVisible(is_lora)
         self.network_advice_label.setVisible(is_lora)
+
+    def _update_network_type_visibility(self):
+        """Show/hide LyCORIS-specific controls based on selected network type.
+
+        - PEFT path (lora): show LoRA-FA + DoRA/rsLoRA + Init + LoRA+ ratio.
+        - LyCORIS path (lokr/loha/locon/dylora): show factor + decompose + tucker.
+        - LoKr-only: factor + decompose_both.
+        """
+        if not hasattr(self, "lycoris_factor_spin"):
+            return  # UI not yet built
+        net_type = (self.train_network_combo.currentData() or "lora").lower()
+        is_lora = net_type == "lora"
+        is_lycoris = net_type in ("loha", "lokr", "locon", "dylora")
+        is_lokr = net_type == "lokr"
+
+        # PEFT-only controls
+        self.lora_fa_check.setVisible(is_lora)
+        self.dora_check.setVisible(is_lora)
+        self.rslora_check.setVisible(is_lora)
+        self.lora_init_combo.setVisible(is_lora)
+        self.lora_plus_spin.setVisible(is_lora)
+
+        # LyCORIS controls
+        self.lycoris_factor_label.setVisible(is_lokr)
+        self.lycoris_factor_spin.setVisible(is_lokr)
+        self.lycoris_decompose_both_check.setVisible(is_lokr)
+        self.lycoris_tucker_check.setVisible(is_lycoris)
 
     def _update_precision_advice(self):
         """Update precision advice based on detected hardware and selected options."""

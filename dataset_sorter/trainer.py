@@ -994,7 +994,7 @@ class Trainer:
         # ── 11. EMA ──
         if config.use_ema:
             self.ema_model = EMAModel(
-                self.backend.unet.parameters(),
+                self.backend.trainable_adapter_module().parameters(),
                 decay=config.ema_decay,
                 cpu_offload=config.ema_cpu_offload,
             )
@@ -1189,12 +1189,23 @@ class Trainer:
         higher learning rate (base_lr * ratio) while lora_A weights keep the
         base LR.  This asymmetric scaling converges ~30% faster per the
         LoRA+ paper (2024).
+
+        For LyCORIS adapters (LoKr / LoHa / LoCon / DyLoRA) the trainable
+        params live on ``backend.lycoris_net``, not on ``backend.unet`` —
+        the unet stays frozen and forwards through LyCORIS hooks.
         """
         config = self.config
         base_lr = config.learning_rate
         plus_ratio = getattr(config, "lora_plus_ratio", 0.0)
+        adapter_type = getattr(self.backend, "adapter_type", None)
 
-        if plus_ratio > 0 and config.model_type.endswith("_lora"):
+        # LyCORIS path: trainable params are on the wrapper, not the unet.
+        if adapter_type == "lycoris" and self.backend.lycoris_net is not None:
+            ly_params = [p for p in self.backend.lycoris_net.parameters() if p.requires_grad]
+            groups = [{"params": ly_params, "lr": base_lr}] if ly_params else []
+            if plus_ratio > 0:
+                log.info("LoRA+ ignored on LyCORIS adapter (asymmetric LR is LoRA-specific)")
+        elif plus_ratio > 0 and config.model_type.endswith("_lora"):
             # Split UNet LoRA params into A (low LR) and B (high LR) groups
             lora_a_params = []
             lora_b_params = []
@@ -1416,7 +1427,7 @@ class Trainer:
                     self.optimizer, self.scheduler, self.grad_scaler,
                     max_grad_norm=config.max_grad_norm,
                 )
-                fused_backward.install_hooks(self.backend.unet.parameters())
+                fused_backward.install_hooks(self.backend.trainable_adapter_module().parameters())
                 log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
 
         # ── Stochastic Rounding for BF16 ──
@@ -1427,7 +1438,7 @@ class Trainer:
             log.info("Stochastic rounding enabled for bf16 weight updates")
 
         # Pre-collect trainable params for grad clipping (avoid re-filtering each step)
-        trainable_params = [p for p in self.backend.unet.parameters() if p.requires_grad]
+        trainable_params = [p for p in self.backend.trainable_adapter_module().parameters() if p.requires_grad]
         if config.train_text_encoder and self.backend.text_encoder is not None:
             trainable_params += [p for p in self.backend.text_encoder.parameters() if p.requires_grad]
         if config.train_text_encoder_2 and self.backend.text_encoder_2 is not None:
@@ -1697,7 +1708,7 @@ class Trainer:
 
                     # EMA update
                     if self.ema_model is not None:
-                        self.ema_model.update(self.backend.unet.parameters())
+                        self.ema_model.update(self.backend.trainable_adapter_module().parameters())
 
                     self.state.global_step += 1
                     # Each micro-batch loss was divided by grad_accum_steps.
@@ -2819,8 +2830,8 @@ class Trainer:
 
         # Swap to EMA weights
         if self.ema_model is not None:
-            self.ema_model.store(self.backend.unet.parameters())
-            self.ema_model.copy_to(self.backend.unet.parameters())
+            self.ema_model.store(self.backend.trainable_adapter_module().parameters())
+            self.ema_model.copy_to(self.backend.trainable_adapter_module().parameters())
 
         self.backend.unet.eval()
 
@@ -2854,7 +2865,7 @@ class Trainer:
         finally:
             # Always restore training state, even if sample generation failed
             if self.ema_model is not None:
-                self.ema_model.restore(self.backend.unet.parameters())
+                self.ema_model.restore(self.backend.trainable_adapter_module().parameters())
 
             self.backend.unet.train()
 
