@@ -3557,9 +3557,16 @@ def run():
     window.show()
 
     # Defer the project-restore / WelcomeDialog flow to the next event-loop
-    # tick. By then the splash is gone and the main window is fully painted,
-    # so the modal welcome dialog opens cleanly on top — instead of fighting
-    # the splash's WindowStaysOnTopHint.
-    QTimer.singleShot(0, window._restore_or_prompt_project)
+    # tick. ``finish(target)`` only hides the splash on the FIRST paint event,
+    # which on some window managers fires AFTER our singleShot(0) callback —
+    # so we also force ``splash.close()`` here as a hard guarantee. Otherwise
+    # the welcome modal can open while the splash's WindowStaysOnTopHint is
+    # still active, hiding the dialog underneath.
+    def _open_project_flow() -> None:
+        if splash is not None:
+            splash.close()
+        window._restore_or_prompt_project()
+
+    QTimer.singleShot(0, _open_project_flow)
 
     sys.exit(app.exec())
