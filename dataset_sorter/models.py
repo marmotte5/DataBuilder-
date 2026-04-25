@@ -1,4 +1,25 @@
-"""Application data classes."""
+"""Application data classes.
+
+TrainingConfig has ~237 fields. Reading them flat is overwhelming for a
+human and frankly hostile to AI agents — autocomplete drowns in unrelated
+attributes when you just want to tweak the optimizer.
+
+The fields are stored flat (canonical), but a set of grouped *views* let
+agents and humans navigate them by topic:
+
+    cfg.model        → resolution, model_type, bucket_*
+    cfg.run          → learning_rate, batch_size, epochs, sample_*, save_*, EMA, max_grad_norm
+    cfg.network      → lora_rank, use_dora, lycoris_*  (LoRA / LyCORIS variants)
+    cfg.optim        → Adafactor / Marmotte / GaLore / Prodigy hyperparams
+                       (note: cfg.optimizer is the flat name string)
+    cfg.memory       → precision, caching, CUDA, quantization, FP8, MeBP, VJP, etc.
+    cfg.dataset      → tag shuffle, captions, augmentation
+    cfg.advanced     → niche features (RLHF, masked, validation, ControlNet, ...)
+
+Both forms work — read or write — so existing code using ``cfg.lora_rank``
+keeps working while new code can use ``cfg.network.lora_rank`` for a
+focused 18-field surface instead of 237.
+"""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +33,263 @@ from dataset_sorter.constants import (
     DEFAULT_LR_TEXT_ENCODER,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_WEIGHT_DECAY,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Grouped views into TrainingConfig
+# ─────────────────────────────────────────────────────────────────────────
+# Each view wraps a TrainingConfig and exposes a curated subset of its
+# flat fields. Reads and writes go through the parent so the canonical
+# storage stays a single dataclass — no synchronization, no drift.
+#
+# Adding a new field: add it once to TrainingConfig (flat), then list its
+# name in the relevant view's ``_FIELDS`` tuple. That gives both
+# ``cfg.foo`` and ``cfg.<group>.foo`` access automatically.
+
+
+class _ConfigView:
+    """Base class for all TrainingConfig views.
+
+    Subclasses just declare ``_FIELDS`` — a tuple of attribute names on
+    the parent ``TrainingConfig``. Reads and writes are forwarded to the
+    parent; ``dir()`` returns the field list for clean autocompletion.
+    """
+
+    __slots__ = ("_parent",)
+    _FIELDS: tuple[str, ...] = ()
+
+    def __init__(self, parent: "TrainingConfig"):
+        # Use object.__setattr__ to bypass our own __setattr__ override.
+        object.__setattr__(self, "_parent", parent)
+
+    def __getattr__(self, name: str):
+        # __getattr__ runs only when the normal lookup failed, so this
+        # path is safe — if the attribute exists on the view itself
+        # (e.g. _parent, __class__) we never reach here.
+        if name in self._FIELDS:
+            return getattr(self._parent, name)
+        raise AttributeError(
+            f"{type(self).__name__!s} has no attribute {name!r}. "
+            f"Available: {', '.join(self._FIELDS) or '(none)'}"
+        )
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in self._FIELDS:
+            setattr(self._parent, name, value)
+            return
+        # Allow setting internal slots (e.g. _parent during __init__).
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        raise AttributeError(
+            f"{type(self).__name__!s} has no attribute {name!r}. "
+            f"Available: {', '.join(self._FIELDS) or '(none)'}"
+        )
+
+    def __dir__(self):
+        # Make autocomplete useful: show only the curated field set.
+        return list(self._FIELDS)
+
+    def __repr__(self) -> str:
+        items = ", ".join(
+            f"{f}={getattr(self._parent, f)!r}" for f in self._FIELDS
+        )
+        return f"{type(self).__name__}({items})"
+
+
+class _ModelView(_ConfigView):
+    """Architecture, resolution, bucketing — the "what" of training."""
+    _FIELDS = (
+        "model_type", "vram_gb", "resolution", "resolution_min",
+        "resolution_max", "enable_bucket", "bucket_reso_steps", "clip_skip",
+    )
+
+
+class _RunView(_ConfigView):
+    """LR / batch / epochs / EMA / output / sampling / checkpointing.
+
+    The "how a run is shaped" — everything you tweak when reproducing
+    or comparing runs that share the same model + network + optimizer.
+    """
+    _FIELDS = (
+        # Learning + LR schedule
+        "learning_rate", "lr_scheduler",
+        # Text encoder
+        "text_encoder_lr", "train_text_encoder", "train_text_encoder_2",
+        # Batch
+        "batch_size", "gradient_accumulation", "effective_batch_size",
+        # Epochs / steps
+        "epochs", "total_steps", "warmup_steps", "max_train_steps",
+        # EMA
+        "use_ema", "ema_decay", "ema_cpu_offload",
+        # Sampling during training
+        "sample_every_n_steps", "sample_prompts", "sample_sampler",
+        "sample_steps", "sample_cfg_scale", "sample_seed", "num_sample_images",
+        # Output naming
+        "output_name",
+        # Checkpointing
+        "save_every_n_steps", "save_every_n_epochs", "save_last_n_checkpoints",
+        "save_precision", "save_final_checkpoint",
+        # Regularization
+        "max_grad_norm",
+        # Smart resume
+        "smart_resume", "smart_resume_auto_apply",
+    )
+
+
+class _NetworkView(_ConfigView):
+    """LoRA + LyCORIS adapter configuration."""
+    _FIELDS = (
+        "network_type", "lora_rank", "lora_alpha", "conv_rank", "conv_alpha",
+        "use_dora", "use_rslora", "lora_init", "lora_plus_ratio",
+        "use_lora_fa",
+        "lycoris_factor", "lycoris_decompose_both", "lycoris_use_tucker",
+        "lycoris_dora_wd",
+    )
+
+
+class _OptimizerView(_ConfigView):
+    """Optimizer choice + per-optimizer hyperparams (Marmotte, GaLore, ...)."""
+    _FIELDS = (
+        "optimizer", "weight_decay",
+        # Adafactor
+        "adafactor_relative_step", "adafactor_scale_parameter",
+        "adafactor_warmup_init",
+        # Prodigy
+        "prodigy_d_coef", "prodigy_decouple", "prodigy_safeguard_warmup",
+        "prodigy_use_bias_correction",
+        # Memory tricks
+        "fused_backward_pass", "stochastic_rounding",
+        # Marmotte v2 (custom ultra-low-memory optimizer)
+        "marmotte_momentum", "marmotte_agreement_boost",
+        "marmotte_disagreement_damp", "marmotte_error_feedback_alpha",
+        "marmotte_grad_rms_beta", "marmotte_error_rank",
+        "marmotte_warmup_steps",
+        # GaLore (gradient low-rank projection)
+        "galore_rank", "galore_update_proj_gap", "galore_scale",
+    )
+
+
+class _MemoryView(_ConfigView):
+    """Precision, caching, CUDA, quantization, speed optimizations."""
+    _FIELDS = (
+        # Mixed precision + checkpointing
+        "mixed_precision", "gradient_checkpointing",
+        # Caching
+        "cache_latents", "cache_latents_to_disk", "cache_text_encoder",
+        "cache_text_encoder_to_disk", "fast_image_decoder",
+        "safetensors_cache", "fp16_latent_cache", "cache_to_ram_disk",
+        "lmdb_cache",
+        # CUDA optimizations
+        "xformers", "sdpa", "flash_attention",
+        "torch_compile", "compile_mode", "regional_compile",
+        "cudnn_benchmark", "enable_tf32",
+        "fp8_base_model", "quantize_text_encoder", "quantize_unet",
+        "enable_layer_offload",
+        # Speed inventions
+        "mebp_enabled", "mebp_num_checkpoints",
+        "approx_vjp", "approx_vjp_num_samples",
+        "async_dataload", "prefetch_factor",
+        "cuda_graph_training", "cuda_graph_warmup",
+        "async_optimizer_step",
+        "liger_kernels",
+        "triton_fused_adamw", "triton_fused_loss", "triton_fused_flow",
+        "fp8_training",
+        "sequence_packing",
+        "mmap_dataset",
+        "parallel_caching", "parallel_caching_workers",
+        "zero_bottleneck_loader",
+    )
+
+
+class _DatasetView(_ConfigView):
+    """Tags + augmentation for the live image pipeline."""
+    _FIELDS = (
+        "tag_shuffle", "keep_first_n_tags", "caption_dropout_rate",
+        "random_crop", "flip_augmentation", "color_augmentation",
+        "color_jitter_brightness", "color_jitter_contrast",
+        "color_jitter_saturation", "color_jitter_hue",
+        "random_rotate_degrees",
+    )
+
+
+class _AdvancedView(_ConfigView):
+    """Niche / experimental features.
+
+    Each block is independent — turning one off doesn't affect the others.
+    Grouped here because they're rarely all relevant in the same run.
+    """
+    _FIELDS = (
+        # Noise scheduling
+        "noise_offset", "adaptive_noise_scale", "min_snr_gamma",
+        "snr_gamma_mode", "ip_noise_gamma", "debiased_estimation",
+        "multires_noise_discount", "multires_noise_iterations",
+        "guidance_scale",
+        "loss_fn", "huber_delta",
+        "timestep_sampling", "model_prediction_type",
+        "sigma_min", "sigma_max",
+        "timestep_bias_strategy", "timestep_bias_multiplier",
+        "timestep_bias_begin", "timestep_bias_end",
+        "speed_asymmetric", "speed_change_aware",
+        "zero_terminal_snr", "rescale_noise_schedule",
+        # Z-Image exclusive optimizations
+        "zimage_unified_attention", "zimage_fused_rope", "zimage_fat_cache",
+        "zimage_logit_normal", "logit_normal_mu", "logit_normal_sigma",
+        "zimage_velocity_weighting",
+        "zimage_l2_attention", "zimage_speculative_grad",
+        "speculative_lookahead_alpha", "speculative_ema_beta",
+        "speculative_boost_factor",
+        "zimage_stream_bending", "stream_bending_gravity",
+        "zimage_timestep_bandit", "bandit_num_buckets", "bandit_exploration",
+        # Curriculum + per-timestep EMA
+        "curriculum_learning", "curriculum_temperature",
+        "curriculum_warmup_epochs",
+        "timestep_ema_sampling", "timestep_ema_skip_threshold",
+        "timestep_ema_num_buckets",
+        # RLHF / DPO
+        "rlhf_enabled", "rlhf_pairs_per_round", "rlhf_collect_every_n_steps",
+        "rlhf_dpo_rounds",
+        "dpo_beta", "dpo_loss_type", "dpo_label_smoothing",
+        "dpo_enabled", "dpo_chosen_dir", "dpo_rejected_dir",
+        "dpo_reference_model",
+        # Token / attention weighting
+        "token_weighting_enabled", "token_default_weight", "token_trigger_weight",
+        "attention_debug_enabled", "attention_debug_every_n_steps",
+        "attention_debug_top_k",
+        # Concept probing + adaptive weighting
+        "concept_probe_enabled", "concept_probe_steps",
+        "concept_probe_images", "concept_probe_threshold",
+        "adaptive_tag_weighting", "adaptive_tag_warmup",
+        "adaptive_tag_rate", "adaptive_tag_max_weight",
+        "attention_rebalancing", "attention_rebalance_threshold",
+        "attention_rebalance_boost",
+        # Pipeline integration
+        "pipeline_integration", "auto_fix_config", "auto_dedup",
+        "auto_tag_analysis", "auto_history_apply", "auto_speed_opts",
+        "live_loss_monitor", "live_monitor_interval",
+        "live_monitor_auto_adjust",
+        # Held-out validation
+        "validation_dir", "validate_every_n_steps", "validation_samples_limit",
+        # Masked training
+        "masked_training", "mask_weight", "unmasked_probability",
+        # TensorBoard
+        "tensorboard_logging",
+        # ControlNet
+        "controlnet_enabled", "controlnet_type", "controlnet_scale",
+        "controlnet_dir", "controlnet_scratch", "zero_conv_lr_multiplier",
+        # Adversarial
+        "adversarial_enabled", "adversarial_disc_lr", "adversarial_weight",
+        "adversarial_start_step", "adversarial_feature_match",
+        # Misc
+        "notes",
+    )
+
+
+# Names of all view-property accessors on TrainingConfig — used by tests
+# and by ``__dir__`` so agents see them in autocomplete.
+_VIEW_NAMES: tuple[str, ...] = (
+    "model", "run", "network", "optim", "memory", "dataset", "advanced",
 )
 
 
@@ -379,6 +657,53 @@ class TrainingConfig:
 
     # ── Notes ──────────────────────────────────────────────────────────
     notes: list[str] = field(default_factory=list)
+
+    # ─── Grouped views (read + write, delegate to flat fields above) ───
+    # Read-only properties so the views aren't dataclass fields. Each
+    # call returns a fresh lightweight wrapper — cheap, but means
+    # ``cfg.network is cfg.network`` is False (use ``cfg.network.lora_rank``
+    # rather than caching the view if you need identity).
+
+    @property
+    def model(self) -> "_ModelView":
+        """Architecture, resolution, bucketing — see ``_ModelView._FIELDS``."""
+        return _ModelView(self)
+
+    @property
+    def run(self) -> "_RunView":
+        """LR / batch / epochs / EMA / output / sampling / checkpointing."""
+        return _RunView(self)
+
+    @property
+    def network(self) -> "_NetworkView":
+        """LoRA + LyCORIS adapter configuration."""
+        return _NetworkView(self)
+
+    @property
+    def optim(self) -> "_OptimizerView":
+        """Optimizer choice + per-optimizer hyperparams.
+
+        Named ``optim`` (not ``optimizer``) because the flat field
+        ``cfg.optimizer`` already holds the optimizer name string.
+        Use ``cfg.optim.marmotte_warmup_steps`` for grouped access and
+        ``cfg.optimizer`` for the bare optimizer name.
+        """
+        return _OptimizerView(self)
+
+    @property
+    def memory(self) -> "_MemoryView":
+        """Precision, caching, CUDA, quantization, FP8, MeBP, VJP, ..."""
+        return _MemoryView(self)
+
+    @property
+    def dataset(self) -> "_DatasetView":
+        """Tags + augmentation for the live image pipeline."""
+        return _DatasetView(self)
+
+    @property
+    def advanced(self) -> "_AdvancedView":
+        """Niche / experimental features (RLHF, masked, validation, ...)."""
+        return _AdvancedView(self)
 
 
 @dataclass

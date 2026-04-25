@@ -441,12 +441,67 @@ The parametrized tests will exercise the new entry automatically.
 
 ---
 
+## Recipe — read or write TrainingConfig fields (grouped views)
+
+`TrainingConfig` is flat (~237 fields) for backwards compatibility, but
+each field belongs to exactly one of seven *grouped views* that make
+the surface much smaller for AI agents and humans alike.
+
+```python
+cfg = TrainingConfig()
+
+# Read / write via grouped views (recommended for new code)
+cfg.network.lora_rank = 64
+cfg.network.use_dora = True
+cfg.optim.marmotte_warmup_steps = 100   # NB: cfg.optim, not cfg.optimizer
+cfg.memory.cache_latents = False
+print(cfg.run.learning_rate, cfg.run.batch_size)
+
+# Or via the original flat API (still works for legacy code)
+cfg.lora_rank = 64                       # same as cfg.network.lora_rank
+cfg.cache_latents = False                # same as cfg.memory.cache_latents
+```
+
+| View | Owns | When to look here |
+|---|---|---|
+| `cfg.model` | model_type, resolution, vram_gb, bucket_* | architecture / shape |
+| `cfg.run` | learning_rate, batch_size, epochs, EMA, sampling, save_*, max_grad_norm | how a run is shaped |
+| `cfg.network` | lora_rank, lora_alpha, use_dora, lycoris_*, use_lora_fa | LoRA / LyCORIS adapter setup |
+| `cfg.optim` | optimizer name + Adafactor / Marmotte / GaLore / Prodigy params | optimizer hyperparams |
+| `cfg.memory` | mixed_precision, cache_*, CUDA, FP8, MeBP, VJP, async, Liger, Triton, mmap | memory + speed knobs |
+| `cfg.dataset` | tag_shuffle, color_jitter_*, flip, rotate | live image augmentation |
+| `cfg.advanced` | RLHF, ControlNet, masked, validation, Z-Image inventions, attention debug | niche / experimental |
+
+**Why both forms work**: the views are read-write *facades* on the same
+flat storage — there's no second source of truth, no synchronization,
+no risk of drift. ``cfg.network.lora_rank = 64`` writes directly to
+``cfg.lora_rank``.
+
+**Why `cfg.optim` and not `cfg.optimizer`**: `cfg.optimizer` is already
+a flat string field holding the optimizer NAME (e.g. ``"Marmotte"``).
+The view sits at `cfg.optim` to avoid the name collision.
+
+**Useful idioms for agents**:
+- `dir(cfg.network)` returns only the 14 network fields (clean autocomplete)
+- `repr(cfg.optim)` prints all optimizer fields with values for debugging
+- `for view_name in models._VIEW_NAMES:` iterates all seven views
+
+---
+
 ## Recipe — add a new TrainingConfig field
 
 1. **Add the field with a default** in `models.py`:
    ```python
    my_new_flag: bool = False    # ⭐ ALWAYS provide a default
    ```
+   Then **add it to the relevant view's `_FIELDS` tuple** (e.g.
+   `_NetworkView._FIELDS` for a LoRA option) so it shows up under the
+   right `cfg.<view>` namespace. Without this step the field works flat
+   but won't appear in `dir(cfg.network)`.
+
+   The test ``test_every_flat_field_belongs_to_exactly_one_view`` will
+   fail loudly if you forget — run it after adding the field.
+
 2. **Capture from UI** in `ui/training_config_io.build_config_from_ui()`.
 3. **Restore to UI** in `apply_config_to_ui()`. Use `getattr(config, "x", default)`
    so old saved profiles without the field still load.
