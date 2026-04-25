@@ -36,6 +36,7 @@ from dataset_sorter.constants import (
     DEFAULT_CFG_SCALE,
     DEFAULT_IMG2IMG_STRENGTH,
     DEFAULT_INFERENCE_STEPS,
+    MODEL_CAPABILITIES,
     PAG_LAYER_PRESETS,
     PAG_MODELS,
     TRUST_REMOTE_CODE_MODELS,
@@ -73,48 +74,33 @@ FLOW_MATCHING_MODELS = {"flux", "flux2", "chroma", "zimage", "sd3", "sd35",
                         "auraflow", "hidream", "sana", "pixart"}
 
 # ── Model type → pipeline class ────────────────────────────────────────────
-# Maps each model type to its diffusers module and pipeline class.
-# Generic models (zimage, chroma, hidream) use DiffusionPipeline
-# because diffusers does not yet have a dedicated class for these architectures.
+# Auto-derived from MODEL_CAPABILITIES (constants.py) so all the per-arch
+# property tables stay in lockstep. Adding a new architecture only requires
+# touching MODEL_CAPABILITIES — none of these views need updating.
 PIPELINE_MAP = {
-    "sd15":     ("diffusers", "StableDiffusionPipeline"),
-    "sd2":      ("diffusers", "StableDiffusionPipeline"),
-    "sdxl":     ("diffusers", "StableDiffusionXLPipeline"),
-    "pony":     ("diffusers", "StableDiffusionXLPipeline"),
-    "sd3":      ("diffusers", "StableDiffusion3Pipeline"),
-    "sd35":     ("diffusers", "StableDiffusion3Pipeline"),
-    "flux":     ("diffusers", "FluxPipeline"),
-    "flux2":    ("diffusers", "DiffusionPipeline"),
-    "pixart":   ("diffusers", "PixArtSigmaPipeline"),
-    "sana":     ("diffusers", "SanaPipeline"),
-    "kolors":   ("diffusers", "KolorsPipeline"),
-    "cascade":  ("diffusers", "StableCascadeCombinedPipeline"),
-    "hunyuan":  ("diffusers", "HunyuanDiTPipeline"),
-    "auraflow": ("diffusers", "AuraFlowPipeline"),
-    "zimage":   ("diffusers", "DiffusionPipeline"),
-    "chroma":   ("diffusers", "DiffusionPipeline"),
-    "hidream":  ("diffusers", "DiffusionPipeline"),
+    arch: ("diffusers", c.pipeline_class)
+    for arch, c in MODEL_CAPABILITIES.items()
 }
 
-# TRUST_REMOTE_CODE_MODELS is now defined in constants.py and imported above
-# so the UI dialog and worker share a single source of truth.
-
 # Models that use negative prompts (classifier-free guidance)
-CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
-              "cascade", "hunyuan", "kolors", "sana", "auraflow", "hidream"}
+CFG_MODELS = {arch for arch, c in MODEL_CAPABILITIES.items() if c.uses_cfg}
 
 # Models that use guidance_scale in a different way (no negative prompt)
-FLOW_GUIDANCE_MODELS = {"flux", "flux2", "chroma", "zimage"}
+FLOW_GUIDANCE_MODELS = {
+    arch for arch, c in MODEL_CAPABILITIES.items() if c.uses_flow_guidance
+}
 
 # Models whose pipelines accept clip_skip (CLIP-based text encoders)
-CLIP_SKIP_MODELS = {"sd15", "sd2", "sdxl", "pony", "cascade", "kolors", "hunyuan", "sd3", "sd35"}
+CLIP_SKIP_MODELS = {
+    arch for arch, c in MODEL_CAPABILITIES.items() if c.supports_clip_skip
+}
 
 # DiT-based models compatible with TaylorSeer inference caching.
-# UNet models (sd15, sd2, sdxl, pony, kolors, cascade) are NOT supported.
 # TaylorSeer predicts intermediate features via Taylor expansion,
 # offering 3-5x speedup with negligible quality loss.
-TAYLORSEER_MODELS = {"flux", "flux2", "sd3", "sd35", "pixart", "sana",
-                     "hunyuan", "auraflow", "zimage", "chroma", "hidream"}
+TAYLORSEER_MODELS = {
+    arch for arch, c in MODEL_CAPABILITIES.items() if c.supports_taylorseer
+}
 
 # Maximum safetensors header size (bytes) for sanity checks during inspection.
 # Headers > 50 MB are pathological (corrupted checkpoint or non-safetensors file).
@@ -128,129 +114,39 @@ _PREFIX_DOMINANT_THRESHOLD = 0.5
 # ============================================================
 # SECTION: Automatic model type detection
 # ============================================================
+# Detection logic lives in dataset_sorter.model_detection — single source of
+# truth shared with model_scanner and model_library. Keeping thin wrappers
+# here for backwards compatibility with the legacy private API.
+
+from dataset_sorter.model_detection import (
+    detect_arch_from_keys as _detect_arch_from_keys,
+    detect_arch_from_path as _detect_arch_from_path,
+    read_safetensors_keys as _read_safetensors_keys,
+)
+
 
 def _detect_model_type_from_keys(model_path: str) -> str:
-    """Detect model architecture by reading safetensors file header keys.
+    """Detect model architecture by reading safetensors header keys.
 
-    Reads only the JSON header (no tensor data) to inspect weight key names.
-    Different architectures have distinctive key patterns that allow reliable
-    identification even when the filename gives no hints.
-
-    Returns an empty string if detection fails or the file is not safetensors.
+    Thin wrapper around model_detection.detect_arch_from_keys —
+    kept as a private function for legacy callers in this module.
+    Returns an empty string if detection fails.
     """
-    import json
-    import struct
-
-    if not model_path.lower().endswith(".safetensors"):
-        return ""
-
-    try:
-        with open(model_path, "rb") as f:
-            raw = f.read(8)
-            if len(raw) < 8:
-                return ""
-            header_size = struct.unpack("<Q", raw)[0]
-            # Sanity: header > 50 MB is suspicious
-            if header_size > 50_000_000:
-                return ""
-            header = json.loads(f.read(header_size))
-    except Exception:
-        return ""
-
-    keys = set(header.keys())
-    keys.discard("__metadata__")
-
-    # Helper: check if any key starts with a prefix
-    def _any(prefix: str) -> bool:
-        return any(k.startswith(prefix) for k in keys)
-
-    # ── Full-pipeline checkpoints (contain UNet + VAE + TE) ──────────
-    # Standard SD / SDXL / Pony (A1111 format)
-    if _any("model.diffusion_model."):
-        if _any("conditioner.embedders."):
-            return "sdxl"  # dual CLIP → SDXL/Pony
-        # SD2 uses OpenCLIP (cond_stage_model.model.transformer.) while
-        # SD1.5 uses HF CLIP (cond_stage_model.transformer.). Distinguish
-        # to avoid using the wrong prediction type and text encoder.
-        if _any("cond_stage_model.model."):
-            return "sd2"
-        return "sd15"
-
-    # ── Transformer-based architectures ──────────────────────────────
-    # Flux / Flux2: distinctive double_blocks + single_blocks
-    has_double = _any("double_blocks.") or _any("transformer.double_blocks.")
-    has_single = _any("single_blocks.") or _any("transformer.single_blocks.")
-    if has_double and has_single:
-        return "flux"
-
-    # SD3 / SD3.5: joint_blocks
-    if _any("joint_blocks.") or _any("transformer.joint_blocks."):
-        return "sd3"
-
-    # Z-Image: Qwen3 text encoder keys or text_encoder with embed_tokens
-    if _any("text_encoder.model.embed_tokens.") or _any("text_encoder.model.layers."):
-        # LLM-based text encoder (Qwen3) → Z-Image
-        return "zimage"
-
-    # PixArt / Sana: caption_projection is distinctive
-    if _any("caption_projection.") or _any("transformer.caption_projection."):
-        if _any("linear_1.") or _any("transformer.adaln_single."):
-            return "pixart"
-
-    # HiDream: typically has llm-related keys
-    if _any("llm.") or _any("transformer.llm."):
-        return "hidream"
-
-    # ── Z-Image unprefixed transformer weights ─────────────────────
-    # Z-Image single-file checkpoints often lack a 'transformer.' prefix.
-    _ZIMAGE_PREFIXES = {
-        "all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
-        "context_refiner", "noise_refiner", "t_embedder", "x_pad_token",
-    }
-    top_level = {k.split(".")[0] for k in keys}
-    if top_level & _ZIMAGE_PREFIXES:
-        return "zimage"
-
-    # ── Hunyuan DiT unprefixed keys ──────────────────────────────
-    _HUNYUAN_PREFIXES = {"pooler", "text_states_proj", "t_block"}
-    if top_level & _HUNYUAN_PREFIXES:
-        return "hunyuan"
-
-    # ── Component-only checkpoints (just transformer/unet weights) ───
-    # These are fine-tuned checkpoints that need _load_single_file_custom.
-    # Check for transformer-only patterns that indicate the architecture.
-    if _any("transformer_blocks.") or _any("blocks.") or _any("pos_embed"):
-        # Generic transformer checkpoint -- could be Z-Image, Chroma, etc.
-        # Can't reliably distinguish without more context; return empty
-        # so the caller can fall through to other detection methods.
-        pass
-
-    return ""
+    keys = _read_safetensors_keys(model_path)
+    return _detect_arch_from_keys(keys)
 
 
 def _detect_model_type(model_path: str) -> str:
-    """Auto-detect model type by searching for known keywords in the path name.
+    """Auto-detect model type with fallback chain (keys → filename → 'sdxl').
 
-    Checks keywords in a specific order so that 'flux2' matches before 'flux',
-    'sd35' before 'sd3', etc. Falls back to inspecting safetensors file header
-    keys when filename matching fails. Returns 'sdxl' as a last resort.
+    Used by the GenerateWorker when the user picks 'auto' for the model type.
+    Falls back to 'sdxl' which is the safest default for unknown checkpoints.
     """
-    p = model_path.lower()
-    # Normalise separators so "Z-Image", "z_image", "z-image" all match "zimage"
-    p_normalised = p.replace("-", "").replace("_", "")
-    for key in ["flux2", "flux", "sdxl", "sd35", "sd3", "pony", "sd15",
-                "sd2", "pixart", "sana", "kolors", "cascade", "hunyuan",
-                "auraflow", "zimage", "hidream", "chroma"]:
-        if key in p_normalised:
-            return key
-
-    # Filename didn't match — try inspecting safetensors header keys
-    detected = _detect_model_type_from_keys(model_path)
-    if detected:
-        log.info(f"Auto-detected model type '{detected}' from safetensors keys")
-        return detected
-
-    return "sdxl"  # Reasonable default
+    arch = _detect_arch_from_path(model_path, default="")
+    if arch:
+        log.info("Auto-detected model type '%s' from %s", arch, model_path)
+        return arch
+    return "sdxl"  # Reasonable default for generation
 
 
 # ============================================================

@@ -9,10 +9,8 @@ but is kept independent to avoid importing the heavy generate_worker at startup.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,128 +53,21 @@ class ModelInfo:
 
 
 # ---------------------------------------------------------------------------
-# Header inspection
+# Header inspection — delegates to dataset_sorter.model_detection (single
+# source of truth shared with generate_worker and model_library)
 # ---------------------------------------------------------------------------
 
-def _read_safetensors_keys(path: Path) -> list[str]:
-    """Read only the JSON header from a .safetensors file without loading weights."""
-    try:
-        with open(path, "rb") as f:
-            size_bytes = f.read(8)
-            if len(size_bytes) < 8:
-                return []
-            header_size = struct.unpack("<Q", size_bytes)[0]
-            if header_size > 200 * 1024 * 1024:  # sanity guard — 200 MB header = corrupt
-                return []
-            header_json = f.read(header_size)
-        header: dict = json.loads(header_json)
-        return [k for k in header.keys() if k != "__metadata__"]
-    except Exception as exc:
-        log.debug("Could not read safetensors header from %s: %s", path, exc)
-        return []
-
-
-def _detect_arch_from_keys(keys: list[str]) -> str:
-    """Detect architecture from weight key patterns. Returns '' if unknown."""
-    if not keys:
-        return ""
-
-    # Full SD1/SD2/SDXL pipeline checkpoints (ComfyUI / A1111 style)
-    if any("model.diffusion_model." in k for k in keys):
-        if any("conditioner.embedders." in k for k in keys):
-            return "sdxl"
-        if any("cond_stage_model.model." in k for k in keys):
-            return "sd2"
-        return "sd15"
-
-    # Transformer-based: Flux family
-    has_double = any("double_blocks." in k for k in keys)
-    has_single = any("single_blocks." in k for k in keys)
-    if has_double and has_single:
-        if any("llm." in k or "language_model." in k for k in keys):
-            return "flux2"
-        return "flux"
-
-    # SD3 / SD3.5
-    if any("joint_blocks." in k for k in keys):
-        return "sd3"
-
-    # Z-Image: Qwen3 LLM text encoder
-    if any("text_encoder.model.embed_tokens." in k for k in keys):
-        return "zimage"
-
-    # Z-Image unprefixed checkpoint (no "transformer." prefix)
-    zimage_markers = {"all_final_layer", "cap_embedder", "context_embedder",
-                      "final_layer", "img_attn", "img_in", "img_out", "txt_in", "txt_out"}
-    prefix_keys = {k.split(".")[0] for k in keys}
-    if len(zimage_markers & prefix_keys) >= 3:
-        return "zimage"
-
-    # PixArt / Sana
-    if any("caption_projection." in k for k in keys):
-        return "pixart"
-
-    # HiDream
-    if any("llm." in k or "transformer.llm." in k for k in keys):
-        return "hidream"
-
-    # Hunyuan
-    if any("pooler" in k for k in keys) and any(
-        "text_states_proj" in k or "t_block" in k for k in keys
-    ):
-        return "hunyuan"
-
-    # Chroma (flow, no CLIP)
-    if any("chroma" in k.lower() for k in keys):
-        return "chroma"
-
-    return ""
-
-
-def _detect_arch_from_filename(stem: str) -> str:
-    """Fallback: detect from filename keywords."""
-    n = stem.lower()
-    # Order matters — more specific first
-    keywords = [
-        ("flux2",    "flux2"),
-        ("flux",     "flux"),
-        ("sdxl",     "sdxl"),
-        ("sd_xl",    "sdxl"),
-        ("sd35",     "sd35"),
-        ("sd3.5",    "sd35"),
-        ("sd3",      "sd3"),
-        ("pony",     "pony"),
-        ("sd15",     "sd15"),
-        ("sd_1.5",   "sd15"),
-        ("sd2",      "sd2"),
-        ("sd_2",     "sd2"),
-        ("pixart",   "pixart"),
-        ("sana",     "sana"),
-        ("kolors",   "kolors"),
-        ("cascade",  "cascade"),
-        ("hunyuan",  "hunyuan"),
-        ("auraflow", "auraflow"),
-        ("zimage",   "zimage"),
-        ("z-image",  "zimage"),
-        ("hidream",  "hidream"),
-        ("chroma",   "chroma"),
-    ]
-    for kw, arch in keywords:
-        if kw in n:
-            return arch
-    return ""
+from dataset_sorter.model_detection import (
+    detect_arch_from_filename as _detect_arch_from_filename,
+    detect_arch_from_keys as _detect_arch_from_keys,
+    detect_arch_from_path,
+    read_safetensors_keys as _read_safetensors_keys,
+)
 
 
 def detect_model_arch(path: Path) -> str:
     """Detect model architecture from a model file path."""
-    suffix = path.suffix.lower()
-    if suffix == ".safetensors":
-        keys = _read_safetensors_keys(path)
-        if keys:
-            arch = _detect_arch_from_keys(keys)
-            if arch:
-                return arch
-    return _detect_arch_from_filename(path.stem)
+    return detect_arch_from_path(path, default="")
 
 
 # ---------------------------------------------------------------------------

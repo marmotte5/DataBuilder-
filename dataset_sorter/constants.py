@@ -628,27 +628,174 @@ DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no chang
 DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off, 3.0 typical)
 DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Unified model capabilities registry — single source of truth.
+#
+# Each architecture has many properties scattered across the codebase:
+# pipeline class, PAG support, CFG-style guidance vs flow-matching, clip-skip
+# compatibility, TaylorSeer compatibility, trust_remote_code requirement, etc.
+# Before this registry these were duplicated in 7 different sets across 3
+# files — and inevitably drifted (PAG was silently unavailable for 7 archs
+# because PAG_MODELS wasn't kept in sync with PIPELINE_MAP).
+#
+# Backwards-compatible views (CFG_MODELS, FLOW_GUIDANCE_MODELS, etc.) are
+# computed from this registry below so existing code keeps working but new
+# code can — and should — read from MODEL_CAPABILITIES directly.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ModelCapabilities:
+    """Per-architecture flags for what a diffusion model supports.
+
+    Field semantics:
+        pipeline_class:       diffusers class for standard inference
+        pag_pipeline_class:   diffusers PAG-augmented variant (None = unsupported)
+        uses_cfg:             accepts negative_prompt + guidance_scale (CFG)
+        uses_flow_guidance:   guidance via flow-matching schedule (no negative)
+        supports_clip_skip:   pipeline accepts clip_skip kwarg (CLIP-based TEs)
+        supports_taylorseer:  DiT-based — eligible for TaylorSeer caching
+        trust_remote_code:    requires trust_remote_code=True on from_pretrained
+    """
+    pipeline_class: str
+    pag_pipeline_class: str | None
+    uses_cfg: bool
+    uses_flow_guidance: bool
+    supports_clip_skip: bool
+    supports_taylorseer: bool
+    trust_remote_code: bool
+
+
+# IMPORTANT: keep this dict the canonical source. The downstream views
+# (PIPELINE_MAP, PAG_MODELS, CFG_MODELS, FLOW_GUIDANCE_MODELS, CLIP_SKIP_MODELS,
+# TAYLORSEER_MODELS, TRUST_REMOTE_CODE_MODELS) are computed from it.
+MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
+    "sd15": ModelCapabilities(
+        pipeline_class="StableDiffusionPipeline",
+        pag_pipeline_class="StableDiffusionPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "sd2": ModelCapabilities(
+        pipeline_class="StableDiffusionPipeline",
+        pag_pipeline_class="StableDiffusionPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "sdxl": ModelCapabilities(
+        pipeline_class="StableDiffusionXLPipeline",
+        pag_pipeline_class="StableDiffusionXLPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "pony": ModelCapabilities(
+        pipeline_class="StableDiffusionXLPipeline",
+        pag_pipeline_class="StableDiffusionXLPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "sd3": ModelCapabilities(
+        pipeline_class="StableDiffusion3Pipeline",
+        pag_pipeline_class="StableDiffusion3PAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "sd35": ModelCapabilities(
+        pipeline_class="StableDiffusion3Pipeline",
+        pag_pipeline_class="StableDiffusion3PAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "flux": ModelCapabilities(
+        pipeline_class="FluxPipeline",
+        pag_pipeline_class=None,  # No diffusers PAG variant for Flux as of 0.37
+        uses_cfg=False, uses_flow_guidance=True,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "flux2": ModelCapabilities(
+        pipeline_class="DiffusionPipeline",  # generic loader (custom pipeline on HF)
+        pag_pipeline_class=None,
+        uses_cfg=False, uses_flow_guidance=True,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=True,
+    ),
+    "pixart": ModelCapabilities(
+        pipeline_class="PixArtSigmaPipeline",
+        pag_pipeline_class="PixArtSigmaPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "sana": ModelCapabilities(
+        pipeline_class="SanaPipeline",
+        pag_pipeline_class="SanaPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "kolors": ModelCapabilities(
+        pipeline_class="KolorsPipeline",
+        pag_pipeline_class="KolorsPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "cascade": ModelCapabilities(
+        pipeline_class="StableCascadeCombinedPipeline",
+        pag_pipeline_class=None,  # No PAG variant for Cascade
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=False, trust_remote_code=False,
+    ),
+    "hunyuan": ModelCapabilities(
+        pipeline_class="HunyuanDiTPipeline",
+        pag_pipeline_class="HunyuanDiTPAGPipeline",
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=True, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "auraflow": ModelCapabilities(
+        pipeline_class="AuraFlowPipeline",
+        pag_pipeline_class=None,
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=False,
+    ),
+    "zimage": ModelCapabilities(
+        pipeline_class="DiffusionPipeline",
+        pag_pipeline_class=None,
+        uses_cfg=False, uses_flow_guidance=True,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=True,
+    ),
+    "chroma": ModelCapabilities(
+        pipeline_class="DiffusionPipeline",
+        pag_pipeline_class=None,
+        uses_cfg=False, uses_flow_guidance=True,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=True,
+    ),
+    "hidream": ModelCapabilities(
+        pipeline_class="DiffusionPipeline",
+        pag_pipeline_class=None,
+        uses_cfg=True, uses_flow_guidance=False,
+        supports_clip_skip=False, supports_taylorseer=True, trust_remote_code=True,
+    ),
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backwards-compatible derived views — DO NOT add architectures here.
+# Add them to MODEL_CAPABILITIES above and these will update automatically.
+# ─────────────────────────────────────────────────────────────────────────
+
 # Models that require trust_remote_code=True when loading from HuggingFace.
-# These pipelines pull arbitrary Python from the model repo (custom tokenizers,
-# attention modules, etc.) and execute it at load time — a clear RCE surface
-# if the source repo is malicious. The UI shows a confirmation dialog (with
-# "remember my choice" via QSettings) before loading any of these.
-TRUST_REMOTE_CODE_MODELS: set[str] = {"zimage", "flux2", "chroma", "hidream"}
+TRUST_REMOTE_CODE_MODELS: set[str] = {
+    arch for arch, c in MODEL_CAPABILITIES.items() if c.trust_remote_code
+}
 
 # Models that support Perturbed Attention Guidance via diffusers' *PAGPipeline
-# variants (drastically improves structure quality — hands, faces — without
-# the color saturation artefacts of a high CFG).
+# variants. Auto-derived from MODEL_CAPABILITIES so adding a PAG-capable arch
+# in one place automatically lights up the UI dropdown / pipeline selection.
 PAG_MODELS: dict[str, str] = {
-    "sd15":     "StableDiffusionPAGPipeline",
-    "sd2":      "StableDiffusionPAGPipeline",
-    "sdxl":     "StableDiffusionXLPAGPipeline",
-    "pony":     "StableDiffusionXLPAGPipeline",
-    "sd3":      "StableDiffusion3PAGPipeline",
-    "sd35":     "StableDiffusion3PAGPipeline",
-    "pixart":   "PixArtSigmaPAGPipeline",
-    "sana":     "SanaPAGPipeline",
-    "kolors":   "KolorsPAGPipeline",
-    "hunyuan":  "HunyuanDiTPAGPipeline",
+    arch: c.pag_pipeline_class
+    for arch, c in MODEL_CAPABILITIES.items()
+    if c.pag_pipeline_class is not None
 }
 
 # Layer presets for PAG. Values match diffusers' `pag_applied_layers` names.

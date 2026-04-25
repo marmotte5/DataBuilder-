@@ -563,128 +563,39 @@ class ModelLibrary:
     ]
 
     def _detect_architecture(self, keys: list[str], metadata: dict) -> str:
-        """Detect the SD architecture by checking metadata first, then key patterns.
+        """Detect the SD architecture, preferring metadata over key inspection.
 
-        Metadata check is preferred because it is explicit and model-creator
-        supplied.  Key-pattern detection is used as a fallback when metadata
-        is absent or non-standard.
+        Metadata is preferred because model authors set ``modelspec.architecture``
+        / ``ss_base_model_version`` explicitly, while key patterns are inferred.
 
-        Metadata fields checked (in order):
-            - modelspec.architecture  (ModelSpec standard)
-            - ss_base_model_version   (CivitAI / kohya_ss)
-            - ss_sd_model_hash        (presence only — hash not checked)
-            - tags                    (CivitAI tag list)
+        Falls back through three levels:
+            1. Metadata (modelspec / kohya / CivitAI)
+            2. ``model_detection.detect_arch_from_keys`` — shared with the
+               training and generation paths so all three views agree.
+            3. ``model_detection.detect_lora_arch_from_keys`` — specialized
+               LoRA fingerprinting (Flux LoRA vs SDXL LoRA vs ...).
+
+        Returns "unknown" only when all three signals fail.
         """
+        from dataset_sorter.model_detection import (
+            detect_arch_from_keys, detect_lora_arch_from_keys,
+        )
+
         # ── 1. Metadata-first detection ───────────────────────────────────────
         arch_from_meta = self._detect_architecture_from_metadata(metadata)
         if arch_from_meta != "unknown":
             return arch_from_meta
 
-        # ── 2. Key-pattern fallback ───────────────────────────────────────────
-        if not keys:
-            return "unknown"
+        # ── 2. Standard key-pattern detection (shared with worker / scanner) ─
+        arch = detect_arch_from_keys(keys)
+        if arch:
+            return arch
 
-        key_set = set(keys)
-
-        def _any(prefix: str) -> bool:
-            return any(k.startswith(prefix) for k in key_set)
-
-        def _contains(fragment: str) -> bool:
-            return any(fragment in k for k in key_set)
-
-        # SD1.5 / SDXL / SD2 — A1111 full checkpoint format
-        if _any("model.diffusion_model."):
-            if _any("conditioner.embedders."):
-                # Pony is SDXL-based — already caught by metadata, but double-check
-                return "sdxl"
-            if _any("cond_stage_model.model."):
-                return "sd2"
-            return "sd15"
-
-        # Stable Cascade / Wuerstchen
-        if _any("down_blocks.") and _any("up_blocks.") and _any("effnet."):
-            return "cascade"
-        if _contains("prior_") and _contains("decoder_"):
-            return "wuerstchen"
-
-        # DeepFloyd IF: pixel-space U-Net with t5 encoder
-        if _any("unet.time_embed.") and _any("encoder_hid_proj."):
-            return "deepfloyd"
-
-        # Flux: double_blocks + single_blocks
-        has_double = _any("double_blocks.") or _any("transformer.double_blocks.")
-        has_single = _any("single_blocks.") or _any("transformer.single_blocks.")
-        if has_double and has_single:
-            # Flux2 uses an LLM text encoder; hard to distinguish from key names alone
-            return "flux"
-
-        # SD3 / SD3.5: joint_transformer_blocks or joint_blocks
-        if _any("joint_transformer_blocks.") or _any("transformer.joint_transformer_blocks."):
-            return "sd35"
-        if _any("joint_blocks.") or _any("transformer.joint_blocks."):
-            return "sd3"
-
-        # HiDream: LLM sub-model keys
-        if _any("llm.") or _any("transformer.llm."):
-            return "hidream"
-
-        # Z-Image: LLM-based text encoder (Qwen3)
-        if _any("text_encoder.model.embed_tokens.") or _any("text_encoder.model.layers."):
-            return "zimage"
-
-        # PixArt Sigma / Sana: caption_projection distinctive key
-        if _any("caption_projection.") or _any("transformer.caption_projection."):
-            if _any("transformer.adaln_single.") or _any("adaln_single."):
-                return "pixart"
-            return "sana"
-
-        # Kolors: ChatGLM text encoder
-        if _any("text_encoder.transformer.word_embeddings."):
-            return "kolors"
-
-        # Chroma: specific to its custom transformer block naming
-        if _any("chroma_") or _contains("chroma."):
-            return "chroma"
-
-        # AuraFlow: specific block naming
-        if _any("register_tokens") and _any("joint_transformer_blocks"):
-            return "auraflow"
-
-        # AnimateDiff: motion module keys
-        if _contains("motion_modules.") or _contains("temporal_attention."):
-            return "animatediff"
-
-        # Z-Image unprefixed top-level keys
-        _ZIMAGE_TOPS = {"all_final_layer", "all_x_embedder", "cap_embedder", "cap_pad_token",
-                        "context_refiner", "noise_refiner", "t_embedder", "x_pad_token"}
-        top_level = {k.split(".")[0] for k in key_set}
-        if top_level & _ZIMAGE_TOPS:
-            return "zimage"
-
-        # Hunyuan DiT unprefixed
-        _HUNYUAN_TOPS = {"pooler", "text_states_proj", "t_block"}
-        if top_level & _HUNYUAN_TOPS:
-            return "hunyuan"
-
-        # LoRA files: derive architecture from specialised key naming conventions
-        is_lora_file = any(
-            "lora_unet_" in k or "lora_A." in k or "lora_down." in k
-            or "lora_up." in k or "lora_B." in k
-            for k in key_set
-        )
-        if is_lora_file:
-            # Flux LoRA
-            if _contains("double_blocks") or _contains("single_blocks"):
-                return "flux"
-            # SD3 LoRA
-            if _contains("joint_attn") or _contains("joint_blocks"):
-                return "sd3"
-            # SDXL LoRA: second TE or add_embedding
-            if any("lora_te1_" in k or "lora_te2_" in k for k in key_set):
-                return "sdxl"
-            if _contains("add_embedding") or _contains("add_k_proj"):
-                return "sdxl"
-            return "sd15"
+        # ── 3. LoRA-specific fingerprinting (kept separate because the key
+        #       set of an adapter differs structurally from a full checkpoint) ─
+        arch = detect_lora_arch_from_keys(keys)
+        if arch:
+            return arch
 
         return "unknown"
 
