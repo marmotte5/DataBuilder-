@@ -2012,7 +2012,7 @@ class TagImportanceSection(QWidget):
         self.btn_apply_buckets.clicked.connect(self._apply_smart_buckets)
         ctrl.addWidget(self.btn_apply_buckets)
 
-        self.btn_clean = QPushButton("Clean Noise & Captions")
+        self.btn_clean = QPushButton("Clean Noise && Captions")
         self.btn_clean.setStyleSheet(DANGER_BUTTON_STYLE)
         self.btn_clean.setToolTip(
             "Delete noise tags and consolidate caption-style tags "
@@ -2042,7 +2042,7 @@ class TagImportanceSection(QWidget):
         self.btn_view_captions.clicked.connect(lambda: self._show_view("captions"))
         view_row.addWidget(self.btn_view_captions)
 
-        self.btn_view_noise = QPushButton("Noise & Generic")
+        self.btn_view_noise = QPushButton("Noise && Generic")
         self.btn_view_noise.clicked.connect(lambda: self._show_view("noise"))
         view_row.addWidget(self.btn_view_noise)
 

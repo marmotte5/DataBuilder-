@@ -1110,8 +1110,15 @@ class MainWindow(QMainWindow):
             "project's dataset/ subfolder."
         )
         path_bar.addWidget(self.source_input, 3)
+        # Tight "..." browse buttons need their own padding — global
+        # QPushButton padding is 8px 20px, so 32px width swallows the dots.
+        _ellipsis_btn_style = (
+            "QPushButton { padding: 4px 0px; min-width: 32px; "
+            "font-weight: 700; }"
+        )
         btn_src = QPushButton("...")
-        btn_src.setMaximumWidth(32)
+        btn_src.setStyleSheet(_ellipsis_btn_style)
+        btn_src.setFixedWidth(36)
         btn_src.setToolTip("Browse for images folder")
         btn_src.clicked.connect(self._browse_source)
         path_bar.addWidget(btn_src)
@@ -1139,7 +1146,8 @@ class MainWindow(QMainWindow):
         )
         path_bar.addWidget(self.output_input, 3)
         btn_out = QPushButton("...")
-        btn_out.setMaximumWidth(32)
+        btn_out.setStyleSheet(_ellipsis_btn_style)
+        btn_out.setFixedWidth(36)
         btn_out.setToolTip("Browse for output folder")
         btn_out.clicked.connect(self._browse_output)
         path_bar.addWidget(btn_out)
