@@ -441,6 +441,41 @@ The parametrized tests will exercise the new entry automatically.
 
 ---
 
+## 2026 training best practices — what's wired and how to enable
+
+DataBuilder implements four 2026-era best-practice training upgrades.
+All default to **off** so existing recipes are unchanged; flip them on
+deliberately when their costs/benefits match your run.
+
+| Feature | Config field(s) | When to use |
+|---|---|---|
+| **x₀-supervision** | `x0_supervision: bool` (default False) | Effective batch ≥ 10 — converts ε-loss to clean-image loss. Skip on flow models (Flux/Z-Image/SD3) — they already operate on a clean target. |
+| **Progressive batch scaling** | `progressive_batch_warmup_steps: int` (default 0) | Ramps the effective accumulation 1 → `gradient_accumulation` over the first N optimizer steps. Set to 50–200 for short LoRA, 500+ for full fine-tunes. |
+| **Cosine + terminal annealing** | `lr_scheduler="cosine_with_terminal_anneal"` + `terminal_anneal_fraction: float` (default 0.1) | Holds the last 10% of training at a low non-zero LR rather than decaying to zero. Helps fine-detail convergence at large effective batch. |
+| **Auto-LR scaling with effective batch** | `lr_scale_with_batch: str ∈ {"none", "linear", "sqrt"}` + `lr_scale_reference_batch: int` | When you increase batch size, the canonical LR for the same training quality scales (linearly or by sqrt). Set this once and the trainer scales the LR you wrote in the recipe. |
+
+**Quick recipe** (RTX 4090 LoRA on SDXL, effective batch 16):
+```python
+cfg = TrainingConfig(
+    model_type="sdxl_lora",
+    learning_rate=1e-4,
+    batch_size=2, gradient_accumulation=8,           # effective 16
+    lr_scheduler="cosine_with_terminal_anneal",
+    terminal_anneal_fraction=0.1,
+    lr_scale_with_batch="sqrt", lr_scale_reference_batch=1,  # auto-scale
+    progressive_batch_warmup_steps=100,              # ramp 1→8 over first 100 steps
+    x0_supervision=True,                             # 2026 cleanness loss
+)
+```
+
+Implementation entry points if you need to extend or debug:
+- x₀ loss: `train_backend_base.py:_compute_x0_loss`
+- Progressive batch: `trainer.py:_current_grad_accum` (closure inside the train loop)
+- Terminal anneal: `optimizer_factory.py:_CosineWithTerminalAnnealScheduler`
+- LR scaling: `optimizer_factory.py:effective_learning_rate`
+
+---
+
 ## Recipe — read or write TrainingConfig fields (grouped views)
 
 `TrainingConfig` is flat (~237 fields) for backwards compatibility, but

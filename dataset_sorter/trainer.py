@@ -938,8 +938,9 @@ class Trainer:
         # ── 9. Build parameter groups (separate LR for text encoders) ──
         if config.triton_fused_adamw:
             from dataset_sorter.triton_kernels import FusedAdamW
+            from dataset_sorter.optimizer_factory import effective_learning_rate
             self.optimizer = FusedAdamW(
-                self._build_param_groups(), lr=config.learning_rate,
+                self._build_param_groups(), lr=effective_learning_rate(config),
                 weight_decay=config.weight_decay,
             )
             log.info("Using Triton FusedAdamW (8 ops → 1 kernel)")
@@ -1200,7 +1201,10 @@ class Trainer:
         the unet stays frozen and forwards through LyCORIS hooks.
         """
         config = self.config
-        base_lr = config.learning_rate
+        # Apply effective-batch LR scaling so LoRA+ and TE LRs derive from
+        # the same scaled base as the optimizer's headline LR.
+        from dataset_sorter.optimizer_factory import effective_learning_rate
+        base_lr = effective_learning_rate(config)
         plus_ratio = getattr(config, "lora_plus_ratio", 0.0)
         adapter_type = getattr(self.backend, "adapter_type", None)
 
@@ -1385,6 +1389,25 @@ class Trainer:
         grad_accum_steps = config.gradient_accumulation
         running_loss = 0.0
         _valid_microbatches = 0  # tracks non-NaN micro-batches for correct averaging
+
+        # Progressive batch scaling — ramp effective batch size from a small
+        # value to ``gradient_accumulation`` over the first N optimizer steps.
+        # Acts as a curriculum (smaller batch = noisier gradients = better
+        # exploration early), then settles into the configured large batch
+        # for stability. 2026 best practice for effective-batch 10–20.
+        _prog_batch_warmup = int(getattr(config, "progressive_batch_warmup_steps", 0))
+
+        def _current_grad_accum() -> int:
+            """Effective grad_accum for the current global step (with ramp)."""
+            if _prog_batch_warmup <= 0 or grad_accum_steps <= 1:
+                return grad_accum_steps
+            done = self.state.global_step
+            if done >= _prog_batch_warmup:
+                return grad_accum_steps
+            # Linear ramp: 1 at step 0, full grad_accum at step _prog_batch_warmup
+            ratio = max(0.0, min(1.0, done / max(1, _prog_batch_warmup)))
+            ramped = 1 + (grad_accum_steps - 1) * ratio
+            return max(1, int(round(ramped)))
 
         # ── VJP Approximation (Feb 2026) ──
         vjp_scaler = None
@@ -1575,7 +1598,9 @@ class Trainer:
                                 self._last_batch_caption = cap
 
                         loss = self._training_step(batch, _fp8_ctx)
-                    loss = loss / grad_accum_steps
+                    # Divide by the *current* effective batch — for progressive
+                    # ramp this is smaller early, growing toward grad_accum_steps.
+                    loss = loss / _current_grad_accum()
 
                     if torch.isnan(loss) or torch.isinf(loss):
                         _epoch_nan_count += 1
@@ -1636,7 +1661,11 @@ class Trainer:
                 _accum_count += 1
 
                 # ── Optimizer step (on accumulation boundary) ──
-                if _accum_count % grad_accum_steps == 0:
+                # When progressive batch scaling is on, the boundary moves
+                # over time — early steps fire faster (smaller effective
+                # batch), later steps fire on the configured grad_accum.
+                _current_accum = _current_grad_accum()
+                if _accum_count % _current_accum == 0:
                     if fused_backward is not None:
                         # Fused backward: optimizer stepped during backward via hooks
                         fused_backward.finish_step()
