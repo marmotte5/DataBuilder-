@@ -37,7 +37,8 @@ def _databuilder_version() -> str:
     try:
         from importlib.metadata import version
         return version("dataset-sorter")
-    except Exception:
+    except Exception as e:
+        log.debug("Could not read DataBuilder version: %s", e)
         return "unknown (check git log)"
 
 

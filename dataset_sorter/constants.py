@@ -628,6 +628,13 @@ DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no chang
 DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off, 3.0 typical)
 DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset
 
+# Models that require trust_remote_code=True when loading from HuggingFace.
+# These pipelines pull arbitrary Python from the model repo (custom tokenizers,
+# attention modules, etc.) and execute it at load time — a clear RCE surface
+# if the source repo is malicious. The UI shows a confirmation dialog (with
+# "remember my choice" via QSettings) before loading any of these.
+TRUST_REMOTE_CODE_MODELS: set[str] = {"zimage", "flux2", "chroma", "hidream"}
+
 # Models that support Perturbed Attention Guidance via diffusers' *PAGPipeline
 # variants (drastically improves structure quality — hands, faces — without
 # the color saturation artefacts of a high CFG).

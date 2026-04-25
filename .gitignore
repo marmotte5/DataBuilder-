@@ -40,3 +40,13 @@ Thumbs.db
 .cache/
 *.db
 *.lmdb
+
+# Training session artifacts (auto-saved per output directory)
+# These contain absolute paths, model paths, and optimizer state — they're
+# user-machine-specific and should never be committed.
+.last_session.json
+.checkpoint.*
+random_states.pt
+random_states_aux.json
+checkpoint-*/
+training_state.json

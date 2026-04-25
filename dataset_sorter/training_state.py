@@ -26,6 +26,7 @@ Notes techniques:
 """
 
 import json
+import logging
 import random
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -35,6 +36,8 @@ from typing import Optional, List, Dict, Any
 
 import numpy as np
 import torch
+
+log = logging.getLogger(__name__)
 
 
 def _to_json_safe(value: Any) -> Any:
@@ -106,6 +109,10 @@ class TrainingStateManager:
 
     STATE_FILENAME = "training_state.json"
     RANDOM_STATE_FILENAME = "random_states.pt"
+    # numpy + python RNG state stored as JSON-safe primitives so torch.load can
+    # use weights_only=True on the .pt file (which then only contains tensors).
+    # See save_training_state / load_training_state below.
+    RANDOM_STATE_AUX_FILENAME = "random_states_aux.json"
 
     def __init__(self, output_dir: Path, max_checkpoints: int = 3):
         self.output_dir = Path(output_dir)
@@ -155,15 +162,39 @@ class TrainingStateManager:
 
         # Save RNG states to guarantee exact reproducibility on resume:
         # without this, the batch/augmentation sequence would differ after resume.
-        random_states = {
+        # We split storage so the .pt file only ever contains tensors — that
+        # lets us re-load it with weights_only=True (no pickle RCE surface).
+        torch_states = {
             'torch': torch.random.get_rng_state(),
             'torch_cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
-            'numpy': np.random.get_state(),
-            'python': random.getstate(),
         }
         _rng_tmp = checkpoint_dir / (self.RANDOM_STATE_FILENAME + ".tmp")
-        torch.save(random_states, str(_rng_tmp))
+        torch.save(torch_states, str(_rng_tmp))
         _rng_tmp.replace(checkpoint_dir / self.RANDOM_STATE_FILENAME)
+
+        # numpy + python RNG state → JSON-safe primitives.
+        # np.random.get_state() returns (str, ndarray[uint32], int, int, float).
+        # random.getstate() returns (int, tuple[int], None | float).
+        np_state = np.random.get_state()
+        py_state = random.getstate()
+        aux = {
+            'numpy': {
+                'algorithm': np_state[0],
+                'keys': np_state[1].tolist(),
+                'pos': int(np_state[2]),
+                'has_gauss': int(np_state[3]),
+                'cached_gaussian': float(np_state[4]),
+            },
+            'python': {
+                'version': py_state[0],
+                'state': list(py_state[1]),
+                'gauss_next': py_state[2],
+            },
+        }
+        _aux_tmp = checkpoint_dir / (self.RANDOM_STATE_AUX_FILENAME + ".tmp")
+        with open(_aux_tmp, 'w') as f:
+            json.dump(aux, f)
+        _aux_tmp.replace(checkpoint_dir / self.RANDOM_STATE_AUX_FILENAME)
 
         # The accelerator saves optimizer + scheduler, preserving the momentum
         # of adaptive optimizers (Adam, SOAP, Marmotte).
@@ -192,23 +223,77 @@ class TrainingStateManager:
             return None
 
     def restore_random_states(self, checkpoint_dir: Path):
-        """Restore random states for reproducibility."""
+        """Restore random states for reproducibility.
+
+        Loads torch RNG state from a tensors-only .pt file (weights_only=True
+        — no pickle RCE surface) and the numpy/python RNG state from a JSON
+        file produced by save_training_state(). Returns True on success.
+
+        Falls back gracefully when only the legacy single-file .pt is present
+        (older checkpoints): if that legacy load fails we just skip RNG
+        restoration — training continues with fresh randomness rather than
+        risking arbitrary code execution from a malicious checkpoint.
+        """
         checkpoint_dir = Path(checkpoint_dir)
         random_state_path = checkpoint_dir / self.RANDOM_STATE_FILENAME
+        aux_state_path = checkpoint_dir / self.RANDOM_STATE_AUX_FILENAME
 
         if not random_state_path.exists():
             return False
 
         try:
-            states = torch.load(random_state_path, map_location='cpu', weights_only=False)
+            # Tensors-only load — safe even on a malicious .pt file.
+            states = torch.load(
+                random_state_path,
+                map_location='cpu',
+                weights_only=True,
+            )
+        except Exception:
+            # Legacy checkpoint or corrupted file — skip RNG restoration
+            # rather than enable RCE. Training will resume with new randomness.
+            log.warning(
+                "Could not load %s with weights_only=True — skipping RNG restoration. "
+                "Resuming with fresh randomness.",
+                random_state_path,
+            )
+            return False
+
+        try:
             torch.random.set_rng_state(states['torch'])
             if torch.cuda.is_available() and states.get('torch_cuda'):
                 torch.cuda.set_rng_state_all(states['torch_cuda'])
-            np.random.set_state(states['numpy'])
-            random.setstate(states['python'])
-            return True
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to restore torch RNG: %s", e)
             return False
+
+        # numpy + python state from the JSON sidecar (added in v2 of this format).
+        # Older checkpoints don't have this file — that's OK, we only lose
+        # exact dataset-shuffle reproducibility, not training correctness.
+        if not aux_state_path.exists():
+            return True
+        try:
+            with open(aux_state_path, 'r') as f:
+                aux = json.load(f)
+            np_block = aux['numpy']
+            np_state = (
+                np_block['algorithm'],
+                np.array(np_block['keys'], dtype=np.uint32),
+                int(np_block['pos']),
+                int(np_block['has_gauss']),
+                float(np_block['cached_gaussian']),
+            )
+            np.random.set_state(np_state)
+            py_block = aux['python']
+            random.setstate((
+                py_block['version'],
+                tuple(py_block['state']),
+                py_block['gauss_next'],
+            ))
+        except Exception as e:
+            log.warning("Failed to restore numpy/python RNG state: %s", e)
+            # torch RNG was restored — that's enough for reproducible loss curves.
+
+        return True
 
     def can_resume(self, checkpoint_dir: Path) -> bool:
         """Check if a checkpoint is resumable."""

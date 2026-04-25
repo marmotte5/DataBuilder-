@@ -1253,6 +1253,19 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             self._log("ERROR: No output directory specified.")
             return
 
+        # Security: trust_remote_code architectures will execute custom Python
+        # from the HuggingFace repo at training start. Confirm before kicking
+        # off a long-running job.
+        model_type = self.train_model_combo.currentData() or ""
+        # Strip "_lora" / "_full" suffix to recover the architecture id.
+        arch = model_type.replace("_lora", "").replace("_full", "")
+        from dataset_sorter.constants import TRUST_REMOTE_CODE_MODELS
+        if arch in TRUST_REMOTE_CODE_MODELS:
+            from dataset_sorter.ui.security_prompts import confirm_trust_remote_code
+            if not confirm_trust_remote_code(self, arch, model_path):
+                self._log("Training cancelled — trust required for this architecture.")
+                return
+
         # Request dataset from main window
         self.request_training_data.emit()
 

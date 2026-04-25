@@ -999,6 +999,15 @@ class GenerateTab(QWidget):
         precision = self.precision_combo.currentData()
         lora_adapters = self._get_lora_adapters()
 
+        # Security: trust_remote_code architectures execute custom Python from
+        # HuggingFace at load time. Confirm with the user before proceeding.
+        from dataset_sorter.constants import TRUST_REMOTE_CODE_MODELS
+        if model_type in TRUST_REMOTE_CODE_MODELS:
+            from dataset_sorter.ui.security_prompts import confirm_trust_remote_code
+            if not confirm_trust_remote_code(self, model_type, model_path):
+                self.status_label.setText("Model load cancelled — trust required for this architecture.")
+                return
+
         self.btn_load.setEnabled(False)
         self.btn_generate.setEnabled(False)
         self.progress_bar.setVisible(True)

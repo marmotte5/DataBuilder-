@@ -38,6 +38,7 @@ from dataset_sorter.constants import (
     DEFAULT_INFERENCE_STEPS,
     PAG_LAYER_PRESETS,
     PAG_MODELS,
+    TRUST_REMOTE_CODE_MODELS,
 )
 
 log = logging.getLogger(__name__)
@@ -95,10 +96,8 @@ PIPELINE_MAP = {
     "hidream":  ("diffusers", "DiffusionPipeline"),
 }
 
-# Models that need trust_remote_code
-# These models load custom Python code from HuggingFace repositories
-# (tokenizers, attention mechanisms, etc.) requiring explicit trust.
-TRUST_REMOTE_CODE_MODELS = {"zimage", "flux2", "chroma", "hidream"}
+# TRUST_REMOTE_CODE_MODELS is now defined in constants.py and imported above
+# so the UI dialog and worker share a single source of truth.
 
 # Models that use negative prompts (classifier-free guidance)
 CFG_MODELS = {"sd15", "sd2", "sdxl", "pony", "sd3", "sd35", "pixart",
