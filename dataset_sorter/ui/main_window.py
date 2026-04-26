@@ -17,7 +17,10 @@ from typing import Optional
 import numpy as np
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QCursor, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import (
+    QCursor, QKeySequence, QShortcut, QDragEnterEvent, QDragLeaveEvent,
+    QDropEvent,
+)
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
@@ -2508,13 +2511,38 @@ class MainWindow(QMainWindow):
 
     # -- Drag and drop on main window --
 
+    def _show_drop_overlay(self, visible: bool):
+        """Toggle a dashed accent border on the central widget to signal drop zone."""
+        cw = self.centralWidget()
+        if cw is None:
+            return
+        if visible:
+            cw.setStyleSheet(
+                f"QWidget#dropOverlayHost {{ "
+                f"border: 2px dashed {COLORS['accent']}; "
+                f"border-radius: 12px; }}"
+            )
+            cw.setObjectName("dropOverlayHost")
+            cw.style().unpolish(cw)
+            cw.style().polish(cw)
+        else:
+            cw.setStyleSheet("")
+            cw.setObjectName("")
+
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Accept drag events containing URLs so directories can be dropped onto the window."""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self._show_drop_overlay(True)
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent):
+        """Remove the drop-zone highlight when the cursor leaves the window."""
+        self._show_drop_overlay(False)
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent):
         """Drop a directory onto the main window -> set as source."""
+        self._show_drop_overlay(False)
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
