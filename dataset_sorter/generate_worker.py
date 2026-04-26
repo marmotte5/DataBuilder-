@@ -187,9 +187,6 @@ def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):
     kwargs = {}
     if "karras" in scheduler_name:
         kwargs["use_karras_sigmas"] = True
-    elif scheduler_name in ("dpm++_2m", "dpm++_sde"):
-        kwargs["use_karras_sigmas"] = True
-        log.info("Auto-enabling Karras sigmas for %s (produces sharper results)", scheduler_name)
 
     try:
         pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config, **kwargs)
@@ -1057,10 +1054,19 @@ class GenerateWorker(QThread):
                     tensors[new_key] = f.get_tensor(key)
 
             tmp = tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False)
+            tmp_name = tmp.name
             tmp.close()
-            save_file(tensors, tmp.name)
-            log.info(f"Remapped PEFT LoRA keys to diffusers format: {path} -> {tmp.name}")
-            return tmp.name
+            try:
+                save_file(tensors, tmp_name)
+            except Exception:
+                try:
+                    import os as _os
+                    _os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            log.info(f"Remapped PEFT LoRA keys to diffusers format: {path} -> {tmp_name}")
+            return tmp_name
 
         except Exception as e:
             log.warning(f"Could not remap PEFT LoRA keys for {path}: {e}")
