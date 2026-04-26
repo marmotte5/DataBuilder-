@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Launch DataBuilder (macOS / Linux)
+# ============================================================================
+# DataBuilder — terminal launcher for macOS and Linux.
+#
+# Activates .venv/ and runs `python -m dataset_sorter`.
+# ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
 
-echo "Mise à jour..."
-git pull --ff-only 2>/dev/null || echo "Pas de connexion, lancement avec la version locale"
-
-if [ -f "venv/bin/activate" ]; then
-    source venv/bin/activate
-else
-    echo "Virtual environment not found. Run install.sh first."
-    echo "  chmod +x install.sh && ./install.sh"
+if [ ! -d ".venv" ]; then
+    echo "✗ No .venv/ here — run ./install.sh first."
     exit 1
 fi
 
-python dataset_sorter.py
+# Silent auto-update — ignore failures (offline / detached HEAD).
+git pull --ff-only >/dev/null 2>&1 || true
+
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+exec python -m dataset_sorter

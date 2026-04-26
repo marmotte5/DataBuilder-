@@ -1,21 +1,33 @@
 @echo off
-:: Launch DataBuilder
+:: ============================================================================
+:: DataBuilder - Windows double-click launcher.
+::
+:: Activates .venv\ and runs `python -m dataset_sorter`. Designed to be
+:: double-clicked from Explorer.
+:: ============================================================================
+
 title DataBuilder
 
-echo Mise a jour...
-git pull --ff-only 2>nul || echo Pas de connexion, lancement avec la version locale
+:: Cd into the directory this .bat file lives in (Explorer launches with
+:: cwd = something else, depending on the user's shortcut).
+cd /d "%~dp0"
 
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
-) else (
-    echo Virtual environment not found. Run install.bat first.
+if not exist ".venv\Scripts\activate.bat" (
+    echo.
+    echo  No .venv\ here -- double-click install.bat first.
+    echo.
     pause
     exit /b 1
 )
 
-python dataset_sorter.py
+:: Silent auto-update; ignore failures (offline).
+git pull --ff-only >nul 2>&1
+
+call .venv\Scripts\activate.bat
+
+python -m dataset_sorter
 if %errorlevel% neq 0 (
     echo.
-    echo Application exited with an error. Check the output above.
+    echo DataBuilder exited with error code %errorlevel%.
     pause
 )

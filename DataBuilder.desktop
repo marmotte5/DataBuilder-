@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DataBuilder
+GenericName=AI Image Trainer
+Comment=Train and generate text-to-image AI models
+Exec=bash -c 'cd "$(dirname "%k")" && ./run.sh'
+Icon=dataset_sorter/assets/marmot_logo.png
+Terminal=true
+Categories=Graphics;Science;Development;
+StartupNotify=true
