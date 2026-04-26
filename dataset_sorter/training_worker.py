@@ -355,7 +355,7 @@ class TrainingWorker(QThread):
         total = t.total_steps
         self._emit(self.progress,
             step, total,
-            f"RLHF: {len(selections)} preferences saved (round {round_idx}). Resuming training."
+            f"RLHF: {len(selections)} preferences saved (round {round_idx + 1}). Resuming training."
         )
 
         # Signal the trainer to apply DPO on the very next step so

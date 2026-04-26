@@ -127,6 +127,9 @@ def estimate_vram(config) -> dict:
         opt_gb = trainable_gb * 2.5
     elif opt == "SGD":
         opt_gb = trainable_gb * 0.1
+    elif opt == "Marmotte":
+        # Marmotte: 1-bit momentum + per-row magnitude (~10-20x less than AdamW)
+        opt_gb = trainable_gb * 0.15
     elif opt in ("Lion", "SOAP", "Muon"):
         opt_gb = trainable_gb * 1.0
     elif opt in ("CAME", "AdamWScheduleFree"):
@@ -199,7 +202,7 @@ def estimate_vram(config) -> dict:
         if not is_lora:
             suggestions.append("Use LoRA instead of full finetune for much lower VRAM")
         if config.optimizer in ("AdamW", "Prodigy", "DAdaptAdam"):
-            suggestions.append("Switch to Adafactor optimizer (lower memory)")
+            suggestions.append("Switch to Marmotte or Adafactor optimizer (lower memory)")
         if config.resolution > 512 and base in ("sd15", "sd2"):
             suggestions.append(f"Reduce resolution from {config.resolution} to 512")
         if config.optimizer == "Adafactor" and not config.fused_backward_pass:
