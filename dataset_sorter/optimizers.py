@@ -300,8 +300,7 @@ class Marmotte(Optimizer):
                 # and clamp_() silently preserves NaN. Replace with zeros to
                 # prevent NaN from propagating into the update gate.
                 torch.nan_to_num_(new_row_mag, nan=0.0, posinf=0.0, neginf=0.0)
-                # Clamp to prevent runaway growth
-                new_row_mag.clamp_(max=grad_scale.item() * 20.0)
+                new_row_mag.clamp_(min=eps, max=grad_scale.item() * 20.0)
                 state["row_magnitude"] = new_row_mag
 
                 # ── Smooth cosine-similarity gating per row ───────────

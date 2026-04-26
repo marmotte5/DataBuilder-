@@ -2044,12 +2044,12 @@ class Trainer:
                     # cycle) use the updated ramp value uniformly — no more
                     # off-by-one drift across a single cycle.
                     _cycle_grad_accum = _compute_ramp_grad_accum()
-                    # Each micro-batch loss was divided by grad_accum_steps.
+                    # Each micro-batch loss was divided by _current_accum.
                     # If NaN skips reduced the count, rescale to get the
                     # correct mean rather than a biased-low value.
                     if _valid_microbatches > 0:
-                        if _valid_microbatches < grad_accum_steps:
-                            self.state.loss = running_loss * grad_accum_steps / _valid_microbatches
+                        if _valid_microbatches < _current_accum:
+                            self.state.loss = running_loss * _current_accum / _valid_microbatches
                         else:
                             self.state.loss = running_loss
                     # else: all microbatches were NaN — keep previous loss
