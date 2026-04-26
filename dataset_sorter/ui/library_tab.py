@@ -654,12 +654,23 @@ class LibraryTab(QWidget):
         self._grid_layout.setSpacing(12)
         self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
-        # Empty state label (shown when no items found)
-        self._empty_label = QLabel("No items found. Add a folder to get started.")
+        # Empty state — large icon + headline + hint, friendlier than plain text
+        self._empty_label = QLabel(
+            "<div style='font-size: 38px; line-height: 1.0;'>📂</div>"
+            "<div style='font-size: 16px; font-weight: 600; "
+            f"color: {COLORS['text']}; margin-top: 14px;'>"
+            "No items in your library yet"
+            "</div>"
+            "<div style='font-size: 12px; line-height: 1.5; "
+            f"color: {COLORS['text_muted']}; margin-top: 6px;'>"
+            "Click <b>+ Add Folder</b> above to scan a directory of "
+            "<br/>models, LoRAs, or embeddings."
+            "</div>"
+        )
+        self._empty_label.setTextFormat(Qt.TextFormat.RichText)
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 14px; "
-            f"background: transparent; padding: 60px 0;"
+            "background: transparent; padding: 80px 0;"
         )
         self._empty_label.setVisible(False)
 

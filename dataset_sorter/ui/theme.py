@@ -13,9 +13,10 @@ _DARK_COLORS = {
     "surface_border":  "#2a2e4a",
 
     # Text — crisp white hierarchy with clear separation
+    # text_muted bumped from #585e7a (3.0:1 fail) to #8086a4 (4.6:1 WCAG AA)
     "text":            "#eef0f6",
     "text_secondary":  "#9094b0",
-    "text_muted":      "#585e7a",
+    "text_muted":      "#8086a4",
 
     # Accent — luminous indigo with violet shift
     "accent":          "#7c7ff7",
@@ -72,9 +73,10 @@ _LIGHT_COLORS = {
     "surface_border":  "#d4d6e2",
 
     # Text — deep ink, readable hierarchy
+    # text_muted bumped from #7a7e96 (3.7:1 fail) to #6b6f88 (4.6:1 WCAG AA)
     "text":            "#181a28",
     "text_secondary":  "#50546e",
-    "text_muted":      "#7a7e96",
+    "text_muted":      "#6b6f88",
 
     # Accent — richer indigo for light backgrounds
     "accent":          "#5b5ef0",
@@ -229,6 +231,7 @@ def get_stylesheet() -> str:
         background-color: {c['surface']}; color: {c['text']};
         border: 1px solid {c['border']}; border-radius: 10px;
         padding: 8px 20px; font-weight: 550; min-height: 24px;
+        letter-spacing: 0.2px;
     }}
     QPushButton:hover {{
         background-color: {c['surface_hover']};
@@ -238,6 +241,10 @@ def get_stylesheet() -> str:
     QPushButton:pressed {{
         background-color: {c['accent_subtle']};
         border-color: {c['accent']};
+    }}
+    QPushButton:focus {{
+        border: 1.5px solid {c['accent']};
+        outline: none;
     }}
     QPushButton:disabled {{
         color: {c['text_muted']}; background-color: {c['bg_alt']};
@@ -491,7 +498,8 @@ def accent_button_style() -> str:
         f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
         f"stop:0 {COLORS['gradient_start']}, stop:1 {COLORS['gradient_end']}); "
         f"color: white; border: none; border-radius: 10px; "
-        f"padding: 10px 24px; font-weight: 650; font-size: 13px; }} "
+        f"padding: 10px 24px; font-weight: 650; font-size: 13px; "
+        f"letter-spacing: 0.3px; }} "
         f"QPushButton:hover {{ "
         f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
         f"stop:0 {COLORS['accent_hover']}, stop:1 {COLORS['gradient_end']}); }} "
