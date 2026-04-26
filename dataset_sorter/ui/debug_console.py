@@ -214,7 +214,7 @@ class DebugConsole(QWidget):
         self._level_combo = QComboBox()
         self._level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self._level_combo.setCurrentText("DEBUG")
-        self._level_combo.setFixedWidth(100)
+        self._level_combo.setMinimumWidth(100)
         toolbar.addWidget(self._level_combo)
 
         # Category filter
@@ -225,7 +225,7 @@ class DebugConsole(QWidget):
             "UI", "SIGNAL", "ERROR",
         ])
         self._category_combo.setCurrentText("ALL")
-        self._category_combo.setFixedWidth(100)
+        self._category_combo.setMinimumWidth(100)
         toolbar.addWidget(self._category_combo)
 
         # Auto-scroll
@@ -295,7 +295,7 @@ class DebugConsole(QWidget):
 
         self._search_status = QLabel("")
         self._search_status.setStyleSheet("color: #8b8fa3; font-size: 11px;")
-        self._search_status.setFixedWidth(100)
+        self._search_status.setMinimumWidth(100)
         search_row.addWidget(self._search_status)
 
         layout.addLayout(search_row)

@@ -346,7 +346,7 @@ class ComparisonTab(QWidget):
         btn_row.addStretch()
 
         self._progress = QProgressBar()
-        self._progress.setFixedWidth(200)
+        self._progress.setMinimumWidth(200)
         self._progress.setVisible(False)
         btn_row.addWidget(self._progress)
 
