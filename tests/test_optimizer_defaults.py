@@ -17,6 +17,24 @@ from dataset_sorter.optimizer_factory import (
 from dataset_sorter.constants import OPTIMIZERS
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 0. Single source of truth (regression — there used to be two dicts that drifted)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_single_source_of_truth():
+    """constants.OPTIMIZER_DEFAULTS and optimizer_factory.OPTIMIZER_DEFAULTS
+    must be the SAME object — anything else is structural drift waiting
+    to happen (Adafactor LR, SGD WD, Lion betas, warmup_steps all silently
+    diverged in the past).
+    """
+    from dataset_sorter import constants, optimizer_factory
+    assert constants.OPTIMIZER_DEFAULTS is optimizer_factory.OPTIMIZER_DEFAULTS, (
+        "OPTIMIZER_DEFAULTS must be the same object in constants and "
+        "optimizer_factory — re-export, do not duplicate"
+    )
+    assert constants.get_optimizer_defaults is optimizer_factory.get_optimizer_defaults
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 REQUIRED_KEYS = {"learning_rate", "lr_scheduler", "weight_decay", "description", "notes"}
