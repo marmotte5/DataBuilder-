@@ -2,169 +2,149 @@
 setlocal enabledelayedexpansion
 
 :: ============================================================================
-:: DataBuilder - One-Click Installer (Windows)
+:: DataBuilder - One-shot installer for Windows.
 ::
-:: Installs Python environment, CUDA 12.8 PyTorch, and all dependencies
-:: for the Dataset Sorter + Trainer application.
-::
-:: Requires: Python 3.10+ installed and in PATH
-:: Recommended: NVIDIA GPU with 24 GB VRAM, CUDA 12.x drivers
+:: What this script does:
+::   1. Locates a supported Python (3.10 - 3.13). 3.14+ is rejected because
+::      most ML wheels don't ship for it yet.
+::   2. Creates .venv\, upgrades pip, installs DataBuilder with the right
+::      extra ([cuda] when an NVIDIA GPU is present, [all] otherwise — the
+::      pyproject markers make this safe across hardware now).
+::   3. Prints how to launch the app.
 :: ============================================================================
 
 title DataBuilder Installer
 color 0A
 
-echo Mise a jour...
-git pull --ff-only 2>nul || echo Pas de connexion, installation avec la version locale
+:: When double-clicked from Explorer, the working directory may be
+:: somewhere else (system32 etc.). Anchor to this script's location.
+cd /d "%~dp0"
 
 echo.
-echo  =============================================================
+echo  ===============================================================
 echo     DataBuilder - Installer
-echo     Dataset Sorter + SDXL / Z-Image Trainer
-echo  =============================================================
+echo  ===============================================================
 echo.
 
-:: ── Check Python ──────────────────────────────────────────────────────
+:: ── Update local checkout if possible ─────────────────────────────────
+git pull --ff-only >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [ok] Repo updated to latest revision
+) else (
+    echo [info] Could not git-pull ^(offline or detached HEAD^) - using local source
+)
 
-echo [1/7] Checking Python...
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Python not found. Please install Python 3.10+ from python.org
-    echo Make sure to check "Add Python to PATH" during installation.
+:: ── Find a supported Python (3.10 - 3.13) ─────────────────────────────
+echo.
+echo [1/5] Looking for Python 3.10 - 3.13 ...
+
+set "PYTHON_CMD="
+set "PYTHON_VER="
+
+for %%P in (py python python3 python3.13 python3.12 python3.11 python3.10) do (
+    if not defined PYTHON_CMD (
+        where %%P >nul 2>&1
+        if !errorlevel! equ 0 (
+            for /f "tokens=*" %%V in ('%%P -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do (
+                if "%%V"=="3.10" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
+                if "%%V"=="3.11" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
+                if "%%V"=="3.12" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
+                if "%%V"=="3.13" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
+            )
+        )
+    )
+)
+
+if not defined PYTHON_CMD (
+    echo.
+    echo ERROR: No supported Python ^(3.10 - 3.13^) found in PATH.
+    echo.
+    echo Download from: https://www.python.org/downloads/release/python-31210/
+    echo IMPORTANT: tick "Add Python to PATH" during installation.
+    echo Then re-run this script.
     pause
     exit /b 1
 )
+echo        Found %PYTHON_CMD% --^> Python %PYTHON_VER%
 
-for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
-echo        Found Python %PYVER%
-
-:: ── Create virtual environment ────────────────────────────────────────
-
+:: ── Create or reuse the project venv ──────────────────────────────────
 echo.
-echo [2/7] Creating virtual environment...
-if not exist "venv" (
-    python -m venv venv
-    if %errorlevel% neq 0 (
+echo [2/5] Creating .venv\ ...
+if exist ".venv" (
+    echo        .venv\ already exists, reusing.
+) else (
+    %PYTHON_CMD% -m venv .venv
+    if !errorlevel! neq 0 (
         echo ERROR: Failed to create virtual environment.
+        echo Try installing python3-venv or download Python from python.org.
         pause
         exit /b 1
     )
-    echo        Created venv/
-) else (
-    echo        venv/ already exists, reusing.
+    echo        .venv\ created with Python %PYTHON_VER%.
 )
+call .venv\Scripts\activate.bat
 
-:: Activate venv
-call venv\Scripts\activate.bat
+:: ── Upgrade pip / wheel / setuptools ──────────────────────────────────
+echo.
+echo [3/5] Upgrading pip, wheel, setuptools ...
+python -m pip install --upgrade pip wheel setuptools -q
 if %errorlevel% neq 0 (
-    echo ERROR: Failed to activate virtual environment.
+    echo ERROR: Failed to upgrade pip.
     pause
     exit /b 1
 )
+echo        Build tooling up to date.
 
-:: ── Upgrade pip ───────────────────────────────────────────────────────
-
+:: ── Pick the right extra ──────────────────────────────────────────────
+set "EXTRA=all"
+where nvidia-smi >nul 2>&1
+if %errorlevel% equ 0 (
+    set "EXTRA=cuda"
+)
 echo.
-echo [3/7] Upgrading pip...
-python -m pip install --upgrade pip setuptools wheel >nul 2>&1
-echo        pip upgraded.
+echo [4/5] Installing DataBuilder with extra: .[%EXTRA%]
 
-:: ── Install PyTorch with CUDA 12.8 (latest) ──────────────────────────
-
-echo.
-echo [4/7] Installing PyTorch with CUDA 12.8 (latest stable)...
-echo        This may take several minutes on first install...
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-if %errorlevel% neq 0 (
-    echo.
-    echo WARNING: CUDA 12.8 PyTorch failed. Trying CUDA 12.6...
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-    if %errorlevel% neq 0 (
-        echo.
-        echo WARNING: CUDA 12.6 failed too. Installing CPU-only PyTorch...
-        pip install torch torchvision torchaudio
+:: ── Install CUDA-enabled PyTorch first if NVIDIA GPU detected ─────────
+if "%EXTRA%"=="cuda" (
+    echo        Installing CUDA-enabled PyTorch ^(cu128, then cu126 fallback^)...
+    pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+    if !errorlevel! neq 0 (
+        echo        CUDA 12.8 wheel unavailable - falling back to cu126
+        pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+        if !errorlevel! neq 0 (
+            echo        CUDA wheels unavailable - falling back to CPU PyTorch
+            pip install -q torch torchvision torchaudio
+        )
     )
 )
 
-:: ── Install core dependencies ─────────────────────────────────────────
-
-echo.
-echo [5/7] Installing core dependencies...
-pip install PyQt6>=6.5 numpy>=1.24 Pillow>=10.0
+pip install ".[%EXTRA%]"
 if %errorlevel% neq 0 (
-    echo ERROR: Failed to install core dependencies.
+    echo.
+    echo ERROR: pip install failed.
+    echo Try a smaller install:  pip install ".[training,export]"
     pause
     exit /b 1
 )
 
-:: ── Install training dependencies ─────────────────────────────────────
+:: ── Final sanity check ────────────────────────────────────────────────
+echo.
+echo [5/5] Verifying the install ...
+python -c "import sys; print('  Python:       ' + sys.version.split()[0])"
+python -c "import PyQt6.QtCore as q; print('  PyQt6:        ' + q.PYQT_VERSION_STR)" 2>nul
+python -c "import torch; print('  PyTorch:      ' + torch.__version__); print('  CUDA:         ' + (torch.version.cuda if torch.cuda.is_available() else 'CPU only')); print('  GPU:          ' + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-'))" 2>nul
+python -c "import diffusers; print('  diffusers:    ' + diffusers.__version__)" 2>nul
+python -c "import transformers; print('  transformers: ' + transformers.__version__)" 2>nul
+python -c "import peft; print('  peft:         ' + peft.__version__)" 2>nul
 
 echo.
-echo [6/7] Installing training dependencies...
-pip install diffusers>=0.28 transformers>=4.38 accelerate>=0.27 safetensors>=0.4 peft>=0.10
-if %errorlevel% neq 0 (
-    echo WARNING: Some training dependencies failed. Training may not work.
-)
-
-:: Optional optimizers
+echo  ===============================================================
+echo     Install complete.
 echo.
-echo [6b/7] Installing optional optimizers...
-pip install bitsandbytes >nul 2>&1
-if %errorlevel% equ 0 (
-    echo        bitsandbytes (AdamW 8-bit) - OK
-) else (
-    echo        bitsandbytes - skipped (Linux-only or needs manual install)
-)
-
-pip install prodigyopt >nul 2>&1
-if %errorlevel% equ 0 (
-    echo        prodigyopt (Prodigy optimizer) - OK
-) else (
-    echo        prodigyopt - skipped
-)
-
-pip install lion-pytorch >nul 2>&1
-if %errorlevel% equ 0 (
-    echo        lion-pytorch (Lion optimizer) - OK
-) else (
-    echo        lion-pytorch - skipped
-)
-
-pip install dadaptation >nul 2>&1
-if %errorlevel% equ 0 (
-    echo        dadaptation (D-Adapt Adam) - OK
-) else (
-    echo        dadaptation - skipped
-)
-
-pip install triton-windows >nul 2>&1
-if %errorlevel% equ 0 (
-    echo        triton-windows (torch.compile + Triton kernels on Windows) - OK
-) else (
-    echo        triton-windows - skipped (install manually if needed: pip install triton-windows)
-)
-
-:: ── Verify installation ───────────────────────────────────────────────
-
-echo.
-echo [7/7] Verifying installation...
-echo.
-
-python -c "import torch; print(f'  PyTorch:     {torch.__version__}'); print(f'  CUDA:        {torch.version.cuda if torch.cuda.is_available() else \"Not available\"}'); print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}'); print(f'  VRAM:        {round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)} GB' if torch.cuda.is_available() else ''); print(f'  bf16:        {torch.cuda.is_bf16_supported()}' if torch.cuda.is_available() else ''); print(f'  cuDNN:       {torch.backends.cudnn.version()}' if torch.backends.cudnn.is_available() else '')"
-
-python -c "import diffusers; print(f'  Diffusers:   {diffusers.__version__}')" 2>nul
-python -c "import transformers; print(f'  Transformers:{transformers.__version__}')" 2>nul
-python -c "import peft; print(f'  PEFT:        {peft.__version__}')" 2>nul
-python -c "import PyQt6.QtCore; print(f'  PyQt6:       {PyQt6.QtCore.PYQT_VERSION_STR}')" 2>nul
-
-echo.
-echo  =============================================================
-echo     Installation complete!
-echo.
-echo     To run DataBuilder:
-echo       1. Double-click  run.bat
-echo       2. Or run:  venv\Scripts\python dataset_sorter.py
-echo  =============================================================
+echo     To launch DataBuilder:
+echo       .venv\Scripts\activate.bat
+echo       python -m dataset_sorter
+echo  ===============================================================
 echo.
 
 pause

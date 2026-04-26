@@ -133,40 +133,81 @@ All backends support both **diffusers directories** and **single-file `.safetens
 
 ### Installation
 
+> **Requires Python 3.10 – 3.13.** Python 3.14+ is too new — most ML wheels
+> (PyTorch, bitsandbytes, etc.) don't ship for it yet.
+
 ```bash
-# 1. Clone the repository
 git clone https://github.com/marmotte5/DataBuilder-.git
 cd DataBuilder-
+```
 
-# 2. Create a virtual environment (recommended)
-python -m venv .venv
-source .venv/bin/activate      # Linux/macOS
-# .venv\Scripts\activate       # Windows
+#### One-click install (after cloning)
 
-# 3. Install PyTorch first (adjust for your CUDA version)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+| Platform | Double-click this file | Then double-click |
+| --- | --- | --- |
+| **macOS** | `install.command` | `run.command` |
+| **Windows** | `install.bat` | `run.bat` |
+| **Linux** | run `./install.sh` once in a terminal, then `./run.sh` (or `DataBuilder.desktop` from Files) | — |
 
-# 4. Install DataBuilder
+> **First-time macOS double-click:** macOS may block unsigned `.command`
+> files with a "could not be opened" warning. Right-click the file →
+> **Open** → confirm. After that first time, double-clicks work normally.
 
-# Basic install (dataset sorting & UI only)
-pip install .
+> **First-time Linux double-click of `DataBuilder.desktop`:** in
+> Files / Nautilus, right-click → **Properties → Permissions →**
+> tick *Allow executing file as program*. (GNOME 42+: in Files,
+> *Preferences → "Executable Text Files: Ask what to do"*.)
 
-# With training support
-pip install ".[training]"
+#### Or one command in a terminal
 
-# Full install (all optimizers + speed extras)
-pip install ".[all]"
+```bash
+./install.sh    # macOS / Linux — picks the right extras automatically
+install.bat     # Windows
+```
 
-# 5. Launch
+The installer auto-detects your platform, finds a supported Python,
+verifies it can build a working venv (catching the broken Homebrew Python
+issue early on macOS), creates `.venv/`, and installs the right
+dependency set:
+
+| Platform | Extra used | Skipped (incompatible) |
+| --- | --- | --- |
+| macOS (Apple Silicon / Intel) | `.[mac]` | bitsandbytes, flash-attn, triton, liger-kernel, transformer-engine, python-turbojpeg |
+| Linux + NVIDIA GPU | `.[cuda]` | — |
+| Linux without NVIDIA / Windows | `.[all]` | (markers skip CUDA-only wheels automatically) |
+
+Once it finishes:
+
+```bash
+source .venv/bin/activate     # macOS / Linux
+# .venv\Scripts\activate      # Windows
 python -m dataset_sorter
 ```
 
-#### Windows one-click installer
+#### Manual install
 
-```bat
-install.bat   # Sets up venv + installs all dependencies
-run.bat       # Launches the app
+```bash
+git clone https://github.com/marmotte5/DataBuilder-.git
+cd DataBuilder-
+
+# Use a 3.10 – 3.13 interpreter explicitly to avoid Python 3.14 footguns.
+python3.12 -m venv .venv
+source .venv/bin/activate     # Linux / macOS
+# .venv\Scripts\activate      # Windows
+pip install --upgrade pip
+
+# Pick the extra that matches your machine:
+pip install ".[mac]"          # macOS — Apple Silicon or Intel
+pip install ".[cuda]"         # Linux + NVIDIA GPU
+pip install ".[all]"          # Other (Windows, Linux without NVIDIA, …)
+pip install ".[training]"     # Minimal — UI + core ML stack only
+
+python -m dataset_sorter
 ```
+
+The pyproject extras carry environment markers, so `.[all]` no longer
+detonates on macOS — pip simply skips the CUDA-only wheels (`flash-attn`,
+`triton`, `liger-kernel`, `bitsandbytes`, …).
 
 #### Linux system dependencies
 
@@ -194,35 +235,39 @@ sudo apt-get install libegl1 libgl1
 # 1. Install Xcode Command Line Tools (required for compilers)
 xcode-select --install
 
-# 2. Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# 2. Install Python 3.12 (3.13 also works). Choose ONE of these two:
 
-# 3. Install Python 3.10+ via Homebrew (do NOT use the macOS system Python)
-brew install python@3.10
+# (a) Official python.org installer — recommended, avoids the broken
+#     pyexpat that some Homebrew python@3.12 builds ship with:
+#     https://www.python.org/downloads/release/python-31210/
+#     Download the macOS 64-bit universal2 .pkg and run it.
+
+# (b) Homebrew (try first; if you hit a "_XML_SetAllocTrackerActivationThreshold"
+#     error during venv creation, fall back to (a)):
+brew install python@3.12
 ```
 
 **Installation**
 
 ```bash
-# Clone and enter the repo
 git clone https://github.com/marmotte5/DataBuilder-.git
 cd DataBuilder-
 
-# Create a virtual environment with the Homebrew Python
-python3.10 -m venv .venv
+# The installer picks `.[mac]` automatically — no CUDA-only deps fetched.
+./install.sh
+
 source .venv/bin/activate
+python -m dataset_sorter
+```
 
-# Install PyTorch — MPS support is built-in, no special index URL needed
-pip install torch torchvision
+If you'd rather do it manually:
 
-# Install DataBuilder with training support
-# Use [training] instead of [all] on macOS — [all] pulls in flash-attn,
-# triton, and transformer-engine which are CUDA-only and will fail to build.
-pip install -e ".[training]"
-
-# Launch
-.venv/bin/dataset-sorter
-# or: python -m dataset_sorter
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install ".[mac]"          # curated extra — Apple-Silicon-friendly only
+python -m dataset_sorter
 ```
 
 **Known MPS limitations**

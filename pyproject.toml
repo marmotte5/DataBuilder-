@@ -8,7 +8,7 @@ version = "3.0.0"
 description = "Desktop application for sorting, managing, and training image datasets for Stable Diffusion / LoRA training."
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 authors = [
     {name = "DataBuilder Contributors"},
 ]
@@ -32,6 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Core ML stack — works on every supported platform (Linux, macOS, Windows).
 training = [
     "torch>=2.1",
     "torchvision>=0.16",
@@ -43,8 +44,12 @@ training = [
     "lycoris-lora>=3.0",
     "Pillow>=10.0",
 ]
+
+# Optional optimisers. Most are pure-Python and run anywhere; bitsandbytes
+# is CUDA-only on Linux (its prebuilt Windows wheels are unreliable and
+# it has no macOS support), so it's gated by an environment marker.
 optimizers = [
-    "bitsandbytes>=0.43",
+    "bitsandbytes>=0.43; platform_system == 'Linux'",
     "prodigyopt>=1.0",
     "lion-pytorch>=0.1",
     "dadaptation>=3.1",
@@ -52,16 +57,23 @@ optimizers = [
     "schedulefree>=1.0",
     "galore-torch>=1.0",
 ]
+
+# Performance accelerators — most are CUDA-only and gated to Linux.
+# This way `pip install ".[all]"` no longer detonates on macOS / Windows
+# trying to fetch wheels that don't exist for those platforms.
 speed = [
-    "liger-kernel>=0.4",
     "opencv-python>=4.8",
-    "python-turbojpeg>=1.7",
     "lmdb>=1.4",
     "lz4>=4.3",
-    "flash-attn>=2.5",
-    "triton>=2.2; sys_platform != 'win32'",
+    # CUDA-only / Linux-only kernels:
+    "liger-kernel>=0.4; platform_system == 'Linux'",
+    "flash-attn>=2.5; platform_system == 'Linux'",
+    "transformer-engine>=1.5; platform_system == 'Linux'",
+    # python-turbojpeg has no macOS wheels:
+    "python-turbojpeg>=1.7; platform_system != 'Darwin'",
+    # Triton — Linux/Windows only (separate package on each):
+    "triton>=2.2; sys_platform == 'linux'",
     "triton-windows>=3.3; sys_platform == 'win32'",
-    "transformer-engine>=1.5",
 ]
 dev = [
     "pytest>=7.0",
@@ -73,6 +85,28 @@ analysis = [
 export = [
     "gguf>=0.10",
 ]
+
+# ── Platform-curated convenience extras ──────────────────────────────
+# `mac` skips every CUDA / Linux-only package so `pip install ".[mac]"`
+# Just Works on Apple Silicon and Intel Macs without raising errors.
+mac = [
+    "dataset-sorter[training,export,analysis]",
+    "prodigyopt>=1.0",
+    "lion-pytorch>=0.1",
+    "dadaptation>=3.1",
+    "schedulefree>=1.0",
+    "opencv-python>=4.8",
+    "lmdb>=1.4",
+    "lz4>=4.3",
+]
+
+# `cuda` is the all-bells-and-whistles install for an NVIDIA Linux box.
+cuda = [
+    "dataset-sorter[training,optimizers,speed,analysis,export]",
+]
+
+# `[all]` is now safe to run on every platform thanks to the markers
+# above — incompatible packages are silently skipped by pip.
 all = [
     "dataset-sorter[training,optimizers,speed,analysis,export]",
 ]
