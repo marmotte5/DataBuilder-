@@ -97,12 +97,10 @@ _VENDOR_EXCLUDE_FILES = frozenset({
     "app_settings.py",
     "project_manager.py",
     "training_history.py",
-    "training_state_manager.py",
     "training_presets.py",
     "metadata_cache.py",
     "recommender.py",
     "recommender_profiles.py",
-    "smart_resume.py",
     "vram_estimator.py",
     "splash.py",  # not in root but defensive
 })
@@ -201,8 +199,7 @@ def _build_cache_locally(config, model_path: str,
     ds.cache_latents_from_vae(
         backend.vae,
         device=device, dtype=dtype,
-        batch_size=8,
-        progress_fn=lambda c, t: progress_fn(c, t, f"Latent {c}/{t}")
+        progress_fn=(lambda c, t: progress_fn(c, t, f"Latent {c}/{t}"))
                     if progress_fn else None,
         num_workers=2,
     )

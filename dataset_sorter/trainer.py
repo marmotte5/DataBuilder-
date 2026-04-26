@@ -1234,31 +1234,19 @@ class Trainer:
         ``remote_training.build_bundle()`` — that step ran the full
         dataset-encoding pipeline locally (latents + text encoder outputs)
         and saved the result as a SafetensorsMMapDataset cache directory.
-        Here on the cloud GPU, we only need to:
 
-          1. Load the base model (UNet/transformer + scheduler + VAE +
-             text encoders for sample generation).
-          2. Open the prebuilt cache as ``self.dataset``.
-          3. Wire up optimizer / scheduler / EMA — same as ``setup()``
-             does in its sections 9-11, just without the upstream
-             dataset/encoding work.
+        Skips: pipeline integration, dataset construction, bucketing,
+        augmentation, latent caching, TE caching.
 
-        Pipeline integration, bucketing, augmentation, latent caching,
-        TE caching are all SKIPPED (they happened on the user's machine
-        before bundling).
-
-        ``image_paths`` and ``captions`` are not arguments here — the
-        dataset is the cache, captions are stored alongside the latents.
+        Keeps: model load, LoRA/finetune adapter setup, speed optimizations,
+        TE freeze/unfreeze, GradScaler, optimizer, scheduler, EMA — all
+        required for correct and fast training on the cloud.
         """
         import json as _json
         import time as _time
 
         config = self.config
         if not config.mmap_prebuilt_cache_dir:
-            # Sanity check: the launcher should have set this. We use
-            # the explicit cache_dir argument as the source of truth and
-            # mirror it onto the config field for downstream code that
-            # reads it (e.g. logging).
             config.mmap_prebuilt_cache_dir = str(cache_dir)
 
         cache_dir = Path(cache_dir)
@@ -1278,12 +1266,9 @@ class Trainer:
         self.state.phase = "loading"
 
         if progress_fn:
-            progress_fn(0, 5, "Loading base model...")
+            progress_fn(0, 7, "Loading base model...")
 
-        # ── 1. Backend / model load (mirrors section 1 of setup()) ──
-        # The arch was recorded in the manifest at bundle time; honour it
-        # over config.model_type so a stale config can't load the wrong
-        # backend for a cache built against a different arch.
+        # ── 1. Backend / model load ──
         cached_arch = manifest.get("model_type") or config.model_type
         if cached_arch and cached_arch != config.model_type:
             log.warning(
@@ -1302,15 +1287,88 @@ class Trainer:
         self.backend = backend_cls(config, self.device, self.dtype)
         self.backend.load_model(model_path)
 
-        # The TE / VAE are needed only for sample generation during
-        # training. If the user disabled samples, free them now to save
-        # the ~5-10 GB they hold.
+        # Config warnings (mirrors setup() validation)
+        if config.cache_text_encoder and (config.train_text_encoder or config.train_text_encoder_2):
+            log.warning(
+                "cache_text_encoder=True with train_text_encoder=True is "
+                "contradictory — disabling text encoder caching."
+            )
+            config.cache_text_encoder = False
+
+        # ── 2. LoRA / full-finetune adapter setup ──
+        if progress_fn:
+            progress_fn(1, 7, "Setting up adapters + speed optimizations...")
+        is_lora = config.model_type.endswith("_lora")
+        if is_lora:
+            self.backend.setup_lora()
+        else:
+            self.backend.setup_full_finetune()
+
+        # ── 3. Speed optimizations (gradient checkpointing, flash attn, etc.) ──
+        self.backend.apply_speed_optimizations()
+
+        if config.fp8_training and self.backend.unet is not None:
+            from dataset_sorter.fp8_training import FP8TrainingWrapper
+            self._fp8_wrapper = FP8TrainingWrapper(
+                self.backend.unet, self.device, enabled=True,
+            )
+            self.backend.unet = self._fp8_wrapper.setup()
+
+        quant_level = getattr(config, "quantize_unet", "none")
+        if quant_level and quant_level != "none" and self.backend.unet is not None:
+            from dataset_sorter.quantization import quantize_model
+            self.backend.unet = quantize_model(self.backend.unet, quant_level)
+
+        if config.mebp_enabled and self.backend.unet is not None:
+            from dataset_sorter.speed_optimizations import MeBPWrapper
+            self.backend.unet = MeBPWrapper(
+                self.backend.unet,
+                num_checkpoints=config.mebp_num_checkpoints,
+            )
+
+        # torch.compile (after all wrappers)
+        _already_compiled = getattr(self.backend, "_compiled", False)
+        if config.torch_compile and self.backend.unet is not None and not _already_compiled:
+            _mode = getattr(config, "compile_mode", "default") or "default"
+            if getattr(config, "regional_compile", False):
+                try:
+                    from dataset_sorter.speed_optimizations import apply_regional_compile
+                    _n = apply_regional_compile(self.backend.unet, mode=_mode)
+                    if _n > 0:
+                        self.backend._compiled = True
+                except Exception:
+                    pass
+            if not getattr(self.backend, "_compiled", False):
+                try:
+                    self.backend.unet = torch.compile(
+                        self.backend.unet, mode=_mode, fullgraph=False,
+                    )
+                    self.backend._compiled = True
+                except Exception as exc:
+                    log.warning("torch.compile failed (%s) — continuing without it", exc)
+
+        # ── 4. Text encoder freeze / unfreeze ──
+        self.backend.freeze_text_encoders()
+        if config.train_text_encoder:
+            self.backend.unfreeze_text_encoder(1)
+        if config.train_text_encoder_2 and self.backend.supports_dual_te:
+            self.backend.unfreeze_text_encoder(2)
+
+        # ── 5. GradScaler for fp16 ──
+        if self.dtype == torch.float16 and self.device.type in ("cuda", "xpu"):
+            self.grad_scaler = torch.amp.GradScaler(self.device.type)
+            for te in (self.backend.text_encoder, self.backend.text_encoder_2):
+                if te is None:
+                    continue
+                for param in te.parameters():
+                    if param.requires_grad:
+                        param.data = param.data.float()
+
+        # Offload TE/VAE if samples are disabled (save ~5-10 GB VRAM)
         if not getattr(config, "sample_every_n_steps", 0):
             self.backend.offload_text_encoders()
             self.backend.offload_vae()
         else:
-            # Match the device-move that setup() performs at lines 815-826
-            # so encode_text_batch works for sample generation.
             for te in (
                 self.backend.text_encoder,
                 self.backend.text_encoder_2,
@@ -1319,9 +1377,9 @@ class Trainer:
                 if te is not None:
                     te.to(self.device)
 
-        # ── 2. Open the prebuilt cache as self.dataset ──
+        # ── 6. Open the prebuilt cache as self.dataset ──
         if progress_fn:
-            progress_fn(1, 5, "Opening prebuilt cache...")
+            progress_fn(2, 7, "Opening prebuilt cache...")
 
         from dataset_sorter.mmap_dataset import SafetensorsMMapDataset
         ds = SafetensorsMMapDataset(
@@ -1339,26 +1397,15 @@ class Trainer:
             cache_dir, len(ds), config.model_type,
         )
 
-        # No validation set in the bundle workflow (would need a separate
-        # cache shard). Set to None so _run_validation gracefully skips.
         self._val_dataset = None
-
-        # No bucket sampler — buckets were baked into the cache during
-        # build, batches are formed by the standard DataLoader on top of
-        # the (cache-resident, fixed-resolution) latents.
         self._bucket_sampler = None
-
-        # No mask map either; if the user trained with masked loss, the
-        # mask channels were baked into the cached latents (or not — out
-        # of scope for v1 of the remote bundle).
         self._mask_map = None
         self._training_mask = None
 
-        # ── 3. Optimizer + scheduler + EMA (mirrors sections 9-11) ──
+        # ── 7. Optimizer + scheduler + EMA ──
         if progress_fn:
-            progress_fn(2, 5, "Setting up optimizer...")
+            progress_fn(3, 7, "Setting up optimizer...")
 
-        # Reuse the same param-group + optimizer construction as setup().
         if config.triton_fused_adamw:
             from dataset_sorter.triton_kernels import FusedAdamW
             from dataset_sorter.optimizer_factory import effective_learning_rate
@@ -1373,18 +1420,21 @@ class Trainer:
             self._is_schedulefree = True
             self.optimizer.train()
 
-        # Final fp16-param sweep (mirrors section 9b) so GradScaler.unscale_
-        # doesn't trip on float16 grads.
+        # fp16 param sweep (both passes, mirrors setup())
         if self.grad_scaler is not None:
             for group in self.optimizer.param_groups:
                 for param in group["params"]:
                     if (isinstance(param, torch.Tensor) and param.requires_grad
                             and param.dtype != torch.float32):
                         param.data = param.data.float()
+            if self.backend.unet is not None:
+                for module in self.backend.unet.modules():
+                    for param in module.parameters(recurse=False):
+                        if param.requires_grad and param.dtype != torch.float32:
+                            param.data = param.data.float()
 
-        # ── 4. Steps + scheduler ──
         if progress_fn:
-            progress_fn(3, 5, "Setting up LR scheduler...")
+            progress_fn(4, 7, "Setting up LR scheduler...")
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
         steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)
         total_steps = steps_per_epoch * config.epochs
@@ -1394,23 +1444,17 @@ class Trainer:
         self.steps_per_epoch = steps_per_epoch
         self.scheduler = _get_scheduler(config, self.optimizer, total_steps)
 
-        # ── 5. EMA (mirrors section 11) ──
         if progress_fn:
-            progress_fn(4, 5, "Setting up EMA...")
-        self._ema = None
-        if config.ema and config.ema_decay > 0 and config.ema_decay < 1:
-            try:
-                from dataset_sorter.ema import EMAModel
-                trainable_params = [p for p in self.backend.unet.parameters()
-                                    if p.requires_grad]
-                if trainable_params:
-                    self._ema = EMAModel(trainable_params, decay=config.ema_decay)
-                    log.info("EMA enabled (decay=%.4f)", config.ema_decay)
-            except Exception as e:
-                log.warning("EMA setup failed in prebuilt-cache path: %s", e)
+            progress_fn(5, 7, "Setting up EMA...")
+        if config.use_ema:
+            self.ema_model = EMAModel(
+                self.backend.trainable_adapter_module().parameters(),
+                decay=config.ema_decay,
+                cpu_offload=config.ema_cpu_offload,
+            )
 
         if progress_fn:
-            progress_fn(5, 5, f"Ready. {total_steps} steps, {config.epochs} epochs.")
+            progress_fn(6, 7, f"Ready. {total_steps} steps, {config.epochs} epochs.")
         self.state.phase = "ready"
         self._training_start_time = _time.time()
 

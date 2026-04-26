@@ -59,7 +59,8 @@ class RemoteTrainingDialog(QDialog):
                  captions: list[str], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Build Remote Training Bundle")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
+        self.setMinimumHeight(280)
         self.config = config
         self.model_path = model_path
         self.image_paths = image_paths
@@ -67,6 +68,8 @@ class RemoteTrainingDialog(QDialog):
         self._worker: _BundleWorker | None = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
 
         info = QLabel(
             f"<b>{len(image_paths)} images</b> will be encoded locally "
@@ -75,9 +78,11 @@ class RemoteTrainingDialog(QDialog):
             f"encoded cache travels to the cloud GPU."
         )
         info.setWordWrap(True)
+        info.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
         layout.addWidget(info)
 
         dir_row = QHBoxLayout()
+        dir_row.setSpacing(8)
         dir_row.addWidget(QLabel("Output folder:"))
         self.dir_input = QLineEdit()
         self.dir_input.setPlaceholderText("Where to create the bundle…")
@@ -96,6 +101,8 @@ class RemoteTrainingDialog(QDialog):
         layout.addWidget(self.include_model_cb)
 
         self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setTextVisible(False)
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
@@ -103,7 +110,11 @@ class RemoteTrainingDialog(QDialog):
         self.status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(self.status_label)
 
+        layout.addStretch()
+
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+        btn_row.addStretch()
         self.btn_build = QPushButton("Build Bundle")
         self.btn_build.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self.btn_build.clicked.connect(self._start_build)
@@ -113,6 +124,20 @@ class RemoteTrainingDialog(QDialog):
         self.btn_close.clicked.connect(self.reject)
         btn_row.addWidget(self.btn_close)
         layout.addLayout(btn_row)
+
+    def reject(self):
+        if self._worker is not None and self._worker.isRunning():
+            reply = QMessageBox.question(
+                self, "Build in progress",
+                "A bundle build is running. Close anyway?\n"
+                "The background thread will finish but results may be incomplete.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            self._worker.wait(3000)
+        super().reject()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Bundle output directory")
