@@ -305,10 +305,13 @@ class TestAPIEndpoints:
         assert body[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_sample_endpoint_missing(self, dashboard, tmp_path):
+        # An unregistered path is now rejected with 403 by the allowlist
+        # before we ever check existence. This is the security fix; see
+        # TestSecurityRegressions for the full coverage.
         from urllib.parse import quote
         url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(tmp_path / 'gone.png'))}"
         code, _ = _get(url)
-        assert code == 404
+        assert code == 403
 
     def test_unknown_route_returns_404(self, dashboard):
         code, _ = _get(f"http://127.0.0.1:{dashboard.port}/does/not/exist")
@@ -375,3 +378,187 @@ class TestHistoryPersistence:
         db = TrainingDashboard(port=18607, history_dir=history_dir)
         history = db._load_history()  # must not raise
         assert history == []
+
+
+# ---------------------------------------------------------------------------
+# Security regressions — locks in the three HIGH fixes:
+#   /sample   path-allowlist + extension-allowlist (prev: arbitrary file read)
+#   /api/history/<id>  run-id regex (prev: path traversal via ..)
+#   Host: header check on every endpoint (prev: DNS-rebinding amplifier)
+# ---------------------------------------------------------------------------
+
+class TestSecurityRegressions:
+    def _raw_get(self, port, path, host="127.0.0.1"):
+        """Send a raw HTTP/1.1 GET so we can control the Host header."""
+        import socket
+        s = socket.create_connection(("127.0.0.1", port), timeout=3.0)
+        try:
+            s.sendall(
+                f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
+                f"Connection: close\r\n\r\n".encode()
+            )
+            chunks = []
+            while True:
+                buf = s.recv(4096)
+                if not buf:
+                    break
+                chunks.append(buf)
+        finally:
+            s.close()
+        raw = b"".join(chunks)
+        status_line = raw.split(b"\r\n", 1)[0].decode("latin1")
+        code = int(status_line.split(" ")[1])
+        return code, raw
+
+    # -- /sample allowlist ------------------------------------------------
+
+    def test_sample_rejects_unregistered_path(self, dashboard, tmp_path):
+        """A real .png that was never add_sample()'d must be rejected."""
+        from urllib.parse import quote
+        img = tmp_path / "secret.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n")
+        # File exists, has a valid image extension, but was not registered.
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(img))}"
+        code, body = _get(url)
+        assert code == 403
+        assert b"not allowed" in body.lower()
+
+    def test_sample_rejects_arbitrary_file_read(self, dashboard, tmp_path):
+        """The original HIGH: /sample?path=<any file> reading anything on disk."""
+        from urllib.parse import quote
+        secret = tmp_path / "credentials.txt"
+        secret.write_text("HF_TOKEN=hf_super_secret")
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(secret))}"
+        code, body = _get(url)
+        # Extension allowlist fires first for .txt — would have been 200 + leak before.
+        assert code == 403
+        assert b"hf_super_secret" not in body
+
+    def test_sample_rejects_non_image_extension(self, dashboard, tmp_path):
+        """Even if added, non-image extensions are blocked at the handler."""
+        from urllib.parse import quote
+        evil = tmp_path / "evil.sh"
+        evil.write_text("#!/bin/sh\necho pwn")
+        # Force-register (add_sample only checks existence) — the handler
+        # must still refuse because of the extension allowlist.
+        with dashboard._lock:
+            dashboard._allowed_sample_paths.add(str(evil.resolve()))
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(evil))}"
+        code, _ = _get(url)
+        assert code == 403
+
+    def test_sample_serves_registered_image(self, dashboard, tmp_path):
+        """Positive: a properly-registered .png is still served."""
+        from urllib.parse import quote
+        img = tmp_path / "ok.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        dashboard.add_sample(img)
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(img))}"
+        code, body = _get(url)
+        assert code == 200
+        assert body.startswith(b"\x89PNG")
+
+    def test_sample_symlink_traversal_defeated(self, dashboard, tmp_path):
+        """Symlink trick must not bypass the allowlist (resolve() is the fix)."""
+        from urllib.parse import quote
+        real = tmp_path / "real.png"
+        real.write_bytes(b"\x89PNG\r\n\x1a\n")
+        link = tmp_path / "link.png"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks unsupported on this platform")
+        # We register only the SYMLINK path; add_sample resolves to `real`.
+        dashboard.add_sample(link)
+        # Requesting via the symlink name must still work because resolve()
+        # gives the same canonical path.
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(link))}"
+        code, _ = _get(url)
+        assert code == 200
+        # And requesting an unregistered symlink to the same target via a
+        # second link must be rejected (it resolves to `real`, which IS in
+        # the allowlist — so this is actually allowed; verify the inverse:
+        # an unregistered file with a different resolved path is rejected).
+        other = tmp_path / "other.png"
+        other.write_bytes(b"\x89PNG\r\n\x1a\n")
+        url = f"http://127.0.0.1:{dashboard.port}/sample?path={quote(str(other))}"
+        code, _ = _get(url)
+        assert code == 403
+
+    # -- /api/history/<id> path-traversal --------------------------------
+
+    def test_history_id_rejects_path_traversal(self, dashboard, tmp_path):
+        """The original HIGH-2: ../../../foo.json escapes the history dir."""
+        # Plant a sensitive JSON outside the history dir.
+        secret = tmp_path / "leaked.json"
+        secret.write_text('{"token": "hf_secret"}')
+        # The dashboard's history_dir is tmp_path/"history" (per fixture).
+        # Try to traverse from there to leaked.json (one dir up + filename).
+        # We strip ".json" because the handler appends it.
+        traversal = "../leaked"
+        from urllib.parse import quote
+        # quote() leaves "../" intact when safe="/" so we use safe="" to be sure.
+        url = f"http://127.0.0.1:{dashboard.port}/api/history/{quote(traversal, safe='')}"
+        code, body = _get(url)
+        assert code == 400
+        assert b"hf_secret" not in body
+
+    def test_history_id_rejects_dot_segments(self, dashboard):
+        """Even an undecoded '..' literal must be refused by the regex."""
+        url = f"http://127.0.0.1:{dashboard.port}/api/history/.."
+        code, _ = _get(url)
+        assert code == 400
+
+    def test_history_id_rejects_slash(self, dashboard):
+        """Embedded slashes can't sneak around the prefix strip."""
+        url = f"http://127.0.0.1:{dashboard.port}/api/history/foo/bar"
+        code, _ = _get(url)
+        # Either 400 (regex) or 404 (no such id) — both are safe.
+        assert code in (400, 404)
+
+    def test_history_id_accepts_valid_run_id(self, tmp_path):
+        """Positive: a real saved run_id (timestamp + hex) still loads."""
+        history_dir = tmp_path / "hist"
+        db = TrainingDashboard(port=18620, history_dir=history_dir)
+        db.start()
+        _wait_ready(db)
+        db.update(step=1, loss=0.5, lr=1e-4)
+        rid = db._run_id
+        db.stop()
+
+        db2 = TrainingDashboard(port=18621, history_dir=history_dir)
+        db2.start()
+        _wait_ready(db2)
+        try:
+            code, run = _get_json(f"http://127.0.0.1:{db2.port}/api/history/{rid}")
+            assert code == 200
+            assert run["id"] == rid
+        finally:
+            db2.stop()
+
+    # -- Host header check (DNS-rebinding defense) ------------------------
+
+    def test_host_check_rejects_attacker_domain(self, dashboard):
+        """A DNS-rebound request from evil.com is refused on every endpoint."""
+        for path in ("/", "/api/metrics", "/api/samples", "/api/history",
+                     "/api/history/anything", "/sample?path=/etc/passwd"):
+            code, _ = self._raw_get(dashboard.port, path, host="evil.com")
+            assert code == 403, f"endpoint {path!r} accepted evil.com Host header"
+
+    def test_host_check_accepts_localhost_variants(self, dashboard):
+        for host in ("127.0.0.1", "localhost", "127.0.0.1:18585",
+                     "localhost:18585"):
+            code, _ = self._raw_get(dashboard.port, "/", host=host)
+            assert code == 200, f"localhost variant {host!r} was rejected"
+
+    def test_host_check_accepts_ipv6_localhost(self, dashboard):
+        # urllib normally adds the port; we mirror that with brackets.
+        for host in ("[::1]", "[::1]:18585"):
+            code, _ = self._raw_get(dashboard.port, "/", host=host)
+            assert code == 200, f"IPv6 localhost {host!r} was rejected"
+
+    def test_host_check_rejects_empty_host(self, dashboard):
+        """No Host header (or empty) is also refused — DNS rebinding can't
+        force a missing header in a real browser, but we want strict default."""
+        code, _ = self._raw_get(dashboard.port, "/", host="")
+        assert code == 403

@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -44,6 +45,16 @@ from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Image extensions the /sample endpoint is allowed to serve. Without an
+# extension allowlist the unknown-suffix branch would fall back to
+# application/octet-stream and exfiltrate any binary file on disk.
+_SAMPLE_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+# Run IDs are constructed as "<timestamp>_<hex>" (see TrainingDashboard.__init__);
+# enforce the same character class on incoming /api/history/<id> requests so
+# "../" segments cannot traverse out of the history directory.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # ============================================================
 # SECTION: Embedded HTML template (dark theme, Chart.js CDN)
@@ -322,7 +333,29 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         body = json.dumps(data, ensure_ascii=False).encode()
         self._send(200, "application/json", body)
 
+    def _host_allowed(self) -> bool:
+        # Reject requests whose Host header is not a localhost variant.
+        # Without this check, a webpage the user visits can DNS-rebind
+        # attacker.com -> 127.0.0.1 and read every dashboard endpoint
+        # (including /sample and /api/history/<id>) cross-origin.
+        host = self.headers.get("Host", "").strip().lower()
+        if not host:
+            return False
+        # Strip optional port. IPv6 hosts are bracketed: "[::1]" or "[::1]:8585".
+        if host.startswith("["):
+            end = host.find("]")
+            if end == -1:
+                return False
+            hostname = host[1:end]
+        else:
+            hostname = host.rsplit(":", 1)[0] if ":" in host else host
+        return hostname in {"127.0.0.1", "localhost", "::1"}
+
     def do_GET(self) -> None:  # noqa: N802
+        if not self._host_allowed():
+            self._send(403, "text/plain", b"Forbidden: invalid Host header")
+            return
+
         path = self.path.split("?")[0]
         query = self.path[len(path):]
 
@@ -342,6 +375,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         elif path.startswith("/api/history/"):
             run_id = path[len("/api/history/"):]
+            # Path-traversal hardening: BaseHTTPRequestHandler does not decode
+            # ".." segments, so without this check `/api/history/../../../etc/foo`
+            # would resolve `_history_dir / "../../../etc/foo" + ".json"` and
+            # read any *.json file the user can read.
+            if not _RUN_ID_RE.match(run_id):
+                self._send(400, "application/json", b'{"error":"invalid run id"}')
+                return
             run = self.dashboard._load_run(run_id)
             if run is None:
                 self._send(404, "application/json", b'{"error":"not found"}')
@@ -357,14 +397,29 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             if not paths:
                 self._send(400, "text/plain", b"Missing path")
                 return
-            file_path = Path(unquote(paths[0]))
-            if not file_path.exists():
-                log.error("Sample file not found: %s", file_path)
+            try:
+                file_path = Path(unquote(paths[0])).resolve()
+            except (ValueError, OSError):
+                self._send(400, "text/plain", b"Invalid path")
+                return
+            # Extension allowlist: prevents arbitrary-binary exfiltration via
+            # the previous application/octet-stream fallback.
+            if file_path.suffix.lower() not in _SAMPLE_IMAGE_EXTS:
+                self._send(403, "text/plain", b"Not an image file")
+                return
+            # Path allowlist: only paths registered via add_sample() are
+            # serveable. Mirrors the comparison_viewer.py pattern.
+            with self.dashboard._lock:
+                allowed = str(file_path) in self.dashboard._allowed_sample_paths
+            if not allowed:
+                self._send(403, "text/plain", b"Path not allowed")
+                return
+            if not file_path.is_file():
                 self._send(404, "text/plain", b"Not found")
                 return
-            suffix = file_path.suffix.lower()
-            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                    "webp": "image/webp"}.get(suffix.lstrip("."), "application/octet-stream")
+            suffix = file_path.suffix.lower().lstrip(".")
+            mime = {"png": "image/png", "jpg": "image/jpeg",
+                    "jpeg": "image/jpeg", "webp": "image/webp"}[suffix]
             data = file_path.read_bytes()
             self._send(200, mime, data)
 
@@ -419,6 +474,11 @@ class TrainingDashboard:
             "samples": [],  # list[dict] with keys: path, step
             "run_name": self._run_name,
         }
+        # Allowlist of resolved absolute paths that /sample is permitted to
+        # serve. Populated by add_sample(). Without this, any local process
+        # (or a DNS-rebound browser) could read arbitrary files via
+        # /sample?path=/etc/passwd.
+        self._allowed_sample_paths: set[str] = set()
 
     # ------------------------------------------------------------------
     # Server lifecycle
@@ -556,14 +616,19 @@ class TrainingDashboard:
         Args:
             path: Absolute or relative path to the generated image.
         """
-        path = str(path)
-        if not Path(path).exists():
+        p = Path(path)
+        if not p.exists():
             log.error("Sample image not found: %s", path)
             return
+        # Resolve to an absolute, symlink-followed path. This is the same
+        # value compared against in the /sample handler's allowlist check,
+        # so symlink-based traversal cannot bypass it.
+        resolved = str(p.resolve())
         with self._lock:
             step = self.metrics["global_step"]
-            self.metrics["samples"].append({"path": path, "step": step})
-        log.info("Sample generated at step %d: %s", step, path)
+            self.metrics["samples"].append({"path": resolved, "step": step})
+            self._allowed_sample_paths.add(resolved)
+        log.info("Sample generated at step %d: %s", step, resolved)
 
     def set_run_name(self, name: str) -> None:
         """Set a human-readable name for this training run."""
