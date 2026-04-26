@@ -2182,12 +2182,157 @@ class MainWindow(QMainWindow):
         # Discoverability: show all shortcuts (Ctrl+/ — Linear/Notion convention)
         QShortcut(QKeySequence("Ctrl+/"), self, self._show_shortcuts_help)
         QShortcut(QKeySequence("Ctrl+?"), self, self._show_shortcuts_help)
+        # Command palette (Ctrl+K — Linear/Raycast/VS Code convention)
+        QShortcut(QKeySequence("Ctrl+K"), self, self._show_command_palette)
+
+    def _build_commands(self) -> list:
+        """Return the command list shown in the Ctrl+K palette.
+
+        Built fresh each time the palette opens so any state-dependent
+        commands (e.g. Cancel, only valid mid-operation) reflect reality.
+        """
+        from dataset_sorter.ui.command_palette import Command
+
+        nav = lambda nid: (lambda: self._switch_nav(nid))  # noqa: E731
+
+        return [
+            # ── Navigation ──────────────────────────────────────────
+            Command("Go to Dataset", nav("dataset"),
+                    category="Navigation", shortcut="Ctrl+1", icon="📁",
+                    description="Browse, tag, and organise the source images",
+                    keywords=["images", "tags", "folder", "scan"]),
+            Command("Go to Train", nav("train"),
+                    category="Navigation", shortcut="Ctrl+2", icon="🎯",
+                    description="Configure model, optimiser, and start training",
+                    keywords=["lora", "finetune", "fit"]),
+            Command("Go to Generate", nav("generate"),
+                    category="Navigation", shortcut="Ctrl+3", icon="🎨",
+                    description="Run inference and generate images from prompts",
+                    keywords=["inference", "sample", "prompt", "diffusion"]),
+            Command("Go to Library", nav("library"),
+                    category="Navigation", shortcut="Ctrl+4", icon="📚",
+                    description="Manage saved models, LoRAs, and embeddings",
+                    keywords=["models", "checkpoints"]),
+            Command("Go to Batch Generation", nav("batch"),
+                    category="Navigation", shortcut="Ctrl+5", icon="🧺",
+                    description="Queue many prompts and run them unattended",
+                    keywords=["queue", "many", "csv"]),
+            Command("Go to Compare (A/B)", nav("compare"),
+                    category="Navigation", shortcut="Ctrl+6", icon="⚖",
+                    description="Side-by-side image comparison with overrides",
+                    keywords=["ab", "side by side"]),
+            Command("Go to Model Merge", nav("merge"),
+                    category="Navigation", shortcut="Ctrl+7", icon="⛙",
+                    description="Combine checkpoints with weighted sum, SLERP, etc.",
+                    keywords=["mix", "blend", "slerp"]),
+
+            # ── Project ─────────────────────────────────────────────
+            Command("Save Config", self._save_config,
+                    category="Project", shortcut="Ctrl+S", icon="💾",
+                    description="Write the current training config to JSON"),
+            Command("Load Training Config", self._load_config,
+                    category="Project", shortcut="Ctrl+Shift+L", icon="📂",
+                    description="Restore a previously saved training config"),
+            Command("Open Project…", lambda: self._show_welcome_dialog(focus_tab=1),
+                    category="Project", shortcut="Ctrl+O", icon="📦",
+                    description="Switch to a different project folder",
+                    keywords=["switch", "recent"]),
+            Command("New Project…", lambda: self._show_welcome_dialog(focus_tab=0),
+                    category="Project", icon="✨",
+                    description="Create a fresh DataBuilder project folder",
+                    keywords=["create"]),
+            Command("Manage API Keys…", self._show_api_keys_dialog,
+                    category="Project", icon="🔑",
+                    description="Edit HuggingFace and Civitai tokens",
+                    keywords=["huggingface", "civitai", "token", "credentials"]),
+
+            # ── Dataset actions ─────────────────────────────────────
+            Command("Scan Source Folder", self._start_scan,
+                    category="Dataset", shortcut="Ctrl+R", icon="🔎",
+                    description="Read images and tags from the source directory",
+                    keywords=["refresh", "rescan", "reload"]),
+            Command("Dry-Run Export", self._dry_run,
+                    category="Dataset", shortcut="Ctrl+D", icon="🔬",
+                    description="Preview the export structure without writing files",
+                    keywords=["preview", "test"]),
+            Command("Start Export", self._start_export,
+                    category="Dataset", shortcut="Ctrl+E", icon="📤",
+                    description="Write the organised dataset to the output folder"),
+
+            # ── Edit ────────────────────────────────────────────────
+            Command("Undo", self._undo,
+                    category="Edit", shortcut="Ctrl+Z", icon="↶",
+                    description="Revert the last tag change"),
+            Command("Redo", self._redo,
+                    category="Edit", shortcut="Ctrl+Shift+Z", icon="↷",
+                    description="Reapply a change you just undid"),
+
+            # ── Training ────────────────────────────────────────────
+            Command("Start Training", self._start_training_from_palette,
+                    category="Training", shortcut="Ctrl+Return", icon="▶",
+                    description="Kick off a training run with the current config",
+                    keywords=["run", "begin", "fit", "train"]),
+
+            # ── View ────────────────────────────────────────────────
+            Command("Toggle Theme", self._toggle_theme,
+                    category="View", shortcut="Ctrl+T", icon="🌗",
+                    description="Switch between dark and light mode",
+                    keywords=["dark", "light", "mode"]),
+            Command("Toggle Debug Console", self._toggle_debug_console,
+                    category="View", shortcut="F12", icon="🐞",
+                    description="Show or hide the floating log console",
+                    keywords=["log", "logs", "f12", "debug"]),
+            Command("Show Keyboard Shortcuts", self._show_shortcuts_help,
+                    category="View", shortcut="Ctrl+/", icon="⌨",
+                    description="List every keyboard shortcut at a glance",
+                    keywords=["help", "keys", "bindings"]),
+            Command("Replay Onboarding Tour", self._replay_onboarding,
+                    category="View", icon="🎓",
+                    description="Walk through the introductory tour again",
+                    keywords=["welcome", "intro", "guide", "help"]),
+
+            # ── General ────────────────────────────────────────────
+            Command("Cancel Current Operation", self._cancel_operation,
+                    category="General", shortcut="Esc", icon="✕",
+                    description="Abort the running scan, export, or training",
+                    keywords=["stop", "abort"]),
+        ]
+
+    def _show_command_palette(self):
+        """Open the Ctrl+K command palette."""
+        from dataset_sorter.ui.command_palette import CommandPalette
+        dlg = CommandPalette(self._build_commands(), parent=self)
+        dlg.exec()
+
+    def _start_training_from_palette(self):
+        """Trigger the training tab's start handler from the command palette."""
+        if hasattr(self, "training_tab") and hasattr(self.training_tab, "_start_training"):
+            self._switch_nav("train")
+            self.training_tab._start_training()
+
+    def _toggle_debug_console(self):
+        """Toggle the global Debug Console window (mirror of F12 shortcut)."""
+        from dataset_sorter.ui import debug_console as dc
+        console = dc._console_instance
+        if console is None:
+            return
+        if console.isHidden():
+            console.show()
+            console.raise_()
+        else:
+            console.hide()
 
     def _show_shortcuts_help(self):
         """Open the keyboard shortcuts help overlay."""
         from dataset_sorter.ui.dialogs import ShortcutsHelpDialog
         dlg = ShortcutsHelpDialog(self)
         dlg.exec()
+
+    def _replay_onboarding(self):
+        """Restart the first-launch onboarding tour on demand."""
+        from dataset_sorter.ui.onboarding import OnboardingTour
+        tour = OnboardingTour(self)
+        tour.start()
 
     def _refresh_theme_styles(self):
         """Re-apply all hardcoded widget stylesheets after a theme change."""
@@ -2309,7 +2454,55 @@ class MainWindow(QMainWindow):
                 widget.refresh_theme()
 
     def _toggle_theme(self):
-        """Switch between dark and light themes."""
+        """Switch between dark and light themes with a soft fade transition.
+
+        QGraphicsOpacityEffect briefly dims the central widget while we
+        swap stylesheets and rebuild theme-dependent inline styles.  The
+        whole crossfade lands in ~280 ms — fast enough to feel snappy,
+        long enough to hide the flash of unstyled content.
+        """
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+
+        cw = self.centralWidget()
+        # If we can't reach the central widget for any reason, fall back
+        # to the original instant swap rather than failing the toggle.
+        if cw is None:
+            self._apply_theme_swap()
+            return
+
+        # Reuse a single effect so consecutive presses don't stack.
+        effect = getattr(self, "_theme_fade_effect", None)
+        if effect is None:
+            effect = QGraphicsOpacityEffect(cw)
+            cw.setGraphicsEffect(effect)
+            self._theme_fade_effect = effect
+        effect.setOpacity(1.0)
+
+        fade_out = QPropertyAnimation(effect, b"opacity", self)
+        fade_out.setDuration(140)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.55)
+        fade_out.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(140)
+        fade_in.setStartValue(0.55)
+        fade_in.setEndValue(1.0)
+        fade_in.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        def _midpoint_swap():
+            self._apply_theme_swap()
+            fade_in.start()
+
+        fade_out.finished.connect(_midpoint_swap)
+        # Hold a strong ref so the animations aren't garbage-collected
+        # before they finish.
+        self._theme_fade_anims = (fade_out, fade_in)
+        fade_out.start()
+
+    def _apply_theme_swap(self):
+        """Actually flip stylesheet + theme-dependent inline styles."""
         new_mode = toggle_theme()
         QApplication.instance().setStyleSheet(get_stylesheet())
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
@@ -3722,6 +3915,13 @@ def run():
         if splash is not None:
             splash.close()
         window._restore_or_prompt_project()
+        # First-launch onboarding tour. No-op for returning users; the
+        # helper consults AppSettings before showing anything.
+        try:
+            from dataset_sorter.ui.onboarding import maybe_show_onboarding
+            maybe_show_onboarding(window)
+        except Exception:
+            log.exception("Onboarding tour bootstrap failed")
 
     QTimer.singleShot(0, _open_project_flow)
 

@@ -34,8 +34,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QRectF, QTimer
+from PyQt6.QtGui import (
+    QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPixmap, QBrush,
+)
 from PyQt6.QtWidgets import QSplashScreen, QWidget
 
 log = logging.getLogger(__name__)
@@ -97,6 +99,8 @@ class DataBuilderSplash(QSplashScreen):
     _MESSAGE_COLOR = QColor(220, 230, 250)
     _DOT_COLOR = QColor(150, 200, 255)
     _DOT_FRAME_MS = 180
+    # Shimmer travels left-to-right under the message text on each frame.
+    _SHIMMER_FRAME_MS = 30
 
     def __init__(self, pixmap: QPixmap):
         super().__init__(self._mask_burned_in_text(pixmap),
@@ -105,6 +109,8 @@ class DataBuilderSplash(QSplashScreen):
 
         self._message: str = ""
         self._dot_phase: int = 0
+        # Shimmer phase ∈ [0, 1) — drives the gradient sweep position.
+        self._shimmer_phase: float = 0.0
 
         # Drive the loader animation. The timer only ticks when the Qt event
         # loop is processing events — during synchronous imports it's frozen,
@@ -113,6 +119,12 @@ class DataBuilderSplash(QSplashScreen):
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._advance_animation)
         self._anim_timer.start(self._DOT_FRAME_MS)
+
+        # Faster timer for the shimmer bar so it glides smoothly when the
+        # main thread is idle (between import milestones).
+        self._shimmer_timer = QTimer(self)
+        self._shimmer_timer.timeout.connect(self._advance_shimmer)
+        self._shimmer_timer.start(self._SHIMMER_FRAME_MS)
 
     @staticmethod
     def _mask_burned_in_text(source: QPixmap) -> QPixmap:
@@ -160,6 +172,12 @@ class DataBuilderSplash(QSplashScreen):
         self._dot_phase = (self._dot_phase + 1) % 4
         self.repaint()
 
+    def _advance_shimmer(self) -> None:
+        # ~2.4 s sweep cycle — quick enough to feel alive, slow enough not
+        # to distract from the message.
+        self._shimmer_phase = (self._shimmer_phase + 0.0125) % 1.0
+        self.repaint()
+
     def drawContents(self, painter: QPainter) -> None:  # type: ignore[override]
         rect = self.rect()
         pad_x = max(36, rect.width() // 38)
@@ -188,13 +206,46 @@ class DataBuilderSplash(QSplashScreen):
             cx = pad_x + i * spacing + radius
             painter.drawEllipse(cx - radius, dot_y - radius, radius * 2, radius * 2)
 
+        # Shimmer bar — a thin gradient that sweeps left-to-right just below
+        # the dots. Combined with the existing dot animation it gives the
+        # splash a "live progress" feel even while imports are blocked.
+        bar_x = pad_x
+        bar_y = dot_y + radius * 4
+        bar_w = max(120, rect.width() // 6)
+        bar_h = max(2, rect.height() // 280)
+        # Base track — barely-visible line so the bar has presence even
+        # when the highlight is off-screen.
+        track = QColor(self._DOT_COLOR)
+        track.setAlpha(35)
+        painter.setBrush(track)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h),
+                            bar_h / 2, bar_h / 2)
+        painter.drawPath(path)
+        # Highlight that travels across the bar.
+        sweep_x = bar_x + (self._shimmer_phase * (bar_w + 80)) - 40
+        grad = QLinearGradient(sweep_x, bar_y, sweep_x + 80, bar_y)
+        edge = QColor(self._DOT_COLOR)
+        edge.setAlpha(0)
+        peak = QColor(self._DOT_COLOR)
+        peak.setAlpha(220)
+        grad.setColorAt(0.0, edge)
+        grad.setColorAt(0.5, peak)
+        grad.setColorAt(1.0, edge)
+        painter.setBrush(QBrush(grad))
+        painter.setClipPath(path)  # confine the highlight to the bar
+        painter.drawRect(QRectF(bar_x - 40, bar_y, bar_w + 80, bar_h))
+        painter.setClipping(False)
+
     def finish_with(self, target: QWidget) -> None:
         """Hide the splash as soon as ``target`` is shown."""
         self._anim_timer.stop()
+        self._shimmer_timer.stop()
         self.finish(target)
 
     def closeEvent(self, event):  # noqa: D401 — Qt override
         self._anim_timer.stop()
+        self._shimmer_timer.stop()
         super().closeEvent(event)
 
 

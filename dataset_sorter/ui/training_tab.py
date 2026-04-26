@@ -16,7 +16,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer, QThread
-from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath
+from PyQt6.QtGui import (
+    QFont, QPixmap, QImage, QPainter, QPen, QColor, QPainterPath,
+    QLinearGradient, QRadialGradient, QBrush,
+)
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QFileDialog, QGroupBox, QTabWidget,
@@ -41,7 +44,16 @@ log = logging.getLogger(__name__)
 
 
 class LossChartWidget(QWidget):
-    """Mini QPainter line chart for training loss history."""
+    """Mini QPainter line chart for training loss history.
+
+    Visual treatment matches modern observability dashboards:
+      • Gradient fill below the loss line, fading to transparent.
+      • A pulsing glow dot at the most recent data point so the user's
+        eye is drawn to *now* — the value they actually care about.
+      • Subtle horizontal grid lines, no chart-junk.
+    """
+
+    _PULSE_INTERVAL_MS = 60
 
     def __init__(self, parent=None):
         """Initialize the loss chart with an empty data series."""
@@ -49,6 +61,19 @@ class LossChartWidget(QWidget):
         self._points: list[tuple[int, float]] = []
         self.setMinimumHeight(120)
         self.setMaximumHeight(180)
+
+        # Drive the breathing pulse on the most-recent-point glow.
+        # Phase ∈ [0, 1) maps to a smooth sine wave inside paintEvent.
+        self._pulse_phase = 0.0
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._advance_pulse)
+        self._pulse_timer.start(self._PULSE_INTERVAL_MS)
+
+    def _advance_pulse(self):
+        # 0.04 step at 60 ms → ~1.6 s per breath cycle, intentionally slow.
+        self._pulse_phase = (self._pulse_phase + 0.04) % 1.0
+        if self.isVisible() and self._points:
+            self.update()
 
     def set_data(self, points: list[tuple[int, float]]):
         """Replace the entire data series with the given (step, loss) points."""
@@ -69,7 +94,7 @@ class LossChartWidget(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        """Draw the loss curve with axes, grid lines, and labels."""
+        """Draw the loss curve with gradient fill, axes, grid, and a pulsing tip."""
         if len(self._points) < 2:
             return
         painter = QPainter(self)
@@ -128,20 +153,67 @@ class LossChartWidget(QWidget):
         painter.drawText(QRectF(w - margin_r - 40, h - margin_b + 4, 40, 16),
                          Qt.AlignmentFlag.AlignRight, str(max_step))
 
-        # Draw loss line
-        path = QPainterPath()
-        # Downsample if too many points
+        # Downsample if too many points (chart pixel resolution)
         pts = self._points
         if len(pts) > chart_w:
             step_size = max(1, len(pts) // int(chart_w))
             pts = pts[::step_size]
-        path.moveTo(to_x(pts[0][0]), to_y(pts[0][1]))
-        for step, loss in pts[1:]:
-            path.lineTo(to_x(step), to_y(loss))
 
-        line_pen = QPen(QColor(COLORS["accent"]), 2)
+        # Build the loss line path
+        line_path = QPainterPath()
+        line_path.moveTo(to_x(pts[0][0]), to_y(pts[0][1]))
+        for step, loss in pts[1:]:
+            line_path.lineTo(to_x(step), to_y(loss))
+
+        # Gradient fill UNDER the line — closes the path to the bottom
+        # axis so QPainter fills the polygon with a vertical fade.
+        accent = QColor(COLORS["accent"])
+        fill_path = QPainterPath(line_path)
+        fill_path.lineTo(to_x(pts[-1][0]), margin_t + chart_h)
+        fill_path.lineTo(to_x(pts[0][0]), margin_t + chart_h)
+        fill_path.closeSubpath()
+
+        gradient = QLinearGradient(0, margin_t, 0, margin_t + chart_h)
+        top_color = QColor(accent)
+        top_color.setAlpha(110)
+        mid_color = QColor(accent)
+        mid_color.setAlpha(40)
+        bot_color = QColor(accent)
+        bot_color.setAlpha(0)
+        gradient.setColorAt(0.0, top_color)
+        gradient.setColorAt(0.55, mid_color)
+        gradient.setColorAt(1.0, bot_color)
+        painter.fillPath(fill_path, QBrush(gradient))
+
+        # Stroke the line on top of the fill so its edge stays crisp.
+        line_pen = QPen(accent, 2)
+        line_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(line_pen)
-        painter.drawPath(path)
+        painter.drawPath(line_path)
+
+        # Pulsing glow at the latest data point — draws the eye to "now".
+        import math
+        last_x = to_x(pts[-1][0])
+        last_y = to_y(pts[-1][1])
+        # Sine-shaped pulse so the radius eases in / out smoothly.
+        pulse = 0.5 + 0.5 * math.sin(self._pulse_phase * 2 * math.pi)
+        glow_radius = 9 + 5 * pulse  # 9 → 14 px
+        glow = QRadialGradient(last_x, last_y, glow_radius)
+        gc = QColor(accent)
+        gc.setAlpha(int(170 * (0.6 + 0.4 * pulse)))
+        glow.setColorAt(0.0, gc)
+        edge = QColor(accent)
+        edge.setAlpha(0)
+        glow.setColorAt(1.0, edge)
+        painter.setBrush(QBrush(glow))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(
+            QPointF(last_x, last_y), glow_radius, glow_radius,
+        )
+        # Solid centre dot for crispness on top of the soft glow.
+        painter.setBrush(QBrush(accent))
+        painter.drawEllipse(QPointF(last_x, last_y), 3.0, 3.0)
 
         painter.end()
 
