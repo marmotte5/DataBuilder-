@@ -625,6 +625,11 @@ MTIME_TOLERANCE: float = 0.01           # File mtime comparison tolerance (secon
 # ── Default Generation Parameters ─────────────────────────────────────
 DEFAULT_INFERENCE_STEPS: int = 28       # Default diffusion inference steps
 DEFAULT_CFG_SCALE: float = 7.0          # Default classifier-free guidance scale
+MODEL_DEFAULT_CFG: dict[str, float] = {
+    "flux": 3.5, "flux2": 3.5, "chroma": 3.5, "zimage": 3.5,
+    "pixart": 4.5, "sana": 4.5, "auraflow": 3.5,
+    "sd3": 5.0, "sd35": 5.0,
+}
 DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no change, 1=full noise)
 DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off, 3.0 typical)
 DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset

@@ -37,6 +37,7 @@ from dataset_sorter.constants import (
     DEFAULT_IMG2IMG_STRENGTH,
     DEFAULT_INFERENCE_STEPS,
     MODEL_CAPABILITIES,
+    MODEL_DEFAULT_CFG,
     PAG_LAYER_PRESETS,
     PAG_MODELS,
     TRUST_REMOTE_CODE_MODELS,
@@ -63,6 +64,7 @@ SCHEDULER_MAP = {
     "lms":         "LMSDiscreteScheduler",
     "pndm":        "PNDMScheduler",
     "unipc":       "UniPCMultistepScheduler",
+    "lcm":         "LCMScheduler",
 }
 
 # Flow-matching models must keep their native scheduler (FlowMatchEulerDiscrete
@@ -183,6 +185,9 @@ def _load_scheduler(pipe, scheduler_name: str, model_type: str = ""):
     kwargs = {}
     if "karras" in scheduler_name:
         kwargs["use_karras_sigmas"] = True
+    elif scheduler_name in ("dpm++_2m", "dpm++_sde"):
+        kwargs["use_karras_sigmas"] = True
+        log.info("Auto-enabling Karras sigmas for %s (produces sharper results)", scheduler_name)
 
     try:
         pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config, **kwargs)
@@ -532,8 +537,14 @@ class GenerateWorker(QThread):
         from dataset_sorter.diagnostics import log_vram_state
         log_vram_state(f"model loaded: {model_type}")
 
+        # Update CFG default to match the loaded architecture
+        arch_cfg = MODEL_DEFAULT_CFG.get(model_type, DEFAULT_CFG_SCALE)
+        if abs(self.cfg_scale - DEFAULT_CFG_SCALE) < 0.01 and arch_cfg != DEFAULT_CFG_SCALE:
+            self.cfg_scale = arch_cfg
+            log.info("Auto-adjusted CFG default to %.1f for %s", arch_cfg, model_type)
+
         self._emit(self.progress, 100, 100, "Model loaded!")
-        self._emit(self.model_loaded, 
+        self._emit(self.model_loaded,
             f"Loaded {model_type} on {self._device} ({dtype.__name__ if hasattr(dtype, '__name__') else dtype})"
         )
 
