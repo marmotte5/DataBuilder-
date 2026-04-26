@@ -179,6 +179,10 @@ class _ComparisonWorker(QThread):
             self.finished.emit(False, "No model loaded")
             return
 
+        # Snapshot scheduler once so all images in this run use the same sampler,
+        # even if the generate tab's scheduler is changed mid-run.
+        scheduler_name = gw.scheduler_name
+
         total = len(self._gen_queue)
         for i, config in enumerate(self._gen_queue):
             if self._stop_flag:
@@ -189,6 +193,7 @@ class _ComparisonWorker(QThread):
             params = {
                 "positive_prompt": config["prompt"],
                 "negative_prompt": config["negative"],
+                "scheduler_name": scheduler_name,
                 "steps": config["steps"],
                 "cfg_scale": config["cfg"],
                 "seed": config["seed"],

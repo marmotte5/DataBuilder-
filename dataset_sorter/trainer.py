@@ -1065,7 +1065,14 @@ class Trainer:
                 temperature=config.curriculum_temperature,
                 warmup_epochs=config.curriculum_warmup_epochs,
             )
-            log.info("Curriculum learning enabled (loss-based adaptive sampling)")
+            if self._bucket_sampler is not None:
+                log.warning(
+                    "Curriculum learning + aspect-ratio bucketing: the bucket sampler "
+                    "controls batch composition, so curriculum sampling weights will "
+                    "NOT take effect. Disable bucketing to use curriculum learning."
+                )
+            else:
+                log.info("Curriculum learning enabled (loss-based adaptive sampling)")
 
         # ── 15. Per-timestep EMA sampling setup ──
         if config.timestep_ema_sampling and self.backend.noise_scheduler is not None:
