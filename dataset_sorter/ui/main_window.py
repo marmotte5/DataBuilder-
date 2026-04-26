@@ -1256,10 +1256,17 @@ class MainWindow(QMainWindow):
         main_area_layout.addWidget(self.progress_bar)
 
         # Content row: main stack + helper panel ───────────────────────────
+        # Wrapped in a horizontal splitter so users can resize the right-side
+        # tips panel or collapse it down to its minimum width.
         content_row = QWidget()
         content_row_layout = QHBoxLayout(content_row)
         content_row_layout.setContentsMargins(0, 0, 0, 0)
         content_row_layout.setSpacing(0)
+
+        self._content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._content_splitter.setChildrenCollapsible(False)
+        self._content_splitter.setHandleWidth(4)
+        content_row_layout.addWidget(self._content_splitter, 1)
 
         # Main stacked widget
         main_content = QWidget()
@@ -1424,11 +1431,12 @@ class MainWindow(QMainWindow):
         self._content_stack.addWidget(self.help_tab)  # index 9
 
         main_content_layout.addWidget(self._content_stack, 1)
-        content_row_layout.addWidget(main_content, 7)
+        self._content_splitter.addWidget(main_content)
 
         # ── Helper panel (right, ~30%) ─────────────────────────────────────
         self._helper_panel = QWidget()
-        self._helper_panel.setFixedWidth(240)
+        self._helper_panel.setMinimumWidth(180)
+        self._helper_panel.setMaximumWidth(420)
         self._helper_panel.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border-left: 1px solid {COLORS['border']};"
@@ -1455,7 +1463,13 @@ class MainWindow(QMainWindow):
         )
         helper_layout.addWidget(self._helper_text, 1)
 
-        content_row_layout.addWidget(self._helper_panel)
+        self._content_splitter.addWidget(self._helper_panel)
+        # Initial sizes: ~85% main content, ~15% helper. Stretch factors keep
+        # the helper panel at a roughly fixed width while the main content
+        # absorbs window resizes.
+        self._content_splitter.setStretchFactor(0, 1)
+        self._content_splitter.setStretchFactor(1, 0)
+        self._content_splitter.setSizes([1000, 240])
 
         main_area_layout.addWidget(content_row, 1)
         outer.addWidget(main_area, 1)

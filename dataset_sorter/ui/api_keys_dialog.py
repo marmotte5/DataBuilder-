@@ -28,6 +28,7 @@ from PyQt6.QtCore import QUrl
 
 from dataset_sorter import api_keys
 from dataset_sorter.api_keys import SERVICE_ENV_VARS
+from dataset_sorter.ui.theme import COLORS
 
 log = logging.getLogger(__name__)
 
@@ -163,11 +164,11 @@ class _ApiKeyRow(QWidget):
 
     def _set_status(self, text: str, *, level: str) -> None:
         colour = {
-            "ok":    "#36a05a",
-            "warn":  "#c89b1a",
-            "error": "#c0392b",
-            "info":  "#666",
-        }.get(level, "#666")
+            "ok":    COLORS['success'],
+            "warn":  COLORS['warning'],
+            "error": COLORS['danger'],
+            "info":  COLORS['text_muted'],
+        }.get(level, COLORS['text_muted'])
         self._status.setText(text)
         self._status.setStyleSheet(f"color: {colour}; font-size: 11px;")
 
@@ -303,7 +304,9 @@ class APIKeysDialog(QDialog):
 
         self._backend_label = QLabel("", self)
         self._backend_label.setWordWrap(True)
-        self._backend_label.setStyleSheet("font-size: 11px; color: #666;")
+        self._backend_label.setStyleSheet(
+            f"font-size: 11px; color: {COLORS['text_muted']};"
+        )
         layout.addWidget(self._backend_label)
         self._refresh_backend_label()
 
