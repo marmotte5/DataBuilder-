@@ -199,7 +199,7 @@ class _MemoryView(_ConfigView):
         "triton_fused_adamw", "triton_fused_loss", "triton_fused_flow",
         "fp8_training",
         "sequence_packing",
-        "mmap_dataset",
+        "mmap_dataset", "mmap_prebuilt_cache_dir",
         "parallel_caching", "parallel_caching_workers",
         "zero_bottleneck_loader",
     )

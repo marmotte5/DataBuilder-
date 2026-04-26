@@ -1194,7 +1194,7 @@ class TestSOAP:
         from dataset_sorter.optimizers import SOAP
         p = torch.nn.Parameter(torch.randn(3, 3))
         opt = SOAP([p])
-        assert opt.defaults["lr"] == 3e-4
+        assert opt.defaults["lr"] == 5e-5
         assert opt.defaults["precondition_frequency"] == 10
 
 
