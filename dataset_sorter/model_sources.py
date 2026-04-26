@@ -213,6 +213,11 @@ def _atomic_download(url: str, dest_path: Path, *,
                         sha256.update(chunk)
                     if progress_cb is not None:
                         progress_cb(written, total)
+        if total > 0 and written != total:
+            raise SourceError(
+                f"Incomplete download for {dest_path.name}: "
+                f"got {written} bytes, expected {total}"
+            )
         if expected_sha256:
             digest = sha256.hexdigest().lower()
             if digest != expected_sha256.lower():
