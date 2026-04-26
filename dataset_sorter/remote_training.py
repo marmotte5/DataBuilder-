@@ -40,7 +40,7 @@ via ``scp`` / ``rsync``.
 
 Public API::
 
-    build_bundle(config, image_paths, captions, bundle_dir,
+    build_bundle(config, model_path, image_paths, captions, bundle_dir,
                  include_model=False, progress_fn=None) -> Path
 """
 
