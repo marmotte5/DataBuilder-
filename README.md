@@ -133,36 +133,40 @@ All backends support both **diffusers directories** and **single-file `.safetens
 
 ### Installation
 
-> **Requires Python 3.10 – 3.13.** Python 3.14+ is too new — most ML wheels
-> (PyTorch, bitsandbytes, etc.) don't ship for it yet.
-
 ```bash
 git clone https://github.com/marmotte5/DataBuilder-.git
 cd DataBuilder-
 ```
 
-#### One-click install (after cloning)
+#### One-click install — no Python required
 
-| Platform | Double-click this file | Then double-click |
+The installer downloads its own Python. You don't need Homebrew, you
+don't need to install Python yourself, you don't need admin rights.
+
+| Platform | Double-click this | Then double-click |
 | --- | --- | --- |
 | **macOS** | `install.command` | `run.command` |
 | **Windows** | `install.bat` | `run.bat` |
-| **Linux** | run `./install.sh` once in a terminal, then `./run.sh` (or `DataBuilder.desktop` from Files) | — |
+| **Linux** | run `./install.sh` in a terminal, then `./run.sh` | — |
 
-> **First-time macOS double-click:** macOS may block unsigned `.command`
-> files with a "could not be opened" warning. Right-click the file →
-> **Open** → confirm. After that first time, double-clicks work normally.
+The installer uses [`uv`](https://github.com/astral-sh/uv) (Astral's
+Rust-based Python installer) under the hood. On first run it:
+1. Bootstraps `uv` to `~/.local/bin/uv` if it's not already installed.
+2. Downloads a hermetic Python 3.12 build (no system-Python needed).
+3. Creates `.venv/`, picks the right extra for your hardware
+   (`.[mac]` on macOS, `.[cuda]` on Linux+NVIDIA, `.[all]` otherwise),
+   and installs everything.
 
-> **First-time Linux double-click of `DataBuilder.desktop`:** in
-> Files / Nautilus, right-click → **Properties → Permissions →**
-> tick *Allow executing file as program*. (GNOME 42+: in Files,
-> *Preferences → "Executable Text Files: Ask what to do"*.)
+> **First-time macOS double-click:** Gatekeeper may block unsigned
+> `.command` files with a "could not be opened" warning.
+> Right-click the file → **Open** → confirm. After that first time,
+> double-clicks work normally.
 
 #### Or one command in a terminal
 
 ```bash
-./install.sh    # macOS / Linux — picks the right extras automatically
-install.bat     # Windows
+./install.sh    # macOS / Linux — uses uv automatically
+install.bat     # Windows — uses uv automatically
 ```
 
 The installer auto-detects your platform, finds a supported Python,
