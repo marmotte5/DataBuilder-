@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -428,67 +429,218 @@ class TestVerifyCli:
         rc = verify_sources.run(["not-a-real-arch"])
         assert rc == 2
 
-    def test_check_one_returns_status_ok(self):
+    def test_check_one_no_url_for_unknown_source(self):
         from dataset_sorter import verify_sources
-        from dataset_sorter import verify_sources as vs
-        with patch.object(vs, "verify_source_reachable",
-                          return_value=(True, 200)):
-            r = verify_sources._check_one(
-                "sdxl",
-                {"source": "huggingface", "id": "stabilityai/sdxl-base"},
-            )
-        assert r["status"] == "OK"
-        assert r["code"] == 200
+        r = verify_sources._check_one("sdxl", {"source": "ftp", "id": "x"})
+        assert r["status"] == ms.PROBE_NO_URL
 
-    def test_check_one_auth_required_for_gated(self):
-        from dataset_sorter import verify_sources
+    # --- HuggingFace path goes through probe_huggingface --------------
+
+    def test_hf_check_uses_probe_huggingface(self):
         from dataset_sorter import verify_sources as vs
-        with patch.object(vs, "verify_source_reachable",
-                          return_value=(True, 401)):
-            r = verify_sources._check_one(
+        with patch.object(vs, "probe_huggingface",
+                          return_value=(ms.PROBE_OK, 200)) as pm:
+            r = vs._check_one(
+                "sdxl",
+                {"source": "huggingface", "id": "stabilityai/sdxl"},
+            )
+        assert r["status"] == ms.PROBE_OK
+        assert r["code"] == 200
+        # probe_huggingface should have been called with the repo id
+        pm.assert_called_once()
+        assert pm.call_args[0][0] == "stabilityai/sdxl"
+
+    def test_hf_gated_no_token_routes_through_probe(self):
+        from dataset_sorter import verify_sources as vs
+        with patch.object(vs, "probe_huggingface",
+                          return_value=(ms.PROBE_GATED_NO_TOKEN, 401)):
+            r = vs._check_one(
                 "flux",
                 {"source": "huggingface", "id": "black-forest-labs/FLUX.1-dev",
                  "gated": True},
             )
-        assert r["status"] == "AUTH"  # expected
+        assert r["status"] == ms.PROBE_GATED_NO_TOKEN
 
-    def test_check_one_auth_unexpected_for_ungated(self):
-        from dataset_sorter import verify_sources
+    def test_hf_token_invalid_routes_through_probe(self):
+        from dataset_sorter import verify_sources as vs
+        with patch.object(vs, "probe_huggingface",
+                          return_value=(ms.PROBE_TOKEN_INVALID, 401)):
+            r = vs._check_one(
+                "flux",
+                {"source": "huggingface", "id": "black-forest-labs/FLUX.1-dev",
+                 "gated": True},
+            )
+        assert r["status"] == ms.PROBE_TOKEN_INVALID
+
+    def test_hf_404_routes_through_probe(self):
+        from dataset_sorter import verify_sources as vs
+        with patch.object(vs, "probe_huggingface",
+                          return_value=(ms.PROBE_NOT_FOUND, 404)):
+            r = vs._check_one(
+                "sd15", {"source": "huggingface", "id": "deleted/repo"},
+            )
+        assert r["status"] == ms.PROBE_NOT_FOUND
+
+    # --- Non-HF path still uses verify_source_reachable --------------
+
+    def test_civitai_uses_generic_head(self):
         from dataset_sorter import verify_sources as vs
         with patch.object(vs, "verify_source_reachable",
-                          return_value=(True, 403)):
-            r = verify_sources._check_one(
-                "sdxl",
-                {"source": "huggingface", "id": "stabilityai/sdxl",
-                 "gated": False},
+                          return_value=(True, 200)):
+            r = vs._check_one(
+                "pony",
+                {"source": "civitai", "id": "257749"},
             )
-        assert "unexpected" in r["status"].lower()
+        assert r["status"] == ms.PROBE_OK
 
-    def test_check_one_404_flagged(self):
-        from dataset_sorter import verify_sources
+    def test_github_uses_generic_head(self):
         from dataset_sorter import verify_sources as vs
         with patch.object(vs, "verify_source_reachable",
-                          return_value=(False, 404)):
-            r = verify_sources._check_one(
-                "sd15",
-                {"source": "huggingface", "id": "deleted/repo"},
+                          return_value=(True, 200)):
+            r = vs._check_one(
+                "sana", {"source": "github", "id": "NVlabs/Sana"},
             )
-        assert r["status"] == "404"
+        assert r["status"] == ms.PROBE_OK
 
-    def test_check_one_unreachable(self):
-        from dataset_sorter import verify_sources
+    def test_civitai_unreachable(self):
         from dataset_sorter import verify_sources as vs
         with patch.object(vs, "verify_source_reachable",
                           return_value=(False, None)):
-            r = verify_sources._check_one(
-                "sdxl",
-                {"source": "huggingface", "id": "stabilityai/sdxl"},
+            r = vs._check_one(
+                "pony", {"source": "civitai", "id": "257749"},
             )
-        assert r["status"] == "unreachable"
+        assert r["status"] == ms.PROBE_UNREACHABLE
 
-    def test_check_one_no_url_for_unknown_source(self):
-        from dataset_sorter import verify_sources
-        r = verify_sources._check_one(
-            "sdxl", {"source": "ftp", "id": "x"},
-        )
-        assert r["status"] == "no-url"
+
+class TestProbeHuggingFace:
+    """Auth-state classifier — covers the four real-world AUTH cases the
+    CLI used to lump into 'AUTH (unexpected)'.
+
+    All network is mocked: each test stubs urlopen with the response a
+    real HF API call would produce in that scenario.
+    """
+
+    def _http_error(self, code: int):
+        """Raise an urllib HTTPError with the given code."""
+        url = "https://huggingface.co/api/models/x/y"
+        return urllib.error.HTTPError(url, code, "", {}, io.BytesIO(b""))
+
+    def _ok_response(self, body: dict, code: int = 200):
+        """Build a fake urlopen context manager returning a JSON body."""
+        cm = MagicMock()
+        resp = MagicMock()
+        resp.status = code
+        resp.read = MagicMock(return_value=json.dumps(body).encode())
+        cm.__enter__.return_value = resp
+        cm.__exit__.return_value = False
+        return cm
+
+    def test_public_repo_returns_ok(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch("urllib.request.urlopen",
+                   return_value=self._ok_response({"gated": False})):
+            status, code = ms.probe_huggingface("stabilityai/sdxl")
+        assert status == ms.PROBE_OK
+        assert code == 200
+
+    def test_gated_repo_with_valid_token_returns_ok_auth(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_validtoken")
+        with patch("urllib.request.urlopen",
+                   return_value=self._ok_response({"gated": "auto"})):
+            status, code = ms.probe_huggingface("black-forest-labs/FLUX.1-dev")
+        assert status == ms.PROBE_OK_AUTH
+        assert code == 200
+
+    def test_gated_repo_no_token_returns_gated_no_token(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+        # Make _hf_token() return None even if the test runner has a
+        # cached token at ~/.cache/huggingface/token.
+        with patch.object(ms, "_hf_token", return_value=None):
+            with patch("urllib.request.urlopen",
+                       side_effect=self._http_error(401)):
+                status, code = ms.probe_huggingface("black-forest-labs/FLUX.1-dev")
+        assert status == ms.PROBE_GATED_NO_TOKEN
+        assert code == 401
+
+    def test_token_present_but_rejected_returns_token_invalid(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_garbage")
+        with patch("urllib.request.urlopen",
+                   side_effect=self._http_error(401)):
+            status, code = ms.probe_huggingface("any/repo")
+        assert status == ms.PROBE_TOKEN_INVALID
+
+    def test_token_present_403_means_terms_not_accepted(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_validtoken")
+        with patch("urllib.request.urlopen",
+                   side_effect=self._http_error(403)):
+            status, code = ms.probe_huggingface("black-forest-labs/FLUX.1-dev")
+        assert status == ms.PROBE_GATED_TERMS
+
+    def test_no_token_403_is_just_gated(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch.object(ms, "_hf_token", return_value=None):
+            with patch("urllib.request.urlopen",
+                       side_effect=self._http_error(403)):
+                status, code = ms.probe_huggingface("black-forest-labs/FLUX.1-dev")
+        assert status == ms.PROBE_GATED_NO_TOKEN
+
+    def test_404_returns_not_found(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch("urllib.request.urlopen",
+                   side_effect=self._http_error(404)):
+            status, code = ms.probe_huggingface("dead/repo")
+        assert status == ms.PROBE_NOT_FOUND
+
+    def test_network_error_returns_unreachable(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch("urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("dns failure")):
+            status, code = ms.probe_huggingface("any/repo")
+        assert status == ms.PROBE_UNREACHABLE
+        assert code is None
+
+    def test_explicit_token_arg_overrides_env(self, monkeypatch):
+        """Passing token=... must use that, not the env var."""
+        monkeypatch.setenv("HF_TOKEN", "env_token")
+        captured_headers = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured_headers.update(dict(req.header_items()))
+            return self._ok_response({"gated": False})
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            ms.probe_huggingface("any/repo", token="explicit_token")
+
+        # The Authorization header must use the explicit token.
+        auth = next((v for k, v in captured_headers.items()
+                     if k.lower() == "authorization"), "")
+        assert "explicit_token" in auth
+        assert "env_token" not in auth
+
+
+class TestHfTokenLookup:
+    def test_picks_up_HF_TOKEN(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "abc")
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+        assert ms._hf_token() == "abc"
+
+    def test_falls_back_to_HUGGING_FACE_HUB_TOKEN(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "xyz")
+        assert ms._hf_token() == "xyz"
+
+    def test_returns_none_when_no_env_and_no_cache(self, monkeypatch, tmp_path):
+        for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        # Point HOME at an empty tmp dir so the cache file lookup misses.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        # On some platforms Path.home() reads $HOME directly; on others
+        # it uses pwd. Make sure both paths are empty by patching home().
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert ms._hf_token() is None
+
+    def test_strips_whitespace(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "  hf_token_padded  \n")
+        assert ms._hf_token() == "hf_token_padded"
