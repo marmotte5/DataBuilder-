@@ -724,10 +724,29 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
 
+        # ── Settings menu ──────────────────────────────────────────────
+        # Lives between Project and Help — currently houses just the
+        # API Keys dialog; expand here as new global settings appear.
+        settings_menu = menubar.addMenu("&Settings")
+        api_keys_action = settings_menu.addAction("&API Keys…")
+        api_keys_action.setShortcut("Ctrl+,")
+        api_keys_action.setStatusTip(
+            "Manage HuggingFace and Civitai API tokens"
+        )
+        api_keys_action.triggered.connect(self._show_api_keys_dialog)
+
         # ── Help menu ──────────────────────────────────────────────────
         help_menu = menubar.addMenu("&Help")
         about_action = help_menu.addAction("&About DataBuilder")
         about_action.triggered.connect(self._show_about_dialog)
+
+    def _show_api_keys_dialog(self) -> None:
+        """Open the API Keys dialog. Tokens are persisted via api_keys
+        and exported into os.environ on save so downstream code (HF hub,
+        Civitai downloader) picks them up without restart."""
+        from dataset_sorter.ui.api_keys_dialog import APIKeysDialog
+        dlg = APIKeysDialog(parent=self)
+        dlg.exec()
 
     def _show_about_dialog(self) -> None:
         """Display a small About dialog with version + marmot branding."""
@@ -3572,6 +3591,19 @@ def run():
     """Launch the DataBuilder application."""
     from dataset_sorter.ui.debug_console import CrashResilientApp
     from dataset_sorter.ui.splash import resolve_logo_path, show_splash
+
+    # Export stored API tokens into os.environ BEFORE any HF / Civitai
+    # call happens. Existing process-env values win, so a token set in
+    # the user's shell still overrides the stored one. Wrapped in
+    # try/except so a broken keyring backend can't block app startup.
+    try:
+        from dataset_sorter import api_keys
+        exported = api_keys.export_to_env()
+        if exported:
+            log.info("Loaded stored API keys: %s",
+                     ", ".join(sorted(exported)))
+    except Exception as exc:
+        log.warning("Could not load stored API keys: %s", exc)
 
     app = CrashResilientApp(sys.argv)
     app.setStyle("Fusion")
