@@ -1221,6 +1221,199 @@ class Trainer:
 
         self.state.phase = "ready"
 
+    def setup_with_prebuilt_cache(
+        self,
+        model_path: str,
+        cache_dir: Path,
+        output_dir: Path,
+        progress_fn: Optional[ProgressCallback] = None,
+    ):
+        """Alternative setup path for the remote-training bundle workflow.
+
+        The bundle was built on the user's machine via
+        ``remote_training.build_bundle()`` — that step ran the full
+        dataset-encoding pipeline locally (latents + text encoder outputs)
+        and saved the result as a SafetensorsMMapDataset cache directory.
+        Here on the cloud GPU, we only need to:
+
+          1. Load the base model (UNet/transformer + scheduler + VAE +
+             text encoders for sample generation).
+          2. Open the prebuilt cache as ``self.dataset``.
+          3. Wire up optimizer / scheduler / EMA — same as ``setup()``
+             does in its sections 9-11, just without the upstream
+             dataset/encoding work.
+
+        Pipeline integration, bucketing, augmentation, latent caching,
+        TE caching are all SKIPPED (they happened on the user's machine
+        before bundling).
+
+        ``image_paths`` and ``captions`` are not arguments here — the
+        dataset is the cache, captions are stored alongside the latents.
+        """
+        import json as _json
+        import time as _time
+
+        config = self.config
+        if not config.mmap_prebuilt_cache_dir:
+            # Sanity check: the launcher should have set this. We use
+            # the explicit cache_dir argument as the source of truth and
+            # mirror it onto the config field for downstream code that
+            # reads it (e.g. logging).
+            config.mmap_prebuilt_cache_dir = str(cache_dir)
+
+        cache_dir = Path(cache_dir)
+        if not cache_dir.is_dir():
+            raise FileNotFoundError(
+                f"prebuilt cache directory not found: {cache_dir}"
+            )
+        manifest_path = cache_dir / "manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"prebuilt cache missing manifest.json at {manifest_path}"
+            )
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.output_dir = Path(output_dir)
+        self._create_project_folders(self.output_dir)
+        self.state.phase = "loading"
+
+        if progress_fn:
+            progress_fn(0, 5, "Loading base model...")
+
+        # ── 1. Backend / model load (mirrors section 1 of setup()) ──
+        # The arch was recorded in the manifest at bundle time; honour it
+        # over config.model_type so a stale config can't load the wrong
+        # backend for a cache built against a different arch.
+        cached_arch = manifest.get("model_type") or config.model_type
+        if cached_arch and cached_arch != config.model_type:
+            log.warning(
+                "manifest.model_type=%r differs from config.model_type=%r; "
+                "honouring the manifest (the cache was built for %r).",
+                cached_arch, config.model_type, cached_arch,
+            )
+            config.model_type = cached_arch
+
+        from dataset_sorter.backend_registry import get_registry
+        backend_cls = get_registry().get_backend_class(config.model_type)
+        if backend_cls is None:
+            raise ValueError(
+                f"No backend registered for model_type={config.model_type!r}"
+            )
+        self.backend = backend_cls(config, self.device, self.dtype)
+        self.backend.load_model(model_path)
+
+        # The TE / VAE are needed only for sample generation during
+        # training. If the user disabled samples, free them now to save
+        # the ~5-10 GB they hold.
+        if not getattr(config, "sample_every_n_steps", 0):
+            self.backend.offload_text_encoders()
+            self.backend.offload_vae()
+        else:
+            # Match the device-move that setup() performs at lines 815-826
+            # so encode_text_batch works for sample generation.
+            for te in (
+                self.backend.text_encoder,
+                self.backend.text_encoder_2,
+                getattr(self.backend, "text_encoder_3", None),
+            ):
+                if te is not None:
+                    te.to(self.device)
+
+        # ── 2. Open the prebuilt cache as self.dataset ──
+        if progress_fn:
+            progress_fn(1, 5, "Opening prebuilt cache...")
+
+        from dataset_sorter.mmap_dataset import SafetensorsMMapDataset
+        ds = SafetensorsMMapDataset(
+            cache_dir,
+            int(manifest["num_samples"]),
+            self.device, self.dtype,
+            tag_shuffle=config.tag_shuffle,
+            keep_first_n_tags=config.keep_first_n_tags,
+            caption_dropout_rate=config.caption_dropout_rate,
+        )
+        ds.open()
+        self.dataset = ds
+        log.info(
+            "Loaded prebuilt mmap cache from %s (%d samples, model_type=%s)",
+            cache_dir, len(ds), config.model_type,
+        )
+
+        # No validation set in the bundle workflow (would need a separate
+        # cache shard). Set to None so _run_validation gracefully skips.
+        self._val_dataset = None
+
+        # No bucket sampler — buckets were baked into the cache during
+        # build, batches are formed by the standard DataLoader on top of
+        # the (cache-resident, fixed-resolution) latents.
+        self._bucket_sampler = None
+
+        # No mask map either; if the user trained with masked loss, the
+        # mask channels were baked into the cached latents (or not — out
+        # of scope for v1 of the remote bundle).
+        self._mask_map = None
+        self._training_mask = None
+
+        # ── 3. Optimizer + scheduler + EMA (mirrors sections 9-11) ──
+        if progress_fn:
+            progress_fn(2, 5, "Setting up optimizer...")
+
+        # Reuse the same param-group + optimizer construction as setup().
+        if config.triton_fused_adamw:
+            from dataset_sorter.triton_kernels import FusedAdamW
+            from dataset_sorter.optimizer_factory import effective_learning_rate
+            self.optimizer = FusedAdamW(
+                self._build_param_groups(), lr=effective_learning_rate(config),
+                weight_decay=config.weight_decay,
+            )
+        else:
+            self.optimizer = _get_optimizer(config, self._build_param_groups())
+
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self._is_schedulefree = True
+            self.optimizer.train()
+
+        # Final fp16-param sweep (mirrors section 9b) so GradScaler.unscale_
+        # doesn't trip on float16 grads.
+        if self.grad_scaler is not None:
+            for group in self.optimizer.param_groups:
+                for param in group["params"]:
+                    if (isinstance(param, torch.Tensor) and param.requires_grad
+                            and param.dtype != torch.float32):
+                        param.data = param.data.float()
+
+        # ── 4. Steps + scheduler ──
+        if progress_fn:
+            progress_fn(3, 5, "Setting up LR scheduler...")
+        batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
+        steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)
+        total_steps = steps_per_epoch * config.epochs
+        if config.max_train_steps > 0:
+            total_steps = min(total_steps, config.max_train_steps)
+        self.total_steps = total_steps
+        self.steps_per_epoch = steps_per_epoch
+        self.scheduler = _get_scheduler(config, self.optimizer, total_steps)
+
+        # ── 5. EMA (mirrors section 11) ──
+        if progress_fn:
+            progress_fn(4, 5, "Setting up EMA...")
+        self._ema = None
+        if config.ema and config.ema_decay > 0 and config.ema_decay < 1:
+            try:
+                from dataset_sorter.ema import EMAModel
+                trainable_params = [p for p in self.backend.unet.parameters()
+                                    if p.requires_grad]
+                if trainable_params:
+                    self._ema = EMAModel(trainable_params, decay=config.ema_decay)
+                    log.info("EMA enabled (decay=%.4f)", config.ema_decay)
+            except Exception as e:
+                log.warning("EMA setup failed in prebuilt-cache path: %s", e)
+
+        if progress_fn:
+            progress_fn(5, 5, f"Ready. {total_steps} steps, {config.epochs} epochs.")
+        self.state.phase = "ready"
+        self._training_start_time = _time.time()
+
     def _build_param_groups(self) -> list[dict]:
         """Build optimizer parameter groups with separate LR for text encoders.
 
