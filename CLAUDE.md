@@ -93,7 +93,16 @@ questions come before implementation rather than after mistakes.
 
 ## Security
 
-**NEVER commit API keys, tokens, or credentials.** This is a public open-source project (MIT). All secrets stay on the user's machine. No telemetry, no cloud calls except HuggingFace model downloads.
+**NEVER commit API keys, tokens, or credentials.** This is a public open-source project (MIT). All secrets stay on the user's machine. No telemetry.
+
+**Outbound network calls** (all opt-in beyond HF — nothing fires unless the user invokes a download):
+- HuggingFace (PRIMARY) — model downloads via `huggingface_hub`. `HF_TOKEN` from env / `~/.cache/huggingface/token`.
+- Civitai — community checkpoints/LoRAs via `model_sources.download_from_civitai`. `CIVITAI_API_KEY` env var only when explicitly invoked.
+- ModelScope — Chinese mirror often used by Tencent/Alibaba teams (Z-Image, Hunyuan, Kolors). No auth for public models.
+- GitHub releases — direct `.safetensors` from author repos.
+- Direct URL — generic HTTPS fetch, restricted by `_ALLOWED_DIRECT_DOMAINS` allowlist in `model_sources.py`.
+
+Mirror registry lives in `constants.OFFICIAL_MIRRORS`. Use `python -m dataset_sorter.verify_sources` to live-check every documented mirror without downloading body bytes.
 
 ## Quick Reference
 
