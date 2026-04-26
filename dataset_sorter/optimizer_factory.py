@@ -304,20 +304,6 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # preserving per-group learning rates (e.g., text encoder LR).
         muon_groups = []
         adamw_groups = []
-        bumped_any_group = False
-        for pg in param_groups:
-            group_lr = pg.get("lr", lr)
-            muon_p = [p for p in pg["params"] if p.requires_grad and p.dim() >= 2]
-            adamw_p = [p for p in pg["params"] if p.requires_grad and p.dim() < 2]
-            if group_lr > 0.001:
-                muon_group_lr = group_lr
-            else:
-                muon_group_lr = 0.02
-                bumped_any_group = True
-            if muon_p:
-                muon_groups.append({"params": muon_p, "lr": muon_group_lr})
-            if adamw_p:
-                adamw_groups.append({"params": adamw_p, "lr": group_lr})
         # Muon recommends a higher LR than AdamW (0.01-0.1 vs 1e-4).
         # If the user passes a classic AdamW LR (e.g. 1e-4), we
         # replace with 0.02 (Muon default) to avoid a
@@ -326,7 +312,21 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             muon_lr = lr
         else:
             muon_lr = 0.02
-            bumped_any_group = True
+        bumped_any_group = lr <= 0.001
+        for pg in param_groups:
+            group_lr = pg.get("lr", lr)
+            muon_p = [p for p in pg["params"] if p.requires_grad and p.dim() >= 2]
+            adamw_p = [p for p in pg["params"] if p.requires_grad and p.dim() < 2]
+            if group_lr > 0.001:
+                muon_group_lr = group_lr
+            else:
+                ratio = group_lr / max(lr, 1e-12)
+                muon_group_lr = muon_lr * ratio
+                bumped_any_group = True
+            if muon_p:
+                muon_groups.append({"params": muon_p, "lr": muon_group_lr})
+            if adamw_p:
+                adamw_groups.append({"params": adamw_p, "lr": group_lr})
         if bumped_any_group:
             log.warning(
                 "Muon: configured learning_rate %.2e is too low for Newton-Schulz "
