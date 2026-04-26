@@ -341,8 +341,19 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         return opt
     elif config.optimizer == "Adafactor":
         from transformers import Adafactor
+        from dataset_sorter.constants import DEFAULT_WEIGHT_DECAY
+        # Canonical Adafactor (transformers default + original paper) uses
+        # weight_decay=0.0 — its variance approximation already provides
+        # implicit regularization, and stacking explicit decay on top can
+        # hurt convergence on diffusion training. If the user is sitting on
+        # the GLOBAL default (matched to AdamW's 0.01), drop it to 0.0.
+        # An explicit user override is preserved.
+        if abs(config.weight_decay - DEFAULT_WEIGHT_DECAY) < 1e-9:
+            adafactor_wd = 0.0
+        else:
+            adafactor_wd = config.weight_decay
         return Adafactor(
-            param_groups, lr=lr, weight_decay=config.weight_decay,
+            param_groups, lr=lr, weight_decay=adafactor_wd,
             relative_step=config.adafactor_relative_step,
             scale_parameter=config.adafactor_scale_parameter,
             warmup_init=config.adafactor_warmup_init,
@@ -359,6 +370,17 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
             # When multiple groups exist (e.g. LoRA + text encoder with different LRs),
             # Prodigy raises RuntimeError at step time. Normalize all groups to `lr`
             # so Prodigy can estimate the actual learning rate from a consistent base.
+            # Warn when this discards user-set LR multipliers so it isn't silent.
+            distinct_lrs = {round(g.get("lr", lr), 12) for g in param_groups}
+            if len(distinct_lrs) > 1:
+                log.warning(
+                    "Prodigy ignores per-group learning rates — your "
+                    "lora_plus_ratio / text_encoder_lr / LyCORIS LR splits "
+                    "(%d distinct values) will be flattened to %.2e. Prodigy "
+                    "estimates a single LR internally; per-group overrides "
+                    "are not supported.",
+                    len(distinct_lrs), lr,
+                )
             for g in param_groups:
                 g["lr"] = lr
             return Prodigy(
@@ -433,11 +455,16 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # preserving per-group learning rates (e.g., text encoder LR).
         muon_groups = []
         adamw_groups = []
+        bumped_any_group = False
         for pg in param_groups:
             group_lr = pg.get("lr", lr)
             muon_p = [p for p in pg["params"] if p.requires_grad and p.dim() >= 2]
             adamw_p = [p for p in pg["params"] if p.requires_grad and p.dim() < 2]
-            muon_group_lr = group_lr if group_lr > 0.001 else 0.02
+            if group_lr > 0.001:
+                muon_group_lr = group_lr
+            else:
+                muon_group_lr = 0.02
+                bumped_any_group = True
             if muon_p:
                 muon_groups.append({"params": muon_p, "lr": muon_group_lr})
             if adamw_p:
@@ -446,7 +473,19 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
         # If the user passes a classic AdamW LR (e.g. 1e-4), we
         # replace with 0.02 (Muon default) to avoid a
         # too-slow convergence with Muon.
-        muon_lr = lr if lr > 0.001 else 0.02
+        if lr > 0.001:
+            muon_lr = lr
+        else:
+            muon_lr = 0.02
+            bumped_any_group = True
+        if bumped_any_group:
+            log.warning(
+                "Muon: configured learning_rate %.2e is too low for Newton-Schulz "
+                "orthogonalization — silently bumping the 2D-parameter LR to 0.02 "
+                "(Muon's recommended default). Set learning_rate >= 1e-3 to avoid "
+                "this auto-correction. The 1D AdamW group keeps the configured LR.",
+                lr,
+            )
         if muon_groups:
             # Create Muon for 2D+ params only
             muon_opt = Muon(
