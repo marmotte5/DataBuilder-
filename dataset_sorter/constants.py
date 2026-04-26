@@ -912,3 +912,209 @@ PAG_LAYER_PRESETS: dict[str, list[str]] = {
     "mid+down.2":  ["mid", "down.block_2"],
     "all":         ["mid", "down.block_2", "up.block_0"],
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# OFFICIAL_MIRRORS — alternative download sources per architecture.
+#
+# HuggingFace stays the PRIMARY source (first entry of each list); the
+# others are documented fallbacks for when a HF repo is gated, throttled,
+# or removed (Runway pulled SD 1.5 from HF in late 2023; community
+# mirrored it under stable-diffusion-v1-5/stable-diffusion-v1-5).
+#
+# Schema per entry:
+#   source     : "huggingface" | "civitai" | "modelscope" | "github" | "url"
+#   id         : source-specific identifier
+#                  - huggingface : "owner/repo"
+#                  - civitai     : numeric model id ("101055") or model URL
+#                  - modelscope  : "owner/repo"
+#                  - github      : "owner/repo[@release-tag]"
+#                  - url         : full https URL of a single .safetensors
+#   gated      : True if the source requires an account/token
+#   variant    : optional, distinguishes versions ("turbo", "schnell",
+#                "base", "8step", etc.)
+#   note       : optional human-readable caveat (deprecated, community,
+#                NSFW, license restriction, etc.)
+#
+# Verification: run ``python -m dataset_sorter.verify_sources`` to HEAD
+# every URL in this table and report which ones are alive. The CLI
+# requires network access to huggingface.co / civitai.com / modelscope.cn.
+# ─────────────────────────────────────────────────────────────────────────
+
+OFFICIAL_MIRRORS: dict[str, list[dict]] = {
+    "sd15": [
+        # Runway pulled their original repo in late 2023; this community
+        # mirror is the de-facto canonical SD 1.5 today.
+        {"source": "huggingface",
+         "id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+         "gated": False, "note": "Community canonical mirror"},
+        {"source": "huggingface",
+         "id": "Comfy-Org/stable-diffusion-v1-5-archive",
+         "gated": False, "note": "ComfyUI-curated archive"},
+        {"source": "huggingface",
+         "id": "runwayml/stable-diffusion-v1-5",
+         "gated": False, "note": "DEPRECATED — Runway pulled this repo Aug 2024"},
+        {"source": "civitai", "id": "62", "gated": False,
+         "note": "SD 1.5 base + many community fine-tunes under this model id"},
+    ],
+    "sd2": [
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-2-1",
+         "gated": False, "variant": "768-v"},
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-2",
+         "gated": False, "variant": "768-v"},
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-2-base",
+         "gated": False, "variant": "512-epsilon",
+         "note": "Epsilon prediction at 512px (use SD2 backend with auto-detect)"},
+    ],
+    "sdxl": [
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-xl-base-1.0",
+         "gated": False},
+        {"source": "huggingface", "id": "stabilityai/sdxl-turbo",
+         "gated": False, "variant": "turbo",
+         "note": "Distilled — auto-routed to CFG=1.0 / 4 steps"},
+        {"source": "civitai", "id": "101055", "gated": False,
+         "note": "Stable Diffusion XL on Civitai"},
+    ],
+    "pony": [
+        # Pony Diffusion XL v6 — almost exclusively distributed on Civitai.
+        {"source": "civitai", "id": "257749", "gated": False,
+         "note": "Pony Diffusion XL v6 — primary distribution"},
+        {"source": "huggingface", "id": "AstraliteHeart/pony-diffusion-v6",
+         "gated": False, "note": "Author's HF mirror, may lag behind Civitai"},
+    ],
+    "sd3": [
+        {"source": "huggingface",
+         "id": "stabilityai/stable-diffusion-3-medium-diffusers",
+         "gated": True, "note": "Requires HF token + license acceptance"},
+    ],
+    "sd35": [
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-3.5-large",
+         "gated": True},
+        {"source": "huggingface", "id": "stabilityai/stable-diffusion-3.5-medium",
+         "gated": True, "variant": "medium"},
+        {"source": "huggingface",
+         "id": "stabilityai/stable-diffusion-3.5-large-turbo",
+         "gated": True, "variant": "turbo",
+         "note": "Distilled — auto-routed to CFG=1.0"},
+    ],
+    "flux": [
+        {"source": "huggingface", "id": "black-forest-labs/FLUX.1-dev",
+         "gated": True, "note": "Non-commercial license; HF token required"},
+        {"source": "huggingface", "id": "black-forest-labs/FLUX.1-schnell",
+         "gated": False, "variant": "schnell",
+         "note": "Apache 2.0; distilled — auto-routed to CFG=1.0 / 4 steps"},
+        {"source": "huggingface", "id": "ostris/Flex.1-alpha",
+         "gated": False, "note": "Community fine-tune of Flux.1-schnell, Apache 2"},
+        {"source": "github", "id": "black-forest-labs/flux",
+         "gated": False, "note": "Reference code; weights still via HF"},
+    ],
+    "flux2": [
+        # Flux 2 architecture is in the codebase ahead of public release.
+        # No verified mirrors as of this commit; populate when BFL ships.
+        {"source": "huggingface", "id": "black-forest-labs/FLUX.2-dev",
+         "gated": True, "note": "UNVERIFIED — repo may not exist yet"},
+    ],
+    "zimage": [
+        {"source": "huggingface", "id": "Tongyi-MAI/Z-Image",
+         "gated": False, "note": "Alibaba Tongyi"},
+        {"source": "huggingface", "id": "Tongyi-MAI/Z-Image-Turbo",
+         "gated": False, "variant": "turbo",
+         "note": "Distilled — auto-routed to CFG=1.0"},
+        # Tencent/Alibaba models very commonly mirror to ModelScope; the
+        # exact path needs live verification (sandbox can't reach it).
+        {"source": "modelscope", "id": "Tongyi-MAI/Z-Image",
+         "gated": False, "note": "UNVERIFIED — likely ModelScope mirror"},
+    ],
+    "pixart": [
+        {"source": "huggingface",
+         "id": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
+         "gated": False, "variant": "sigma-1024"},
+        {"source": "huggingface",
+         "id": "PixArt-alpha/PixArt-XL-2-1024-MS",
+         "gated": False, "variant": "alpha-1024",
+         "note": "Older PixArt-α; PixArt-Σ above is the recommended default"},
+        {"source": "github", "id": "PixArt-alpha/PixArt-sigma",
+         "gated": False, "note": "Reference code"},
+    ],
+    "kolors": [
+        {"source": "huggingface", "id": "Kwai-Kolors/Kolors-diffusers",
+         "gated": False, "note": "Diffusers-format weights"},
+        {"source": "huggingface", "id": "Kwai-Kolors/Kolors",
+         "gated": False, "note": "Original release format"},
+        # Kwai is a Chinese company; ModelScope mirror very likely.
+        {"source": "modelscope", "id": "Kwai-Kolors/Kolors",
+         "gated": False, "note": "UNVERIFIED — likely ModelScope mirror"},
+    ],
+    "cascade": [
+        {"source": "huggingface", "id": "stabilityai/stable-cascade-prior",
+         "gated": False, "variant": "prior"},
+        {"source": "huggingface", "id": "stabilityai/stable-cascade",
+         "gated": False, "variant": "decoder",
+         "note": "Stage A+B decoder — needed alongside Stage C prior"},
+    ],
+    "chroma": [
+        # Chroma is community-developed (lodestone-horizon); main author
+        # publishes on HF, latest builds also on Civitai.
+        {"source": "huggingface", "id": "lodestone-horizon/chroma",
+         "gated": False, "note": "Author's primary repo"},
+        {"source": "huggingface", "id": "lodestones/Chroma1-HD",
+         "gated": False, "note": "HD variant"},
+    ],
+    "auraflow": [
+        {"source": "huggingface", "id": "fal/AuraFlow-v0.3",
+         "gated": False},
+        {"source": "huggingface", "id": "fal/AuraFlow-v0.2",
+         "gated": False, "note": "Older release"},
+        {"source": "github", "id": "AuraDiffusion/aura",
+         "gated": False, "note": "UNVERIFIED — author code repo"},
+    ],
+    "sana": [
+        {"source": "huggingface",
+         "id": "Efficient-Large-Model/Sana_1600M_1024px_diffusers",
+         "gated": False, "variant": "1600M-1024"},
+        {"source": "huggingface",
+         "id": "Efficient-Large-Model/Sana_600M_1024px_diffusers",
+         "gated": False, "variant": "600M-1024",
+         "note": "Smaller model, lower VRAM"},
+        {"source": "github", "id": "NVlabs/Sana", "gated": False,
+         "note": "NVIDIA reference code + release artifacts"},
+    ],
+    "hunyuan": [
+        {"source": "huggingface",
+         "id": "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers",
+         "gated": False, "variant": "v1.2"},
+        {"source": "huggingface",
+         "id": "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers",
+         "gated": False, "variant": "v1.1"},
+        # Tencent always mirrors to ModelScope.
+        {"source": "modelscope",
+         "id": "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers",
+         "gated": False, "note": "UNVERIFIED — likely ModelScope mirror"},
+    ],
+    "hidream": [
+        {"source": "huggingface", "id": "HiDream-ai/HiDream-I1-Full",
+         "gated": False, "variant": "full"},
+        {"source": "huggingface", "id": "HiDream-ai/HiDream-I1-Dev",
+         "gated": False, "variant": "dev",
+         "note": "Smaller / faster variant"},
+        {"source": "huggingface", "id": "HiDream-ai/HiDream-I1-Fast",
+         "gated": False, "variant": "fast",
+         "note": "Distilled — auto-routed to CFG=1.0"},
+    ],
+}
+
+
+def get_official_mirrors(arch: str) -> list[dict]:
+    """Return the ordered list of mirrors for a given architecture.
+
+    First entry is always the recommended primary (currently HuggingFace
+    for every supported arch). Later entries are documented fallbacks.
+    Returns an empty list when the arch isn't in the registry.
+    """
+    return list(OFFICIAL_MIRRORS.get(arch, []))
+
+
+def get_primary_mirror(arch: str) -> dict | None:
+    """Return the first (recommended) mirror for an architecture, or None."""
+    mirrors = OFFICIAL_MIRRORS.get(arch, [])
+    return mirrors[0] if mirrors else None
