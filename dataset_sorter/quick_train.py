@@ -427,6 +427,8 @@ if __name__ == "__main__":
     qt.prepare()
 
     if args.steps is not None:
+        if args.steps <= 0:
+            parser.error(f"--steps must be > 0 (got {args.steps})")
         qt._config["steps"] = args.steps
 
     cfg = qt.get_config()

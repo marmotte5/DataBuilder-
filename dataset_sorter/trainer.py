@@ -1016,9 +1016,15 @@ class Trainer:
                 "Check that image_paths is non-empty and that the images exist."
             )
         if len(self.dataset) < config.batch_size:
-            raise ValueError(
-                f"Dataset has {len(self.dataset)} images but batch_size is "
-                f"{config.batch_size}. Reduce batch_size or add more images."
+            # Small dataset + grad_accum is a valid pattern (e.g. 5 images,
+            # batch_size=16, grad_accum=4 → 1 micro-batch per epoch). Just
+            # warn — the bucket sampler / DataLoader will produce 1 partial
+            # batch per epoch.
+            log.warning(
+                "Dataset has %d images, smaller than batch_size=%d. "
+                "Each epoch will produce 1 partial batch. Consider lowering "
+                "batch_size or using gradient_accumulation if intentional.",
+                len(self.dataset), config.batch_size,
             )
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
         steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)

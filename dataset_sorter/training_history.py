@@ -129,8 +129,23 @@ class TrainingHistory:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), timeout=SQLITE_TIMEOUT)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
+        try:
+            self._conn.row_factory = sqlite3.Row
+            # WAL: concurrent reads while another thread writes (training
+            # logs while a UI query runs). NORMAL synchronous: faster than
+            # FULL, still safe under crash with WAL.
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.executescript(_SCHEMA)
+        except Exception:
+            self._conn.close()
+            raise
+
+    def close(self):
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def log_run(self, record: TrainingRunRecord):
         """Log a completed training run."""
