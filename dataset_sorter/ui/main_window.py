@@ -2182,6 +2182,141 @@ class MainWindow(QMainWindow):
         # Discoverability: show all shortcuts (Ctrl+/ — Linear/Notion convention)
         QShortcut(QKeySequence("Ctrl+/"), self, self._show_shortcuts_help)
         QShortcut(QKeySequence("Ctrl+?"), self, self._show_shortcuts_help)
+        # Command palette (Ctrl+K — Linear/Raycast/VS Code convention)
+        QShortcut(QKeySequence("Ctrl+K"), self, self._show_command_palette)
+
+    def _build_commands(self) -> list:
+        """Return the command list shown in the Ctrl+K palette.
+
+        Built fresh each time the palette opens so any state-dependent
+        commands (e.g. Cancel, only valid mid-operation) reflect reality.
+        """
+        from dataset_sorter.ui.command_palette import Command
+
+        nav = lambda nid: (lambda: self._switch_nav(nid))  # noqa: E731
+
+        return [
+            # ── Navigation ──────────────────────────────────────────
+            Command("Go to Dataset", nav("dataset"),
+                    category="Navigation", shortcut="Ctrl+1", icon="📁",
+                    description="Browse, tag, and organise the source images",
+                    keywords=["images", "tags", "folder", "scan"]),
+            Command("Go to Train", nav("train"),
+                    category="Navigation", shortcut="Ctrl+2", icon="🎯",
+                    description="Configure model, optimiser, and start training",
+                    keywords=["lora", "finetune", "fit"]),
+            Command("Go to Generate", nav("generate"),
+                    category="Navigation", shortcut="Ctrl+3", icon="🎨",
+                    description="Run inference and generate images from prompts",
+                    keywords=["inference", "sample", "prompt", "diffusion"]),
+            Command("Go to Library", nav("library"),
+                    category="Navigation", shortcut="Ctrl+4", icon="📚",
+                    description="Manage saved models, LoRAs, and embeddings",
+                    keywords=["models", "checkpoints"]),
+            Command("Go to Batch Generation", nav("batch"),
+                    category="Navigation", shortcut="Ctrl+5", icon="🧺",
+                    description="Queue many prompts and run them unattended",
+                    keywords=["queue", "many", "csv"]),
+            Command("Go to Compare (A/B)", nav("compare"),
+                    category="Navigation", shortcut="Ctrl+6", icon="⚖",
+                    description="Side-by-side image comparison with overrides",
+                    keywords=["ab", "side by side"]),
+            Command("Go to Model Merge", nav("merge"),
+                    category="Navigation", shortcut="Ctrl+7", icon="⛙",
+                    description="Combine checkpoints with weighted sum, SLERP, etc.",
+                    keywords=["mix", "blend", "slerp"]),
+
+            # ── Project ─────────────────────────────────────────────
+            Command("Save Config", self._save_config,
+                    category="Project", shortcut="Ctrl+S", icon="💾",
+                    description="Write the current training config to JSON"),
+            Command("Load Training Config", self._load_config,
+                    category="Project", shortcut="Ctrl+Shift+L", icon="📂",
+                    description="Restore a previously saved training config"),
+            Command("Open Project…", lambda: self._show_welcome_dialog(focus_tab=1),
+                    category="Project", shortcut="Ctrl+O", icon="📦",
+                    description="Switch to a different project folder",
+                    keywords=["switch", "recent"]),
+            Command("New Project…", lambda: self._show_welcome_dialog(focus_tab=0),
+                    category="Project", icon="✨",
+                    description="Create a fresh DataBuilder project folder",
+                    keywords=["create"]),
+            Command("Manage API Keys…", self._show_api_keys_dialog,
+                    category="Project", icon="🔑",
+                    description="Edit HuggingFace and Civitai tokens",
+                    keywords=["huggingface", "civitai", "token", "credentials"]),
+
+            # ── Dataset actions ─────────────────────────────────────
+            Command("Scan Source Folder", self._start_scan,
+                    category="Dataset", shortcut="Ctrl+R", icon="🔎",
+                    description="Read images and tags from the source directory",
+                    keywords=["refresh", "rescan", "reload"]),
+            Command("Dry-Run Export", self._dry_run,
+                    category="Dataset", shortcut="Ctrl+D", icon="🔬",
+                    description="Preview the export structure without writing files",
+                    keywords=["preview", "test"]),
+            Command("Start Export", self._start_export,
+                    category="Dataset", shortcut="Ctrl+E", icon="📤",
+                    description="Write the organised dataset to the output folder"),
+
+            # ── Edit ────────────────────────────────────────────────
+            Command("Undo", self._undo,
+                    category="Edit", shortcut="Ctrl+Z", icon="↶",
+                    description="Revert the last tag change"),
+            Command("Redo", self._redo,
+                    category="Edit", shortcut="Ctrl+Shift+Z", icon="↷",
+                    description="Reapply a change you just undid"),
+
+            # ── Training ────────────────────────────────────────────
+            Command("Start Training", self._start_training_from_palette,
+                    category="Training", shortcut="Ctrl+Return", icon="▶",
+                    description="Kick off a training run with the current config",
+                    keywords=["run", "begin", "fit", "train"]),
+
+            # ── View ────────────────────────────────────────────────
+            Command("Toggle Theme", self._toggle_theme,
+                    category="View", shortcut="Ctrl+T", icon="🌗",
+                    description="Switch between dark and light mode",
+                    keywords=["dark", "light", "mode"]),
+            Command("Toggle Debug Console", self._toggle_debug_console,
+                    category="View", shortcut="F12", icon="🐞",
+                    description="Show or hide the floating log console",
+                    keywords=["log", "logs", "f12", "debug"]),
+            Command("Show Keyboard Shortcuts", self._show_shortcuts_help,
+                    category="View", shortcut="Ctrl+/", icon="⌨",
+                    description="List every keyboard shortcut at a glance",
+                    keywords=["help", "keys", "bindings"]),
+
+            # ── General ────────────────────────────────────────────
+            Command("Cancel Current Operation", self._cancel_operation,
+                    category="General", shortcut="Esc", icon="✕",
+                    description="Abort the running scan, export, or training",
+                    keywords=["stop", "abort"]),
+        ]
+
+    def _show_command_palette(self):
+        """Open the Ctrl+K command palette."""
+        from dataset_sorter.ui.command_palette import CommandPalette
+        dlg = CommandPalette(self._build_commands(), parent=self)
+        dlg.exec()
+
+    def _start_training_from_palette(self):
+        """Trigger the training tab's start handler from the command palette."""
+        if hasattr(self, "training_tab") and hasattr(self.training_tab, "_start_training"):
+            self._switch_nav("train")
+            self.training_tab._start_training()
+
+    def _toggle_debug_console(self):
+        """Toggle the global Debug Console window (mirror of F12 shortcut)."""
+        from dataset_sorter.ui import debug_console as dc
+        console = dc._console_instance
+        if console is None:
+            return
+        if console.isHidden():
+            console.show()
+            console.raise_()
+        else:
+            console.hide()
 
     def _show_shortcuts_help(self):
         """Open the keyboard shortcuts help overlay."""

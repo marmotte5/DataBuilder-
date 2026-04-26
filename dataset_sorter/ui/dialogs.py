@@ -32,6 +32,7 @@ KEYBOARD_SHORTCUTS: list[tuple[str, str, str]] = [
     ("View",        "Ctrl+T",        "Toggle dark / light theme"),
     ("View",        "F12",           "Toggle Debug Console"),
     ("View",        "Ctrl+F",        "Search inside Debug Console"),
+    ("View",        "Ctrl+K",        "Open command palette (search any action)"),
     ("View",        "Ctrl+/",        "Show this keyboard shortcuts help"),
     ("General",     "Escape",        "Cancel current operation"),
 ]
