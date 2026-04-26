@@ -161,7 +161,8 @@ def _get_wd_model(model_key: str) -> tuple:
     model_path = hf_hub_download(repo, filename="model.onnx", repo_type="model")
     tags_path = hf_hub_download(repo, filename="selected_tags.csv", repo_type="model")
 
-    tags_df = pd.read_csv(tags_path)
+    # utf-8-sig handles BOM that some HF mirror downloads include
+    tags_df = pd.read_csv(tags_path, encoding="utf-8-sig")
     tags_list = tags_df["name"].tolist()
     category_list = tags_df["category"].tolist()
 
