@@ -907,7 +907,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(mode_lbl)
 
         self.btn_simple_mode = QPushButton("Simple")
-        self.btn_simple_mode.setFixedSize(72, 30)
+        self.btn_simple_mode.setFixedHeight(30)
+        self.btn_simple_mode.setMinimumWidth(72)
         self.btn_simple_mode.setCheckable(True)
         self.btn_simple_mode.setChecked(True)
         self.btn_simple_mode.setToolTip(
@@ -918,7 +919,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.btn_simple_mode)
 
         self.btn_advanced_mode = QPushButton("Advanced")
-        self.btn_advanced_mode.setFixedSize(80, 30)
+        self.btn_advanced_mode.setFixedHeight(30)
+        self.btn_advanced_mode.setMinimumWidth(80)
         self.btn_advanced_mode.setCheckable(True)
         self.btn_advanced_mode.setChecked(False)
         self.btn_advanced_mode.setToolTip(
@@ -948,13 +950,15 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(profile_lbl)
 
         self._profile_combo = QComboBox()
-        self._profile_combo.setFixedSize(200, 30)
+        self._profile_combo.setFixedHeight(30)
+        self._profile_combo.setMinimumWidth(200)
         self._profile_combo.setToolTip("Select a training profile to load")
         self._profile_combo.activated.connect(self._on_profile_selected)
         header_layout.addWidget(self._profile_combo)
 
         btn_save_profile = QPushButton("Save")
-        btn_save_profile.setFixedSize(50, 30)
+        btn_save_profile.setFixedHeight(30)
+        btn_save_profile.setMinimumWidth(50)
         btn_save_profile.setToolTip("Save current training settings as a profile")
         btn_save_profile.setStyleSheet(
             f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
@@ -967,7 +971,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(btn_save_profile)
 
         btn_del_profile = QPushButton("Del")
-        btn_del_profile.setFixedSize(40, 30)
+        btn_del_profile.setFixedHeight(30)
+        btn_del_profile.setMinimumWidth(50)
         btn_del_profile.setToolTip("Delete selected profile (built-in profiles cannot be deleted)")
         btn_del_profile.setStyleSheet(
             f"QPushButton {{ padding: 4px 6px; font-size: 11px; font-weight: 500; "
@@ -987,7 +992,8 @@ class MainWindow(QMainWindow):
 
         # More... button (now opens sub-nav bar)
         self.btn_more = QPushButton("More ▾")
-        self.btn_more.setFixedSize(70, 30)
+        self.btn_more.setFixedHeight(30)
+        self.btn_more.setMinimumWidth(70)
         self.btn_more.setToolTip("Access secondary tools")
         self.btn_more.setStyleSheet(
             f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
@@ -1001,7 +1007,8 @@ class MainWindow(QMainWindow):
         # Theme toggle
         self.btn_theme = QPushButton("Light")
         self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
-        self.btn_theme.setFixedSize(60, 30)
+        self.btn_theme.setFixedHeight(30)
+        self.btn_theme.setMinimumWidth(60)
         self.btn_theme.setStyleSheet(
             f"QPushButton {{ padding: 4px; font-size: 11px; font-weight: 500; "
             f"border-radius: 6px; color: {COLORS['text_muted']}; "
@@ -1500,7 +1507,8 @@ class MainWindow(QMainWindow):
 
         # Back / Next buttons
         self.btn_footer_back = QPushButton("← Back")
-        self.btn_footer_back.setFixedSize(80, 32)
+        self.btn_footer_back.setFixedHeight(32)
+        self.btn_footer_back.setMinimumWidth(80)
         self.btn_footer_back.setStyleSheet(
             f"QPushButton {{ padding: 4px 10px; font-size: 11px; font-weight: 600; "
             f"border-radius: 6px; color: {COLORS['text_muted']}; "
@@ -1512,7 +1520,8 @@ class MainWindow(QMainWindow):
         footer_layout.addWidget(self.btn_footer_back)
 
         self.btn_footer_next = QPushButton("Next →")
-        self.btn_footer_next.setFixedSize(80, 32)
+        self.btn_footer_next.setFixedHeight(32)
+        self.btn_footer_next.setMinimumWidth(80)
         self.btn_footer_next.setStyleSheet(
             f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "
             f"border: none; border-radius: 6px; padding: 4px 10px; "

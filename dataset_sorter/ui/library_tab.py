@@ -564,7 +564,7 @@ class LibraryTab(QWidget):
         self._fav_filter_btn = QPushButton("Favorites")
         self._fav_filter_btn.setCheckable(True)
         self._fav_filter_btn.setFixedHeight(34)
-        self._fav_filter_btn.setFixedWidth(90)
+        self._fav_filter_btn.setMinimumWidth(90)
         self._fav_filter_btn.setStyleSheet(
             f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 6px; "
             f"padding: 4px 10px; background: transparent; color: {COLORS['text_muted']}; }} "
@@ -577,7 +577,7 @@ class LibraryTab(QWidget):
         # Sort dropdown
         self._sort_combo = QComboBox()
         self._sort_combo.addItems(["Name", "Size", "Date Modified"])
-        self._sort_combo.setFixedWidth(130)
+        self._sort_combo.setMinimumWidth(130)
         self._sort_combo.setFixedHeight(34)
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         toolbar.addWidget(self._sort_combo)
@@ -585,7 +585,7 @@ class LibraryTab(QWidget):
         # Search bar
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("Search...")
-        self._search_edit.setFixedWidth(200)
+        self._search_edit.setMinimumWidth(200)
         self._search_edit.setFixedHeight(34)
         self._search_edit.textChanged.connect(lambda: self._search_timer.start())
         toolbar.addWidget(self._search_edit)
@@ -716,7 +716,7 @@ class LibraryTab(QWidget):
         self._rating_combo.addItem("No rating", 0)
         for i in range(1, 6):
             self._rating_combo.addItem(f"{'*' * i} ({i})", i)
-        self._rating_combo.setFixedWidth(100)
+        self._rating_combo.setMinimumWidth(100)
         self._rating_combo.setEnabled(False)
         self._rating_combo.currentIndexChanged.connect(self._on_rating_changed)
         name_row.addWidget(self._rating_combo)
