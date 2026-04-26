@@ -293,6 +293,13 @@ class BucketBatchSampler:
                 f"Bucket sampler: {dropped_images}/{total_images} images excluded "
                 f"due to drop_last=True. Set drop_last=False to include all images."
             )
+        if self._total_batches == 0:
+            raise ValueError(
+                f"Bucket sampler produces 0 batches: every bucket has fewer than "
+                f"batch_size={batch_size} images and drop_last=True. "
+                f"Reduce batch_size, disable drop_last, or merge buckets to avoid "
+                f"silently training on nothing."
+            )
         for bucket, indices in sorted(self.bucket_indices.items()):
             log.debug(f"  Bucket {bucket[0]}x{bucket[1]}: {len(indices)} images")
 

@@ -1010,6 +1010,16 @@ class Trainer:
                 log.info("fp16 final sweep: cast %d trainable param(s) to float32.", n_cast)
 
         # ── 10. Steps calculation ──
+        if len(self.dataset) == 0:
+            raise ValueError(
+                "Training dataset is empty — no images to train on. "
+                "Check that image_paths is non-empty and that the images exist."
+            )
+        if len(self.dataset) < config.batch_size:
+            raise ValueError(
+                f"Dataset has {len(self.dataset)} images but batch_size is "
+                f"{config.batch_size}. Reduce batch_size or add more images."
+            )
         batches_per_epoch = max(len(self.dataset) // config.batch_size, 1)
         steps_per_epoch = max(batches_per_epoch // config.gradient_accumulation, 1)
         total_steps = steps_per_epoch * config.epochs

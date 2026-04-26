@@ -53,11 +53,12 @@ the training logs.
 
 ## Environment knobs (override at `train.py` invocation)
 
-| Variable             | Default | Purpose                                    |
-|----------------------|---------|--------------------------------------------|
-| `HF_TOKEN`           | (none)  | Required for gated repos when no `model/`  |
-| `DATABUILDER_LOG`    | `INFO`  | Set `DEBUG` for verbose logging            |
-| `DATABUILDER_DEVICE` | auto    | Force `cuda:0` etc. (rarely needed)        |
+| Variable                  | Default | Purpose                                    |
+|---------------------------|---------|--------------------------------------------|
+| `HF_TOKEN`                | (none)  | Required for gated repos when no `model/`  |
+| `HUGGING_FACE_HUB_TOKEN`  | (none)  | Standard HF env var, used as fallback      |
+| `DATABUILDER_LOG`         | `INFO`  | Set `DEBUG` for verbose logging            |
+| `DATABUILDER_DEVICE`      | auto    | Force `cuda:0` etc. (rarely needed)        |
 
 ## Troubleshooting
 

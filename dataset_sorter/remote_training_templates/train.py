@@ -115,9 +115,19 @@ def main() -> int:
     )
 
     cache_dir = Path(config.mmap_prebuilt_cache_dir)
-    manifest = json.loads(
-        (cache_dir / "manifest.json").read_text(encoding="utf-8")
-    )
+    manifest_path = cache_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Cache manifest missing: {manifest_path}. The bundle was probably "
+            f"uploaded incompletely — re-rsync the cache/ directory and retry."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Cache manifest at {manifest_path} is corrupt: {exc}. "
+            f"Re-build the bundle locally and re-upload."
+        ) from exc
     log.info(
         "Cache: %d samples, model_type=%s, dtype=%s, encoders=%s",
         manifest["num_samples"], manifest["model_type"],
