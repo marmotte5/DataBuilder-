@@ -14,6 +14,7 @@ from dataset_sorter.model_detection import (
     detect_arch_from_filename,
     detect_arch_from_keys,
     detect_arch_from_path,
+    detect_distillation_from_filename,
     detect_lora_arch_from_keys,
 )
 
@@ -244,3 +245,78 @@ def test_detect_arch_from_path_default_when_unknown(tmp_path):
     p.write_bytes(b"\x00" * 4)
     assert detect_arch_from_path(p, default="sdxl") == "sdxl"
     assert detect_arch_from_path(p, default="") == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Distillation detection — orthogonal to base architecture
+# Locks in the auto-CFG=1.0 fix for distilled checkpoints (Lightning, LCM,
+# Hyper-SD, SDXL Turbo, Flux Schnell, DMD/DMD2). Without these, a Flux
+# Schnell loaded by file path defaults to CFG=3.5 and 28 steps, producing
+# saturated outputs.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestDetectDistillation:
+    @pytest.mark.parametrize("name,expected", [
+        ("sdxl_lightning_8step.safetensors",        "lightning"),
+        ("SDXL-Lightning-4step-Lora.safetensors",   "lightning"),
+        ("juggernautXL_lightning_v8.safetensors",   "lightning"),
+        ("hyperSD_4step.safetensors",               "hyper"),
+        ("Hyper-SDXL-1step-Unet.safetensors",       "hyper"),
+        ("flux1-schnell-fp8.safetensors",           "schnell"),
+        ("flux.1.schnell.safetensors",              "schnell"),
+        ("sdxl_turbo_v1.safetensors",               "turbo"),
+        ("sd-turbo.safetensors",                    "turbo"),
+        ("LCM_Dreamshaper_v7.safetensors",          "lcm"),
+        ("anything_lcm_lora.safetensors",           "lcm"),
+        ("dmd2_sdxl_4step.safetensors",             "dmd2"),
+        ("model_dmd_distilled.safetensors",         "dmd"),
+    ])
+    def test_distillation_detected(self, name, expected):
+        assert detect_distillation_from_filename(name) == expected
+
+    @pytest.mark.parametrize("name", [
+        "sdxl_base_1.0.safetensors",
+        "flux1-dev.safetensors",
+        "juggernautXL_v8.safetensors",
+        "sd_xl_base_1.0.safetensors",
+        "pony_diffusion_v6.safetensors",
+        "",
+    ])
+    def test_no_false_positives_on_base_models(self, name):
+        assert detect_distillation_from_filename(name) == ""
+
+    def test_dmd2_takes_precedence_over_dmd(self):
+        # "dmd2" matches before bare "dmd" (more specific patterns first).
+        assert detect_distillation_from_filename("model_dmd2.safetensors") == "dmd2"
+
+    def test_arch_and_distillation_are_independent(self):
+        """A file can be both 'sdxl' and 'lightning' — each detector
+        answers its own question."""
+        name = "sdxl_lightning_8step.safetensors"
+        assert detect_arch_from_filename(name) == "sdxl"
+        assert detect_distillation_from_filename(name) == "lightning"
+
+    def test_distillation_constants_table_complete(self):
+        """Every detection tag must have a row in DISTILLED_DEFAULTS or the
+        auto-config in generate_worker silently does nothing."""
+        from dataset_sorter.constants import DISTILLED_DEFAULTS
+        from dataset_sorter.model_detection import _DISTILLATION_KEYWORDS
+        for _, tag in _DISTILLATION_KEYWORDS:
+            assert tag in DISTILLED_DEFAULTS, (
+                f"Distillation tag {tag!r} has no entry in "
+                "constants.DISTILLED_DEFAULTS — auto-CFG/steps fix won't apply."
+            )
+
+    def test_distilled_defaults_use_cfg_one(self):
+        """All distilled variants need CFG=1.0 — anything else is wrong."""
+        from dataset_sorter.constants import DISTILLED_DEFAULTS
+        for tag, defaults in DISTILLED_DEFAULTS.items():
+            assert defaults["cfg_scale"] == 1.0, (
+                f"DISTILLED_DEFAULTS[{tag!r}] must use CFG=1.0; distilled "
+                "models ignore CFG and produce burnt outputs at CFG>1."
+            )
+            assert 1 <= defaults["steps"] <= 12, (
+                f"DISTILLED_DEFAULTS[{tag!r}] step count {defaults['steps']} "
+                "is outside the typical 1-12 range for distilled checkpoints."
+            )

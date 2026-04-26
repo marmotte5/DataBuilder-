@@ -36,12 +36,14 @@ from dataset_sorter.constants import (
     DEFAULT_CFG_SCALE,
     DEFAULT_IMG2IMG_STRENGTH,
     DEFAULT_INFERENCE_STEPS,
+    DISTILLED_DEFAULTS,
     MODEL_CAPABILITIES,
     MODEL_DEFAULT_CFG,
     PAG_LAYER_PRESETS,
     PAG_MODELS,
     TRUST_REMOTE_CODE_MODELS,
 )
+from dataset_sorter.model_detection import detect_distillation_from_filename
 
 log = logging.getLogger(__name__)
 
@@ -542,6 +544,28 @@ class GenerateWorker(QThread):
         if abs(self.cfg_scale - DEFAULT_CFG_SCALE) < 0.01 and arch_cfg != DEFAULT_CFG_SCALE:
             self.cfg_scale = arch_cfg
             log.info("Auto-adjusted CFG default to %.1f for %s", arch_cfg, model_type)
+
+        # Distilled checkpoints (Lightning/LCM/Hyper/Turbo/Schnell/DMD) need
+        # CFG=1.0 and 4-8 steps. The base-model CFG override above is wrong
+        # for them — without this second pass a Flux-Schnell loaded by file
+        # would still get CFG=3.5 (Flux base default) and 28 steps, producing
+        # the saturated/burnt outputs the audit flagged. Detection runs even
+        # when the user has manually set a non-default CFG/steps, because for
+        # distilled models any non-1.0 CFG is wrong (not just suboptimal).
+        distill = detect_distillation_from_filename(model_path)
+        if distill and distill in DISTILLED_DEFAULTS:
+            overrides = DISTILLED_DEFAULTS[distill]
+            self.cfg_scale = overrides["cfg_scale"]
+            # Only override step count if it's still at the global default —
+            # users who chose 12 or 16 steps for a Lightning variant know
+            # what they're doing.
+            if self.steps == DEFAULT_INFERENCE_STEPS:
+                self.steps = overrides["steps"]
+            log.info(
+                "Detected '%s' distillation in %s; forcing CFG=%.1f, steps=%d",
+                distill, Path(model_path).name,
+                overrides["cfg_scale"], self.steps,
+            )
 
         self._emit(self.progress, 100, 100, "Model loaded!")
         self._emit(self.model_loaded,

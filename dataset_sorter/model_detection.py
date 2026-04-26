@@ -72,6 +72,48 @@ _FILENAME_KEYWORDS: list[tuple[str, str]] = [
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Distillation detection
+#
+# Distilled checkpoints (LCM, Lightning, Hyper-SD, SDXL Turbo, Flux Schnell,
+# DMD/DMD2) require very different inference hyperparameters from their base
+# model: they need CFG=1.0 (or close) and only 4-8 steps. Running them with
+# the base model's CFG (~7) and 28 steps produces saturated/burnt outputs.
+#
+# The detection is ORTHOGONAL to base architecture: a file can be both
+# "sdxl" and "lightning". Order matters — the more specific variant
+# ("dmd2") must come before its prefix ("dmd").
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DISTILLATION_KEYWORDS: list[tuple[str, str]] = [
+    ("dmd2",      "dmd2"),
+    ("dmd",       "dmd"),
+    ("lightning", "lightning"),
+    ("hyper",     "hyper"),       # hyper-sd, hypersd, hypersdxl
+    ("schnell",   "schnell"),     # flux schnell
+    ("turbo",     "turbo"),       # sdxl turbo, sd3 turbo
+    ("lcm",       "lcm"),
+]
+
+
+def detect_distillation_from_filename(stem_or_path: str) -> str:
+    """Identify the distillation method from a filename, if any.
+
+    Returns the distillation tag (one of: lcm, lightning, hyper, turbo,
+    schnell, dmd, dmd2) or "" when the filename has no distillation marker.
+
+    This runs independently of architecture detection — both can apply
+    (e.g. "sdxl_lightning_8step.safetensors" → arch="sdxl", distill="lightning").
+    """
+    p = stem_or_path.lower()
+    p_normalised = p.replace("-", "").replace("_", "").replace(".", "").replace("/", "")
+    for keyword, tag in _DISTILLATION_KEYWORDS:
+        kw_norm = keyword.replace("-", "").replace("_", "").replace(".", "")
+        if kw_norm in p_normalised:
+            return tag
+    return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Safetensors header reader
 # ─────────────────────────────────────────────────────────────────────────────
 
