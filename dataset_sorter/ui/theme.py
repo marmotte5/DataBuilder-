@@ -227,14 +227,16 @@ def get_stylesheet() -> str:
         selection-color: white;
         padding: 6px; border-radius: 10px; outline: none;
     }}
+    /* Spinbox steppers — transparent so they blend into the input
+       instead of looking like a detached panel against input_bg. */
     QSpinBox::up-button, QSpinBox::down-button,
     QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-        background-color: {c['surface']}; border: none; width: 22px;
-        border-radius: 4px;
+        background-color: transparent; border: none; width: 16px;
+        margin-right: 2px;
     }}
     QSpinBox::up-button:hover, QSpinBox::down-button:hover,
     QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
-        background-color: {c['surface_hover']};
+        background-color: {c['surface_hover']}; border-radius: 3px;
     }}
 
     /* ═══ Buttons ═══ */

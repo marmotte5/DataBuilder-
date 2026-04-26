@@ -116,18 +116,22 @@ class _SideConfig(QGroupBox):
         self.negative_edit.setPlaceholderText("(empty = use shared negative)")
         layout.addWidget(self.negative_edit, 1, 3)
 
-        # LoRA override
+        # LoRA override — path on its own row spanning the full width,
+        # weight on its own row so the small spinbox isn't dwarfed by an
+        # empty column 3.
         layout.addWidget(QLabel("LoRA path:"), 2, 0)
         self.lora_edit = QLineEdit()
         self.lora_edit.setPlaceholderText("Optional — side-specific LoRA")
-        layout.addWidget(self.lora_edit, 2, 1, 1, 2)
+        layout.addWidget(self.lora_edit, 2, 1, 1, 3)
 
+        layout.addWidget(QLabel("Weight:"), 3, 0)
         self.lora_weight_spin = QDoubleSpinBox()
         self.lora_weight_spin.setRange(-2.0, 2.0)
         self.lora_weight_spin.setSingleStep(0.05)
         self.lora_weight_spin.setValue(1.0)
-        self.lora_weight_spin.setMaximumWidth(75)
-        layout.addWidget(self.lora_weight_spin, 2, 3)
+        self.lora_weight_spin.setMinimumWidth(80)
+        self.lora_weight_spin.setToolTip("LoRA strength (negative inverts; 1.0 = full strength)")
+        layout.addWidget(self.lora_weight_spin, 3, 1)
 
     def get_overrides(self) -> dict:
         """Return non-default overrides as a dict."""
