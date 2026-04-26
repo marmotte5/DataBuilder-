@@ -2179,6 +2179,15 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+5"), self, lambda: self._switch_nav("batch"))
         QShortcut(QKeySequence("Ctrl+6"), self, lambda: self._switch_nav("compare"))
         QShortcut(QKeySequence("Ctrl+7"), self, lambda: self._switch_nav("merge"))
+        # Discoverability: show all shortcuts (Ctrl+/ — Linear/Notion convention)
+        QShortcut(QKeySequence("Ctrl+/"), self, self._show_shortcuts_help)
+        QShortcut(QKeySequence("Ctrl+?"), self, self._show_shortcuts_help)
+
+    def _show_shortcuts_help(self):
+        """Open the keyboard shortcuts help overlay."""
+        from dataset_sorter.ui.dialogs import ShortcutsHelpDialog
+        dlg = ShortcutsHelpDialog(self)
+        dlg.exec()
 
     def _refresh_theme_styles(self):
         """Re-apply all hardcoded widget stylesheets after a theme change."""
