@@ -689,36 +689,36 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         vram_est_row.addStretch()
         right_layout.addLayout(vram_est_row)
 
-        # VRAM usage bar
+        # VRAM usage — circular gauge (Apple Activity Monitor style).
+        # The gauge sits in its own row beneath the estimator panel so
+        # there's room for it to read at a glance during training.
+        from dataset_sorter.ui.animated_widgets import VRAMRingGauge
         vram_row = QHBoxLayout()
-        vram_row.setSpacing(6)
+        vram_row.setSpacing(12)
         self._vram_lbl = QLabel("VRAM:")
         self._vram_lbl.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 600; "
             f"background: transparent;"
         )
-        vram_row.addWidget(self._vram_lbl)
-
-        self.vram_bar = QProgressBar()
-        self.vram_bar.setRange(0, 100)
-        self.vram_bar.setValue(0)
-        self.vram_bar.setTextVisible(True)
-        self.vram_bar.setFormat("%v%")
-        self.vram_bar.setMaximumHeight(18)
-        self.vram_bar.setStyleSheet(
-            f"QProgressBar {{ background-color: {COLORS['bg']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
-            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
-            f"QProgressBar::chunk {{ background-color: {COLORS['accent']}; border-radius: 3px; }}"
+        self._vram_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         )
-        vram_row.addWidget(self.vram_bar, 1)
+        vram_row.addWidget(self._vram_lbl, 0, Qt.AlignmentFlag.AlignTop)
+
+        self.vram_gauge = VRAMRingGauge()
+        self.vram_gauge.setFixedSize(140, 140)
+        vram_row.addWidget(self.vram_gauge, 0)
 
         self.vram_detail_label = QLabel("")
         self.vram_detail_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent; "
             f"font-family: 'JetBrains Mono', monospace;"
         )
-        vram_row.addWidget(self.vram_detail_label)
+        self.vram_detail_label.setWordWrap(True)
+        self.vram_detail_label.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
+        vram_row.addWidget(self.vram_detail_label, 1)
         right_layout.addLayout(vram_row)
 
         # Disk space info
@@ -1733,23 +1733,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def _on_vram_update(self, allocated_gb, reserved_gb, total_gb, peak_gb, temp_c=-1):
         """Update VRAM usage display from monitor thread."""
         pct = int((allocated_gb / total_gb) * 100) if total_gb > 0 else 0
-        self.vram_bar.setValue(pct)
+        # The ring gauge handles its own colour and animation.
+        self.vram_gauge.set_usage(allocated_gb, total_gb)
         temp_str = f"  {temp_c}°C" if temp_c >= 0 else ""
         self.vram_detail_label.setText(
-            f"{allocated_gb:.1f} / {total_gb:.1f} GB  (peak: {peak_gb:.1f}){temp_str}"
-        )
-        # Color the bar: green <60%, yellow 60-80%, red >80%
-        if pct >= 80:
-            chunk_color = COLORS.get("danger", "#f87171")
-        elif pct >= 60:
-            chunk_color = COLORS.get("warning", "#fbbf24")
-        else:
-            chunk_color = COLORS.get("success", "#4ade80")
-        self.vram_bar.setStyleSheet(
-            f"QProgressBar {{ background-color: {COLORS['bg']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
-            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
-            f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
+            f"{allocated_gb:.1f} / {total_gb:.1f} GB\n"
+            f"peak: {peak_gb:.1f}{temp_str}"
         )
         # Update footer GPU badge with live VRAM info
         main_win = self.window()
@@ -2037,25 +2026,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log("=" * 40)
         self._log("")
 
-        # Update the VRAM bar with estimated values
+        # Update the ring gauge with the estimated values.
         total_gpu = config.vram_gb
         est_gb = result["total_gb"]
-        pct = min(100, int((est_gb / total_gpu) * 100)) if total_gpu > 0 else 0
-        self.vram_bar.setValue(pct)
+        self.vram_gauge.set_usage(est_gb, total_gpu)
         self.vram_detail_label.setText(f"Est. {est_gb:.1f} / {total_gpu} GB")
-
-        if pct >= 80:
-            chunk_color = COLORS.get("danger", "#f87171")
-        elif pct >= 60:
-            chunk_color = COLORS.get("warning", "#fbbf24")
-        else:
-            chunk_color = COLORS.get("success", "#4ade80")
-        self.vram_bar.setStyleSheet(
-            f"QProgressBar {{ background-color: {COLORS['bg']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
-            f"text-align: center; color: {COLORS['text']}; font-size: 10px; }}"
-            f"QProgressBar::chunk {{ background-color: {chunk_color}; border-radius: 3px; }}"
-        )
 
     # ── LR Schedule Preview ─────────────────────────────────────────
 
@@ -2193,12 +2168,9 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             f"color: {c['text_muted']}; font-size: 11px; font-weight: 600; "
             f"background: transparent;"
         )
-        self.vram_bar.setStyleSheet(
-            f"QProgressBar {{ background-color: {c['bg']}; "
-            f"border: 1px solid {c['border']}; border-radius: 4px; "
-            f"text-align: center; color: {c['text']}; font-size: 10px; }}"
-            f"QProgressBar::chunk {{ background-color: {c['accent']}; border-radius: 3px; }}"
-        )
+        # Ring gauge re-paints itself on every value change — we just
+        # nudge it so it picks up new theme colours next frame.
+        self.vram_gauge.update()
         self.vram_detail_label.setStyleSheet(
             f"color: {c['text_muted']}; font-size: 10px; background: transparent; "
             f"font-family: 'JetBrains Mono', monospace;"

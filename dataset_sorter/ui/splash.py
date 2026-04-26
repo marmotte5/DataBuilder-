@@ -96,8 +96,10 @@ class DataBuilderSplash(QSplashScreen):
     a QTimer.
     """
 
-    _MESSAGE_COLOR = QColor(220, 230, 250)
-    _DOT_COLOR = QColor(150, 200, 255)
+    # Cool-white message text and electric-cyan dots — matches the new
+    # splash-aesthetic theme used by the rest of the app.
+    _MESSAGE_COLOR = QColor(230, 239, 255)
+    _DOT_COLOR = QColor(0, 212, 255)
     _DOT_FRAME_MS = 180
     # Shimmer travels left-to-right under the message text on each frame.
     _SHIMMER_FRAME_MS = 30

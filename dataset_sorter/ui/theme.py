@@ -2,66 +2,72 @@
 
 Premium design language: deep layered surfaces, refined typography,
 smooth transitions, and studio-grade visual polish.
+
+The dark palette mirrors the DataBuilder splash artwork — a futuristic,
+"data-cube" aesthetic with deep midnight surfaces, electric-cyan glows,
+violet highlights, and neon-green status accents. Think
+data-centre dashboard meets sci-fi HUD.
 """
 
 _DARK_COLORS = {
-    # Backgrounds — deep midnight with cool blue undertone
-    "bg":              "#0c0e16",
-    "bg_alt":          "#13151f",
-    "surface":         "#1a1d2e",
-    "surface_hover":   "#222640",
-    "surface_border":  "#2a2e4a",
+    # Backgrounds — abyssal midnight with a faint blue undertone, the
+    # exact tone of the splash's "data city" backdrop.
+    "bg":              "#070b14",
+    "bg_alt":          "#0c111d",
+    "surface":         "#121829",
+    "surface_hover":   "#1a2236",
+    "surface_border":  "#1f2a44",
 
-    # Text — crisp white hierarchy with clear separation
-    # text_muted bumped from #585e7a (3.0:1 fail) to #8086a4 (4.6:1 WCAG AA)
-    "text":            "#eef0f6",
-    "text_secondary":  "#9094b0",
-    "text_muted":      "#8086a4",
+    # Text — clean cool-white hierarchy. Verified WCAG AA against `bg`.
+    "text":            "#e6efff",
+    "text_secondary":  "#8ea0c2",
+    "text_muted":      "#7c8aac",
 
-    # Accent — luminous indigo with violet shift
-    "accent":          "#7c7ff7",
-    "accent_hover":    "#9b9dff",
-    "accent_subtle":   "#1c1a42",
-    "accent_glow":     "#7c7ff71a",
+    # Accent — electric cyan, the unmistakable splash "neon" colour.
+    "accent":          "#00d4ff",
+    "accent_hover":    "#54e8ff",
+    "accent_subtle":   "#0a2540",
+    "accent_glow":     "#00d4ff26",
 
-    # Semantic — vivid and legible on dark
-    "success":         "#3de8a0",
-    "success_bg":      "#0e2e22",
-    "warning":         "#f5c842",
-    "warning_bg":      "#2a2208",
-    "danger":          "#ff6b6b",
-    "danger_bg":       "#2e1010",
+    # Semantic — vivid neon for status pills.
+    "success":         "#22e3a4",
+    "success_bg":      "#06241c",
+    "warning":         "#ffc857",
+    "warning_bg":      "#2a1f08",
+    "danger":          "#ff5e7a",
+    "danger_bg":       "#2c0d18",
 
-    # Borders & inputs — barely visible layering
-    "border":          "#252840",
-    "border_subtle":   "#1e2035",
-    "input_bg":        "#10121c",
+    # Borders & inputs — barely-visible holographic edges.
+    "border":          "#1d2742",
+    "border_subtle":   "#141b30",
+    "input_bg":        "#0a1020",
 
-    # Scrollbar — whisper-thin, fades in
-    "scrollbar":       "#282c48",
-    "scrollbar_hover": "#3a3f62",
+    # Scrollbar — thin and cyan-tinted on hover.
+    "scrollbar":       "#1d2742",
+    "scrollbar_hover": "#2c4373",
 
-    # Tabs
-    "tab_active":      "#7c7ff7",
-    "tab_inactive":    "#13151f",
+    # Tabs — active tab carries the cyan glow.
+    "tab_active":      "#00d4ff",
+    "tab_inactive":    "#0c111d",
 
-    # Headers — slightly warm white
-    "header":          "#e8eaf4",
+    # Headers — pure white for the dashboard title vibe.
+    "header":          "#f3f8ff",
 
-    # Card elevation (layered depth)
-    "card_bg":         "#171a28",
-    "card_hover":      "#1f2238",
-    "card_selected":   "#262a4c",
+    # Card elevation — layered like floating HUD panels.
+    "card_bg":         "#0e1424",
+    "card_hover":      "#15203a",
+    "card_selected":   "#1a2a52",
 
-    # Gradient accents
-    "gradient_start":  "#7c7ff7",
-    "gradient_end":    "#a78bfa",
+    # Gradient accents — cyan → violet sweep, matching the splash's
+    # "data beam" rays.
+    "gradient_start":  "#00d4ff",
+    "gradient_end":    "#a36bff",
 
-    # Category badge colors
-    "badge_model":     "#9b9dff",
-    "badge_lora":      "#3de8a0",
-    "badge_embedding": "#f5c842",
-    "badge_text":      "#0c0e16",
+    # Category badge colors — picked straight from the splash glyphs.
+    "badge_model":     "#54e8ff",
+    "badge_lora":      "#22e3a4",
+    "badge_embedding": "#ffc857",
+    "badge_text":      "#070b14",
 }
 
 _LIGHT_COLORS = {
@@ -182,11 +188,16 @@ def get_stylesheet() -> str:
     """Return the full Qt stylesheet for the application using current theme colors."""
     c = COLORS
     return f"""
-    /* ═══ Foundation ═══ */
+    /* ═══ Foundation ═══
+       Sleek splash-aesthetic: cool sci-fi sans-serif, slightly tighter
+       letter-spacing, and a subtle 0.2px tracking on body text so the
+       UI reads like the floating HUD panels in the splash artwork. */
     QMainWindow, QWidget {{
         background-color: {c['bg']}; color: {c['text']};
-        font-family: 'Inter', 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', sans-serif;
+        font-family: 'Inter', 'SF Pro Display', 'Segoe UI Variable',
+                     'Segoe UI', 'Helvetica Neue', sans-serif;
         font-size: 13px;
+        letter-spacing: 0.1px;
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
 

@@ -333,6 +333,24 @@ class ModelCard(QFrame):
         self._click_timer.setSingleShot(True)
         self._click_timer.setInterval(QApplication.doubleClickInterval())
         self._click_timer.timeout.connect(self._emit_single_click)
+
+        # Hover elevation: a soft drop shadow that fades in / out as the
+        # cursor enters and leaves. Stronger than the static border alone
+        # so the hovered card visibly "lifts" off the page.
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        self._shadow_effect = QGraphicsDropShadowEffect(self)
+        self._shadow_effect.setBlurRadius(0.0)
+        self._shadow_effect.setOffset(0.0, 0.0)
+        self._shadow_effect.setColor(QColor(0, 0, 0, 0))
+        self.setGraphicsEffect(self._shadow_effect)
+
+        # Animate the blur so the shadow grows / shrinks smoothly. A
+        # QPropertyAnimation on `blurRadius` is cheap and keeps the
+        # cursor-tracking responsive.
+        self._shadow_anim = QPropertyAnimation(self._shadow_effect, b"blurRadius", self)
+        self._shadow_anim.setDuration(180)
+        self._shadow_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._build_ui()
         self._apply_style(hovered=False)
 
@@ -432,15 +450,26 @@ class ModelCard(QFrame):
     # -- Events --------------------------------------------------------------
 
     def enterEvent(self, event):
-        """Highlight on hover."""
+        """Highlight on hover and lift the card with a soft shadow."""
         if not self._selected:
             self._apply_style(hovered=True)
+        self._animate_shadow(blur=22.0, alpha=110)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        """Remove hover highlight."""
+        """Remove hover highlight and let the card settle back."""
         self._apply_style(hovered=False)
+        self._animate_shadow(blur=0.0, alpha=0)
         super().leaveEvent(event)
+
+    def _animate_shadow(self, *, blur: float, alpha: int) -> None:
+        """Tween the drop-shadow blur radius and re-tint its colour."""
+        self._shadow_effect.setColor(QColor(0, 0, 0, alpha))
+        self._shadow_effect.setOffset(0.0, 4.0 if blur > 0 else 0.0)
+        self._shadow_anim.stop()
+        self._shadow_anim.setStartValue(self._shadow_effect.blurRadius())
+        self._shadow_anim.setEndValue(blur)
+        self._shadow_anim.start()
 
     def _emit_single_click(self):
         """Emit single click after confirming it's not a double-click."""
