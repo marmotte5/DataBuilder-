@@ -33,11 +33,47 @@ from typing import Any
 
 from dataset_sorter.constants import OFFICIAL_MIRRORS
 from dataset_sorter.model_sources import (
+    PROBE_GATED_NO_TOKEN,
+    PROBE_GATED_TERMS,
+    PROBE_NO_URL,
+    PROBE_NOT_FOUND,
+    PROBE_OK,
+    PROBE_OK_AUTH,
+    PROBE_TOKEN_INVALID,
+    PROBE_UNREACHABLE,
+    _hf_token,
+    probe_huggingface,
     resolve_mirror_to_url,
     verify_source_reachable,
 )
 
 log = logging.getLogger(__name__)
+
+
+# Status -> short hint shown after the table. Only printed when at least
+# one mirror returned that status, so the user gets actionable advice
+# without a wall of help text every run.
+_HINTS = {
+    PROBE_GATED_NO_TOKEN: (
+        "set HF_TOKEN (https://huggingface.co/settings/tokens) to verify "
+        "gated repos"
+    ),
+    PROBE_GATED_TERMS: (
+        "open the repo page in a browser and click \"Agree and access "
+        "repository\" to accept the license"
+    ),
+    PROBE_TOKEN_INVALID: (
+        "your HF_TOKEN was rejected — regenerate one at "
+        "https://huggingface.co/settings/tokens"
+    ),
+    PROBE_NOT_FOUND: (
+        "repo no longer exists at that ID; the registry may need an "
+        "update — open an issue or PR against constants.OFFICIAL_MIRRORS"
+    ),
+    PROBE_UNREACHABLE: (
+        "network error — check your connection / proxy / firewall"
+    ),
+}
 
 
 def _check_one(arch: str, entry: dict) -> dict[str, Any]:
@@ -51,41 +87,63 @@ def _check_one(arch: str, entry: dict) -> dict[str, Any]:
         "gated": bool(entry.get("gated", False)),
         "note": entry.get("note", ""),
         "url": url,
-        "status": "skip",
+        "status": PROBE_NO_URL,
         "code": None,
     }
     if url is None:
-        result["status"] = "no-url"
         return result
-    reachable, code = verify_source_reachable(url, timeout=10.0)
-    result["code"] = code
-    if reachable and code is not None and code < 400:
-        result["status"] = "OK"
-    elif code in (401, 403):
-        result["status"] = "AUTH" if entry.get("gated") else "AUTH (unexpected)"
-    elif code == 404:
-        result["status"] = "404"
-    elif code is None:
-        result["status"] = "unreachable"
+
+    src = entry.get("source", "").lower()
+    if src == "huggingface":
+        # Use the API endpoint + token-aware classifier so we can tell
+        # GATED-no-token from GATED-need-terms from TOKEN-INVALID.
+        status, code = probe_huggingface(entry["id"], timeout=10.0)
+        result["status"] = status
+        result["code"] = code
     else:
-        result["status"] = f"HTTP {code}"
+        # Civitai / ModelScope / GitHub / URL — generic HEAD probe.
+        reachable, code = verify_source_reachable(url, timeout=10.0)
+        result["code"] = code
+        if reachable and code is not None and code < 400:
+            result["status"] = PROBE_OK
+        elif code == 404:
+            result["status"] = PROBE_NOT_FOUND
+        elif code in (401, 403):
+            # Civitai gates some content behind login (NSFW, commercial).
+            # ModelScope rarely needs auth for public models.
+            result["status"] = (
+                PROBE_GATED_NO_TOKEN if entry.get("gated") else
+                PROBE_GATED_NO_TOKEN  # treat as "needs auth" generically
+            )
+        elif code is None:
+            result["status"] = PROBE_UNREACHABLE
+        else:
+            result["status"] = f"HTTP {code}"
     return result
+
+
+_STATUS_COLOURS = {
+    PROBE_OK:              "\033[32m",  # green
+    PROBE_OK_AUTH:         "\033[32m",  # green
+    PROBE_GATED_NO_TOKEN:  "\033[33m",  # yellow — expected for gated
+    PROBE_GATED_TERMS:     "\033[33m",  # yellow — actionable
+    PROBE_TOKEN_INVALID:   "\033[31m",  # red — broken
+    PROBE_NOT_FOUND:       "\033[31m",  # red — registry stale
+    PROBE_UNREACHABLE:     "\033[31m",  # red — network issue
+}
 
 
 def _format_row(r: dict[str, Any], col_widths: dict[str, int]) -> str:
     status = r["status"]
     # Lightweight status colouring via ANSI when stdout is a tty.
     if sys.stdout.isatty():
-        if status == "OK":
-            status = f"\033[32m{status:<14}\033[0m"
-        elif status.startswith("AUTH"):
-            status = f"\033[33m{status:<14}\033[0m"
-        elif status in ("404", "unreachable"):
-            status = f"\033[31m{status:<14}\033[0m"
+        colour = _STATUS_COLOURS.get(status, "")
+        if colour:
+            status = f"{colour}{status:<16}\033[0m"
         else:
-            status = f"{status:<14}"
+            status = f"{status:<16}"
     else:
-        status = f"{status:<14}"
+        status = f"{status:<16}"
     return (
         f"  {r['arch']:<{col_widths['arch']}}  "
         f"{r['source']:<{col_widths['source']}}  "
@@ -148,16 +206,33 @@ def run(targets: list[str] | None = None, *, json_output: bool = False,
 
         # Summary
         total = len(results)
-        ok = sum(1 for r in results if r["status"] == "OK")
-        auth = sum(1 for r in results if r["status"].startswith("AUTH"))
-        gone = sum(1 for r in results if r["status"] in ("404", "unreachable"))
+        ok = sum(1 for r in results if r["status"] in (PROBE_OK, PROBE_OK_AUTH))
+        gated = sum(1 for r in results if r["status"] in (
+            PROBE_GATED_NO_TOKEN, PROBE_GATED_TERMS))
+        broken = sum(1 for r in results if r["status"] in (
+            PROBE_NOT_FOUND, PROBE_UNREACHABLE, PROBE_TOKEN_INVALID))
         print()
-        print(f"  {ok}/{total} reachable, {auth} auth-required, {gone} dead")
+        print(f"  {ok}/{total} reachable, {gated} gated (need auth/terms), "
+              f"{broken} broken")
 
-    # Exit code: 0 if no unexpected failures, 1 if any mirror is dead OR
-    # a non-gated mirror returned auth-required.
+        # Per-status hints — only print the hints that apply to this run.
+        seen = {r["status"] for r in results}
+        for status, hint in _HINTS.items():
+            if status in seen:
+                print(f"  • {status}: {hint}")
+
+        # Inform about token presence when relevant.
+        if PROBE_GATED_NO_TOKEN in seen and _hf_token() is None:
+            print("  • no HF_TOKEN detected; gated repos cannot be verified")
+
+    # Exit code: 0 if every mirror is either OK or expectedly gated;
+    # 1 if any mirror is broken (TOKEN INVALID / 404 / unreachable) or
+    # gated unexpectedly (entry didn't have gated=True but returned auth).
     bad = [r for r in results if r["status"] in (
-        "404", "unreachable") or "unexpected" in r["status"]]
+        PROBE_NOT_FOUND, PROBE_UNREACHABLE, PROBE_TOKEN_INVALID)]
+    bad += [r for r in results
+            if r["status"] in (PROBE_GATED_NO_TOKEN, PROBE_GATED_TERMS)
+            and not r["gated"]]
     return 1 if bad else 0
 
 

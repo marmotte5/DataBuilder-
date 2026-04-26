@@ -449,11 +449,63 @@ def download_from_url(url: str, *,
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# HuggingFace token / token-related helpers
+#
+# huggingface_hub reads the token from $HF_TOKEN, $HUGGING_FACE_HUB_TOKEN,
+# or ~/.cache/huggingface/token (in that order). We mirror that lookup so
+# the verify CLI uses the same token the actual download will use — no
+# spooky differences between "looks reachable" and "fails to download".
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _hf_token() -> str | None:
+    """Resolve a HuggingFace token from env or the standard cache file.
+
+    Returns None if no token is configured.
+    """
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            return v
+    # Fall back to the file huggingface_hub writes after `huggingface-cli login`.
+    try:
+        cache = Path.home() / ".cache" / "huggingface" / "token"
+        if cache.is_file():
+            v = cache.read_text(encoding="utf-8").strip()
+            return v or None
+    except OSError:
+        pass
+    return None
+
+
+def _hf_headers(token: str | None = None) -> dict:
+    """Authorization header for HF API/CDN, when a token is available."""
+    t = (token or _hf_token() or "").strip()
+    return {"Authorization": f"Bearer {t}"} if t else {}
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Reachability check (used by the verify_sources CLI)
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def verify_source_reachable(url: str, *, timeout: float = 10.0) -> tuple[bool, int | None]:
+# Per-mirror probe outcomes. These are the values the CLI surfaces to
+# the user; each is paired with an actionable message in the CLI table.
+PROBE_OK = "OK"                       # 200 reachable, no auth needed
+PROBE_OK_AUTH = "OK (auth)"           # 200 reachable, token used
+PROBE_GATED_NO_TOKEN = "GATED"        # auth wall hit, no token in env
+PROBE_GATED_TERMS = "GATED (terms)"   # token present but 403 — license
+                                       # not accepted on the repo page
+PROBE_TOKEN_INVALID = "TOKEN INVALID" # token present but rejected as bad
+PROBE_NOT_FOUND = "404"               # repo / model id removed
+PROBE_UNREACHABLE = "unreachable"     # network failure, DNS, refused
+PROBE_NO_URL = "no-url"               # registry entry not probable
+
+
+def verify_source_reachable(url: str, *,
+                            timeout: float = 10.0,
+                            headers: dict | None = None,
+                            ) -> tuple[bool, int | None]:
     """HEAD a URL and report (reachable, status_code).
 
     Used by ``verify_sources`` CLI to flag dead mirrors without downloading
@@ -466,6 +518,8 @@ def verify_source_reachable(url: str, *, timeout: float = 10.0) -> tuple[bool, i
         return False, None
     req = urllib.request.Request(url, method="HEAD")
     req.add_header("User-Agent", _USER_AGENT)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status < 400, resp.status
@@ -474,6 +528,71 @@ def verify_source_reachable(url: str, *, timeout: float = 10.0) -> tuple[bool, i
         return exc.code in (401, 403), exc.code
     except urllib.error.URLError:
         return False, None
+
+
+def probe_huggingface(repo_id: str, *, token: str | None = None,
+                      timeout: float = 10.0) -> tuple[str, int | None]:
+    """Probe a HuggingFace repo via the API and classify the outcome.
+
+    Returns (PROBE_*, http_code|None). Distinguishes the four real-world
+    auth states so the CLI/UI can give actionable advice instead of a
+    blanket "AUTH required":
+
+      - PROBE_OK              : public repo, anyone can download
+      - PROBE_OK_AUTH         : gated repo, the token has access
+      - PROBE_GATED_NO_TOKEN  : gated repo, no token supplied — set HF_TOKEN
+      - PROBE_GATED_TERMS     : gated repo, token present but 403 — accept
+                                terms at https://huggingface.co/{repo_id}
+      - PROBE_TOKEN_INVALID   : token present but server rejects it as bad
+      - PROBE_NOT_FOUND       : repo removed or never existed
+      - PROBE_UNREACHABLE     : network error
+    """
+    url = f"https://huggingface.co/api/models/{repo_id}"
+    if not _allowed_host(url):
+        return PROBE_UNREACHABLE, None
+
+    tok = token if token is not None else _hf_token()
+    headers = {"Authorization": f"Bearer {tok}"} if tok else {}
+    headers["User-Agent"] = _USER_AGENT
+    headers["Accept"] = "application/json"
+
+    req = urllib.request.Request(url, method="GET")
+    for k, v in headers.items():
+        req.add_header(k, v)
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.status
+            if code == 200:
+                # Body tells us whether this repo is gated. A public repo
+                # has gated="false"; a gated one we have access to has
+                # gated="auto" or "manual" with `disabled=False`.
+                try:
+                    body = json.loads(resp.read())
+                    gated = body.get("gated", False)
+                except (json.JSONDecodeError, OSError):
+                    gated = False
+                if gated and tok:
+                    return PROBE_OK_AUTH, code
+                return PROBE_OK, code
+            return PROBE_UNREACHABLE, code
+    except urllib.error.HTTPError as exc:
+        code = exc.code
+        if code == 404:
+            return PROBE_NOT_FOUND, code
+        if code == 401:
+            # 401 = token outright rejected (or no auth presented when
+            # required). With a token: server doesn't trust our token.
+            # Without a token: gated repo asking us to log in.
+            return (PROBE_TOKEN_INVALID if tok else PROBE_GATED_NO_TOKEN), code
+        if code == 403:
+            # 403 = authenticated but forbidden. Almost always means the
+            # user hasn't clicked "Agree and access repo" on the model
+            # card. Without a token it's just standard gated behaviour.
+            return (PROBE_GATED_TERMS if tok else PROBE_GATED_NO_TOKEN), code
+        return PROBE_UNREACHABLE, code
+    except urllib.error.URLError:
+        return PROBE_UNREACHABLE, None
 
 
 # ─────────────────────────────────────────────────────────────────────────
