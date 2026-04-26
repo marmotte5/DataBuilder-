@@ -593,6 +593,12 @@ def tag_folder(
             )
             caption_path.write_text(caption, encoding="utf-8")
             tagged += 1
+            if not caption.strip():
+                log.warning(
+                    "Empty caption for %s (no tags above threshold and no "
+                    "trigger_word). Consider lowering threshold_general or "
+                    "supplying trigger_word.", img_path.name,
+                )
             log.debug("Tagged %s → %s", img_path.name, caption[:60])
         except Exception:
             log.exception("Failed to tag %s", img_path.name)

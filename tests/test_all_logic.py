@@ -1950,6 +1950,16 @@ class TestBucketBatchSampler:
         # Different seeds should produce different orderings (very likely with 20 items)
         assert b1 != b2
 
+    def test_drop_last_too_small_raises_not_silent(self):
+        """A bucket-only dataset smaller than batch_size with drop_last=True
+        should raise ValueError, not silently train on 0 batches."""
+        import pytest
+        from dataset_sorter.bucket_sampler import BucketBatchSampler
+        # 3 images, batch_size=4, drop_last=True → 0 batches
+        assignments = [(512, 512)] * 3
+        with pytest.raises(ValueError, match="0 batches"):
+            BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+
 
 class TestCachedTrainDatasetBucketing:
     """Test dataset with bucket assignments."""
