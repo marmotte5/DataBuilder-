@@ -548,6 +548,14 @@ class TrainingConfig:
     # ── Memory-Mapped Dataset ────────────────────────────────────
     mmap_dataset: bool = False         # Use mmap'd safetensors for zero-copy data loading
 
+    # ── Remote Training Bundle ───────────────────────────────────
+    # Path to a pre-built mmap cache from a remote-training bundle. When
+    # set, Trainer.setup_with_prebuilt_cache() is used: the dataset
+    # construction / bucketing / latent encoding / TE encoding steps are
+    # skipped (they were done on the user's machine before bundling).
+    # Empty string = no bundle, normal training flow.
+    mmap_prebuilt_cache_dir: str = ""
+
     # ── Parallel Caching ─────────────────────────────────────────
     parallel_caching: bool = False       # Parallelise image loading during latent/TE caching
     parallel_caching_workers: int = 4   # Number of threads for parallel image pre-loading

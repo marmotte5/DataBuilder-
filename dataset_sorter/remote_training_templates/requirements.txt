@@ -1,0 +1,37 @@
+# DataBuilder remote training — cloud-side dependencies.
+# Pinned to the same versions used when the bundle was built (or
+# upper-bounded). Install with `pip install -r requirements.txt`.
+#
+# Torch is intentionally NOT pinned here — most cloud GPU images
+# (vast.ai, RunPod, Lambda) ship with a torch build matched to their
+# CUDA driver, and overwriting it usually breaks more than it fixes.
+# If your image has no torch, install one matching your CUDA:
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# (cu121 / cu118 / cu126 also work — pick the one for your driver.)
+
+diffusers>=0.28
+transformers>=4.42
+accelerate>=0.30
+safetensors>=0.4
+huggingface_hub>=0.23
+Pillow>=10
+numpy>=1.24
+
+# Optimizer / kernel extras — installed best-effort; train.py works
+# without them but loses speed if absent.
+bitsandbytes ; sys_platform == "linux"
+prodigyopt
+schedulefree
+einops
+
+# Some backends need these. Install fails are non-fatal — train.py
+# will surface a clearer error at startup if a required dep is missing.
+sentencepiece
+protobuf
+
+# Optional speed extras — uncomment if your CUDA driver supports them.
+# triton           # Linux + sm80+ only
+# flash-attn       # Linux + sm80+, often needs a separate build step
+# transformer-engine ; sys_platform == "linux"

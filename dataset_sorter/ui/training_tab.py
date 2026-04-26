@@ -280,6 +280,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
     # Emitted when user clicks Train to request dataset from main window
     request_training_data = pyqtSignal()
+    request_bundle_data = pyqtSignal()
     # Emitted when user clicks Apply Recommendations (config only, no training)
     request_recommendations = pyqtSignal()
 
@@ -863,6 +864,15 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self.btn_train.clicked.connect(self._start_training)
         btn_row.addWidget(self.btn_train)
 
+        self.btn_bundle = QPushButton("Build Remote Bundle")
+        self.btn_bundle.setToolTip(
+            "Encode dataset locally, then generate a self-contained folder "
+            "to upload to a cloud GPU (vast.ai / RunPod / Lambda)"
+        )
+        self.btn_bundle.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self.btn_bundle.clicked.connect(self._start_bundle)
+        btn_row.addWidget(self.btn_bundle)
+
         main_layout.addLayout(btn_row)
 
         # Keyboard shortcut: Ctrl+Enter to start training
@@ -1296,6 +1306,39 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         # Request dataset from main window
         self.request_training_data.emit()
+
+    def _start_bundle(self):
+        """Validate inputs and request dataset for remote bundle build."""
+        model_path = self.model_path_input.text().strip()
+        if not model_path:
+            self._log("ERROR: No base model path specified.")
+            return
+        self.request_bundle_data.emit()
+
+    def build_bundle_with_data(self, entries: list[ImageEntry], deleted_tags: set[str]):
+        """Called by main window with dataset entries for bundle building."""
+        if not entries:
+            self._log("ERROR: No dataset loaded. Scan a dataset first.")
+            return
+
+        model_path = self.model_path_input.text().strip()
+        image_paths = []
+        captions = []
+        for entry in entries:
+            if entry.txt_path is not None:
+                tags = [t for t in entry.tags if t not in deleted_tags]
+                image_paths.append(entry.image_path)
+                captions.append(", ".join(tags))
+
+        if not image_paths:
+            self._log("ERROR: No images with captions found.")
+            return
+
+        config = self.build_config()
+
+        from dataset_sorter.ui.remote_training_dialog import RemoteTrainingDialog
+        dialog = RemoteTrainingDialog(config, model_path, image_paths, captions, self)
+        dialog.exec()
 
     def start_training_with_data(self, entries: list[ImageEntry], deleted_tags: set[str]):
         """Called by main window with dataset entries."""
