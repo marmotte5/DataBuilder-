@@ -468,16 +468,32 @@ DEFAULT_LR_LORA: float = 1e-4           # LoRA / network default learning rate
 DEFAULT_LR_TEXT_ENCODER: float = 5e-5   # Text encoder default learning rate
 
 # ── Per-optimizer default settings ────────────────────────────────────
-# When the user selects an optimizer, these defaults should auto-fill in the UI.
-# Keys match the OPTIMIZERS dict above (case-sensitive).
-# learning_rate=None means the optimizer manages its own LR (no UI default).
+# When the user selects an optimizer, these defaults should auto-fill in the UI
+# AND seed the recommender. This is the SINGLE source of truth — there used to
+# be a second dict in optimizer_factory.py that drifted (different SGD WD,
+# missing Lion betas, missing warmup_steps, etc.). The factory now re-imports
+# from here.
+#
+# Schema per entry:
+#   learning_rate   (float)        — default LR shown in the UI
+#   lr_scheduler    (str)          — default scheduler for this optimizer
+#   weight_decay    (float)        — default WD
+#   warmup_steps    (int)          — default warmup steps
+#   betas           (tuple, opt)   — Adam-family beta1/beta2 (only when meaningful)
+#   eps             (float, opt)   — Adam-family epsilon
+#   force_lr        (float, opt)   — UI must lock LR to this value
+#   force_scheduler (str, opt)     — UI must lock scheduler to this value
+#   description     (str)          — short label shown in optimizer combo
+#   notes           (str)          — longer explanation shown beneath the combo
 OPTIMIZER_DEFAULTS: dict[str, dict] = {
     "AdamW": {
         "learning_rate": 5e-5,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "Standard optimizer for most training tasks",
+        "betas": (0.9, 0.999),
+        "eps": 1e-8,
+        "description": "Standard optimizer. Good default for most training.",
         "notes": "",
     },
     "AdamW8bit": {
@@ -485,104 +501,153 @@ OPTIMIZER_DEFAULTS: dict[str, dict] = {
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "Memory-efficient 8-bit AdamW (requires bitsandbytes)",
-        "notes": "Same quality as AdamW with ~30% less memory.",
+        "betas": (0.9, 0.999),
+        "eps": 1e-8,
+        "description": "8-bit AdamW. Uses ~50% less VRAM than AdamW.",
+        "notes": "Requires bitsandbytes. NVIDIA only.",
     },
     "Adafactor": {
-        "learning_rate": None,  # Auto-managed by relative_step
+        # Factory used 2e-5; the in-UI spinbox shows this value but is locked
+        # via get_locked_fields() when relative_step=True (Adafactor manages
+        # LR internally). Keep 2e-5 so manual-LR users have a sane starting
+        # point and so the field is non-empty when displayed.
+        "learning_rate": 2e-5,
         "lr_scheduler": "constant",
         "weight_decay": 0.0,
         "warmup_steps": 0,
-        "description": "Memory-efficient optimizer with auto LR scaling",
-        "notes": "No need to tune learning rate. Good default choice.",
+        "description": "Memory-efficient optimizer. Good for low VRAM.",
+        "notes": (
+            "With relative_step=True, LR is auto-managed and scheduler is "
+            "forced to constant. Uses much less VRAM than AdamW."
+        ),
     },
     "Prodigy": {
-        "learning_rate": 1.0,  # Must always be 1.0 for Prodigy
+        "learning_rate": 1.0,
         "lr_scheduler": "constant",
         "weight_decay": 0.01,
         "warmup_steps": 0,
-        "description": "Adaptive optimizer that auto-tunes learning rate",
-        "notes": "LR must be 1.0 — Prodigy manages its own learning rate internally.",
+        "betas": (0.9, 0.99),
+        "eps": 1e-8,
+        "force_lr": 1.0,
+        "force_scheduler": "constant",
+        "description": "Adaptive LR optimizer. Always set LR=1.0.",
+        "notes": (
+            "Prodigy manages its own learning rate internally. "
+            "LR must be 1.0. Scheduler must be constant."
+        ),
     },
     "DAdaptAdam": {
-        "learning_rate": 1.0,  # Must always be 1.0 for D-Adaptation
+        "learning_rate": 1.0,
         "lr_scheduler": "constant",
         "weight_decay": 0.0,
         "warmup_steps": 0,
-        "description": "D-Adaptation variant of Adam, auto-tunes LR",
-        "notes": "LR must be 1.0 — D-Adaptation manages LR internally.",
+        "force_lr": 1.0,
+        "force_scheduler": "constant",
+        "description": "D-Adaptation Adam. Self-tuning LR.",
+        "notes": (
+            "LR must be 1.0. Scheduler must be constant. "
+            "No weight decay recommended."
+        ),
     },
     "Lion": {
-        "learning_rate": 1e-5,  # 3-10x lower than AdamW
+        "learning_rate": 1e-5,
         "lr_scheduler": "cosine",
-        "weight_decay": 0.1,    # Higher than AdamW
+        "weight_decay": 0.1,
         "warmup_steps": 100,
-        "description": "Google Brain optimizer, simpler and faster than AdamW",
-        "notes": "Use 3-10x lower LR than AdamW. Higher weight decay recommended.",
+        "betas": (0.9, 0.99),
+        "description": "Google Brain optimizer. Uses 3-10x lower LR than AdamW.",
+        "notes": "Use 3-10x lower LR than AdamW. Higher weight decay (0.1-0.3).",
     },
     "AdamWScheduleFree": {
         "learning_rate": 5e-5,
-        "lr_scheduler": "constant",  # ScheduleFree manages its own schedule
+        "lr_scheduler": "constant",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "Schedule-free AdamW — no LR scheduler needed",
-        "notes": "Built-in schedule. External LR schedulers are ignored.",
+        "force_scheduler": "constant",
+        "description": "Schedule-free AdamW. No LR scheduler needed.",
+        "notes": (
+            "Scheduler must be constant. The optimizer handles LR scheduling "
+            "internally via weight averaging."
+        ),
     },
     "CAME": {
         "learning_rate": 2e-5,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 50,
-        "description": "Confidence-guided Adaptive Memory Efficient optimizer",
-        "notes": "Good balance of memory efficiency and quality.",
+        "description": "Confidence-Aware Memory Efficient optimizer.",
+        "notes": (
+            "Memory efficient like Adafactor but with momentum. "
+            "Good balance of memory efficiency and quality."
+        ),
     },
     "SGD": {
         "learning_rate": 1e-3,
         "lr_scheduler": "cosine",
+        # Factory used 1e-4 here; constants used 0.0. Keep 0.0 — pure SGD
+        # with WD=0 is the safer "no surprise" default. Users who want
+        # decoupled WD should use AdamW.
         "weight_decay": 0.0,
         "warmup_steps": 0,
-        "description": "Classic SGD with momentum",
-        "notes": "Rarely used for diffusion training. Use AdamW instead.",
+        "description": "Classic SGD with momentum. Simple and stable.",
+        "notes": (
+            "Rarely used for diffusion training. Requires careful LR tuning. "
+            "Momentum is fixed at 0.9."
+        ),
     },
     "SOAP": {
         "learning_rate": 5e-5,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "2nd-order optimizer, ~40% fewer iterations (ICLR 2025)",
-        "notes": "Higher memory usage. Best for large models with enough VRAM.",
+        "description": "Shampoo-Adam 2nd-order optimizer (ICLR 2025).",
+        "notes": (
+            "~40% fewer iterations than AdamW. Slightly higher memory due to "
+            "preconditioner matrices. Best for large models with enough VRAM."
+        ),
     },
     "Muon": {
-        "learning_rate": 0.02,  # Muon requires much higher LR than AdamW
+        "learning_rate": 0.02,
         "lr_scheduler": "cosine",
-        "weight_decay": 0.0,    # Muon uses decoupled WD internally
+        # Factory used 0.01; Muon uses decoupled WD internally so external
+        # WD should be 0.0.
+        "weight_decay": 0.0,
         "warmup_steps": 0,
-        "description": "Orthogonal gradient updates, 2x efficiency",
-        "notes": "Use 100-200x higher LR than AdamW. Only for 2D+ params.",
+        "description": "Orthogonal-update optimizer. ~2x efficiency vs AdamW.",
+        "notes": (
+            "Requires higher LR than AdamW (0.01-0.05 typical, 100-200x AdamW). "
+            "Only for 2D+ params; 1D params (biases, norms) use AdamW internally."
+        ),
     },
     "GaLoreAdamW": {
         "learning_rate": 5e-5,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "Low-rank gradient projection, full-rank quality",
-        "notes": "Full-finetune quality at LoRA memory cost.",
+        "description": "Gradient Low-Rank Projection AdamW. Full-rank quality at low memory.",
+        "notes": "Use rank 64-128. Re-projection adds some overhead per update_proj_gap steps.",
     },
     "GaLoreAdamW8bit": {
         "learning_rate": 5e-5,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 100,
-        "description": "GaLore with 8-bit quantization for extra memory savings",
-        "notes": "GaLore + bitsandbytes 8-bit. Best memory/quality trade-off.",
+        "description": "GaLore + 8-bit AdamW. Maximum memory savings.",
+        "notes": "Requires bitsandbytes. NVIDIA only. Combines GaLore and 8-bit quantization.",
     },
     "Marmotte": {
         "learning_rate": 1e-4,
         "lr_scheduler": "cosine",
         "weight_decay": 0.01,
         "warmup_steps": 50,
-        "description": "Ultra-low memory, per-channel adaptive (~10-20x less than Adam)",
-        "notes": "DataBuilder's custom optimizer. Recommended for VRAM-constrained setups.",
+        "description": (
+            "DataBuilder custom optimizer. 10-20x less optimizer memory than AdamW, "
+            "per-channel adaptive LR, 1-bit momentum with rank-k error feedback."
+        ),
+        "notes": (
+            "Use higher LR than AdamW (1e-4 typical). Recommended for VRAM-constrained "
+            "setups. momentum=0.9, agreement_boost=1.5, error_rank=4."
+        ),
     },
 }
 
