@@ -93,12 +93,10 @@ class _ApiKeyRow(QWidget):
 
         self._show_btn = QPushButton("Show", self)
         self._show_btn.setCheckable(True)
-        self._show_btn.setFixedWidth(60)
         self._show_btn.toggled.connect(self._toggle_visibility)
         layout.addWidget(self._show_btn)
 
         self._test_btn = QPushButton("Test", self)
-        self._test_btn.setFixedWidth(60)
         self._test_btn.clicked.connect(self._on_test)
         layout.addWidget(self._test_btn)
 

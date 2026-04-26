@@ -260,15 +260,12 @@ class DebugConsole(QWidget):
 
         # Buttons
         self._btn_copy = QPushButton("Copy All")
-        self._btn_copy.setFixedWidth(80)
         toolbar.addWidget(self._btn_copy)
 
         self._btn_save = QPushButton("Save As...")
-        self._btn_save.setFixedWidth(80)
         toolbar.addWidget(self._btn_save)
 
         self._btn_clear = QPushButton("Clear")
-        self._btn_clear.setFixedWidth(60)
         toolbar.addWidget(self._btn_clear)
 
         layout.addLayout(toolbar)
@@ -291,11 +288,9 @@ class DebugConsole(QWidget):
         search_row.addWidget(self._search_input, 1)
 
         self._btn_search_prev = QPushButton("Prev")
-        self._btn_search_prev.setFixedWidth(50)
         search_row.addWidget(self._btn_search_prev)
 
         self._btn_search_next = QPushButton("Next")
-        self._btn_search_next.setFixedWidth(50)
         search_row.addWidget(self._btn_search_next)
 
         self._search_status = QLabel("")
