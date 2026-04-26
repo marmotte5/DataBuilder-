@@ -70,12 +70,14 @@ class ToastNotification(QLabel):
         self.show()
         self.raise_()
 
-        # Slide-in animation
+        # Slide-in animation — OutBack overshoots slightly past the target
+        # then settles, giving the toast a subtle "spring" arrival that
+        # feels premium without being cartoonish.
         self._slide_anim = QPropertyAnimation(self, b"pos")
-        self._slide_anim.setDuration(300)
+        self._slide_anim.setDuration(420)
         self._slide_anim.setStartValue(QPoint(x, y_start))
         self._slide_anim.setEndValue(QPoint(x, y_end))
-        self._slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._slide_anim.setEasingCurve(QEasingCurve.Type.OutBack)
         self._slide_anim.start()
 
         # Fade-out after duration

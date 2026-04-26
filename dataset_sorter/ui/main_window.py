@@ -402,6 +402,8 @@ class MainWindow(QMainWindow):
         # Above that the layout can stretch comfortably; below we'd force scrolling.
         self.setMinimumSize(1200, 780)
         self.setAcceptDrops(True)
+        # Lazy-built rotating gradient halo behind the active stepper step.
+        self._stepper_glow = None
 
         # State
         self.entries: list[ImageEntry] = []
@@ -1636,11 +1638,13 @@ class MainWindow(QMainWindow):
 
         # Update stepper button styles (active / done / default / disabled)
         active_stepper = nav_to_stepper.get(nav_id)
+        active_btn = None
         for step_id, btn in self._stepper_btns.items():
             nav_target = "train" if step_id == "_train3" else step_id
             if nav_target == active_stepper or step_id == active_stepper:
                 btn.setStyleSheet(self._stepper_button_style("active"))
                 btn.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                active_btn = btn
             elif not self._is_step_available(step_id):
                 btn.setStyleSheet(self._stepper_button_style("disabled"))
                 btn.setCursor(QCursor(Qt.CursorShape.ForbiddenCursor))
@@ -1657,6 +1661,11 @@ class MainWindow(QMainWindow):
                 btn.setStyleSheet(self._stepper_button_style("default"))
                 btn.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 btn.setToolTip("")
+
+        # Animated gradient halo behind the active stepper button.
+        # Lazy-create the overlay and reposition it on every nav change so
+        # it tracks layout shifts (window resize, simple/advanced toggle).
+        self._update_active_stepper_glow(active_btn)
 
         # More sub-nav bar: visible only when on a More page
         _more_nav_ids = {"batch", "compare", "merge", "library", "settings", "help"}
@@ -2333,6 +2342,34 @@ class MainWindow(QMainWindow):
         from dataset_sorter.ui.onboarding import OnboardingTour
         tour = OnboardingTour(self)
         tour.start()
+
+    def _update_active_stepper_glow(self, active_btn) -> None:
+        """Position the rotating gradient halo behind the active step button."""
+        from dataset_sorter.ui.animated_widgets import GradientGlowFrame
+
+        if active_btn is None or not active_btn.isVisible():
+            if hasattr(self, "_stepper_glow") and self._stepper_glow is not None:
+                self._stepper_glow.stop_glow()
+            return
+
+        # Build the overlay once, reparented to the active button's parent
+        # so coordinates match. We reposition it on every nav change.
+        if not hasattr(self, "_stepper_glow") or self._stepper_glow is None:
+            self._stepper_glow = GradientGlowFrame(active_btn.parentWidget())
+        else:
+            # If the parent changed (rare — only when stepper rebuilds),
+            # reparent the overlay so geometry math stays correct.
+            if self._stepper_glow.parentWidget() is not active_btn.parentWidget():
+                self._stepper_glow.setParent(active_btn.parentWidget())
+
+        pad = 4
+        geo = active_btn.geometry()
+        self._stepper_glow.setGeometry(
+            geo.x() - pad, geo.y() - pad,
+            geo.width() + pad * 2, geo.height() + pad * 2,
+        )
+        self._stepper_glow.stackUnder(active_btn)
+        self._stepper_glow.start_glow()
 
     def _refresh_theme_styles(self):
         """Re-apply all hardcoded widget stylesheets after a theme change."""
