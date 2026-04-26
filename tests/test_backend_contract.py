@@ -251,3 +251,79 @@ def test_trainer_has_lifecycle_methods():
         assert "return" in ann and ann["return"] is None, (
             f"Trainer.{method_name}: must declare -> None, got {ann.get('return')!r}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SD2 prediction_type auto-detection
+# Locks in the fix for SD 2.0-base (epsilon) being silently trained as
+# v_prediction because the backend hardcoded the class attr to v_prediction.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed")
+class TestSD2PredictionTypeDetection:
+    def _fake_scheduler(self, prediction_type):
+        """Build a minimal stub that mimics a diffusers scheduler config."""
+        class _Cfg:
+            pass
+        cfg = _Cfg()
+        if prediction_type is not None:
+            cfg.prediction_type = prediction_type
+        class _Sched:
+            pass
+        s = _Sched()
+        s.config = cfg
+        return s
+
+    def test_epsilon_scheduler_detected_for_sd20_base(self):
+        """SD 2.0-base ships epsilon — backend must NOT force v_prediction."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        sched = self._fake_scheduler("epsilon")
+        # Default arg simulates the class default (v_prediction); the
+        # function MUST pick up the scheduler's epsilon instead.
+        result = SD2Backend._detect_prediction_type(sched, default="v_prediction")
+        assert result == "epsilon"
+
+    def test_v_prediction_scheduler_detected_for_sd21(self):
+        """SD 2.1 ships v_prediction — confirm round-trip."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        sched = self._fake_scheduler("v_prediction")
+        result = SD2Backend._detect_prediction_type(sched, default="epsilon")
+        assert result == "v_prediction"
+
+    def test_falls_back_to_default_when_config_missing(self):
+        """A scheduler with no config attribute -> use the default."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        class _Bare:
+            pass
+        result = SD2Backend._detect_prediction_type(_Bare(), default="v_prediction")
+        assert result == "v_prediction"
+
+    def test_falls_back_to_default_when_field_missing(self):
+        """A config without prediction_type -> default."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        sched = self._fake_scheduler(None)  # config exists but no prediction_type
+        result = SD2Backend._detect_prediction_type(sched, default="epsilon")
+        assert result == "epsilon"
+
+    def test_handles_dict_style_config(self):
+        """diffusers FrozenDict supports both attr and .get() access — make
+        sure the detection works when only .get() is available."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+
+        class _DictCfg:
+            def get(self, key, default=None):
+                return {"prediction_type": "epsilon"}.get(key, default)
+
+        class _Sched:
+            config = _DictCfg()
+
+        result = SD2Backend._detect_prediction_type(_Sched(), default="v_prediction")
+        assert result == "epsilon"
+
+    def test_class_default_is_v_prediction(self):
+        """The class-level default stays v_prediction (matches the more
+        common SD 2.1 case). Auto-detection only kicks in when the loaded
+        scheduler differs."""
+        from dataset_sorter.train_backend_sd2 import SD2Backend
+        assert SD2Backend.prediction_type == "v_prediction"
