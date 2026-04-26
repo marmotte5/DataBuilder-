@@ -137,7 +137,7 @@ def estimate_vram(config) -> dict:
     else:
         opt_gb = trainable_gb * 2.0
 
-    if config.fused_backward_pass and opt == "Adafactor":
+    if config.fused_backward_pass and opt in ("Adafactor", "Marmotte"):
         opt_gb *= 0.3  # Fused backward dramatically reduces peak
     breakdown["Optimizer states"] = round(opt_gb, 1)
 
