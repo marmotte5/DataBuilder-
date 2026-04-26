@@ -2087,6 +2087,7 @@ class MainWindow(QMainWindow):
         self.dataset_tab.apply_importance_cleaning.connect(self._apply_importance_cleaning)
 
         self.training_tab.request_training_data.connect(self._on_training_data_request)
+        self.training_tab.request_bundle_data.connect(self._on_bundle_data_request)
         self.training_tab.request_recommendations.connect(self._on_apply_reco_to_training)
         self.training_tab.config_modified.connect(self._on_config_modified)
 
@@ -3178,6 +3179,13 @@ class MainWindow(QMainWindow):
         """Provide dataset to training tab and start training."""
         if self.entries:
             self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
+        else:
+            self.statusBar().showMessage("No dataset loaded. Scan first.")
+
+    def _on_bundle_data_request(self):
+        """Provide dataset to training tab for remote bundle building."""
+        if self.entries:
+            self.training_tab.build_bundle_with_data(self.entries, self.deleted_tags)
         else:
             self.statusBar().showMessage("No dataset loaded. Scan first.")
 
