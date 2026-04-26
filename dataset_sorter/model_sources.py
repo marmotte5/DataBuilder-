@@ -350,7 +350,7 @@ def download_from_civitai(model_id: int | str, *,
     primary = next((f for f in files if f.get("primary")), files[0])
 
     download_url = primary.get("downloadUrl")
-    filename = primary.get("name") or f"civitai_{model_id}.safetensors"
+    filename = Path(primary.get("name") or f"civitai_{model_id}.safetensors").name
     expected_sha = (primary.get("hashes") or {}).get("SHA256")
     if not download_url:
         raise SourceError(f"Civitai file {filename!r} missing downloadUrl")
@@ -439,7 +439,7 @@ def download_from_url(url: str, *,
         # Best-effort filename from URL path; fall back to "download.bin".
         path = urllib.parse.urlsplit(url).path
         filename = Path(path).name or "download.bin"
-    dest_path = dest_dir / filename
+    dest_path = dest_dir / Path(filename).name
     log.info("Direct URL: downloading %s", filename)
     return _atomic_download(
         url, dest_path,

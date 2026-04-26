@@ -162,6 +162,7 @@ class TestApiComparisons:
 
 class TestImageEndpoint:
     def test_serve_real_image(self, viewer: ComparisonViewer, png_file: Path):
+        viewer.add_comparison(str(png_file), str(png_file), label="test-serve")
         url = f"http://127.0.0.1:{_PORT}/image?path={urllib.request.quote(str(png_file))}"
         resp = urllib.request.urlopen(url, timeout=3)
         assert resp.status == 200
@@ -174,7 +175,9 @@ class TestImageEndpoint:
         assert exc_info.value.code == 400
 
     def test_nonexistent_file_returns_404(self, viewer: ComparisonViewer):
-        url = f"http://127.0.0.1:{_PORT}/image?path=/nonexistent/path/image.png"
+        fake = "/nonexistent/path/image.png"
+        viewer.add_comparison(fake, fake, label="test-404")
+        url = f"http://127.0.0.1:{_PORT}/image?path={urllib.request.quote(fake)}"
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(url, timeout=3)
         assert exc_info.value.code == 404

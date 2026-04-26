@@ -25,7 +25,7 @@ class TestAutoTaggerModule:
         """An empty folder should return all-zero stats."""
         from dataset_sorter.auto_tagger import tag_folder
         # No images, no BLIP load needed
-        stats = tag_folder(tmp_path, model="blip")
+        stats = tag_folder(tmp_path, model_key="blip")
         assert stats == {"tagged": 0, "skipped": 0, "errors": 0, "total": 0}
 
     def test_skip_existing_captions(self, tmp_path):
@@ -39,7 +39,7 @@ class TestAutoTaggerModule:
         caption.write_text("existing caption", encoding="utf-8")
 
         # Should skip without loading any model
-        stats = tag_folder(tmp_path, model="blip", overwrite=False)
+        stats = tag_folder(tmp_path, model_key="blip", overwrite=False)
         assert stats["skipped"] == 1
         assert stats["tagged"] == 0
         assert stats["total"] == 1
