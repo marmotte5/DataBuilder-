@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================================
-# DataBuilder — One-shot installer for macOS and Linux.
+# DataBuilder — true one-click installer for macOS and Linux.
 #
-# What this script does:
-#   1. Locates a supported Python (3.10–3.13). Refuses 3.9 and below;
-#      also refuses 3.14+ because most ML wheels don't ship for it yet.
-#   2. Verifies the chosen Python can actually create a working venv
-#      (Homebrew's python@3.12 has been known to ship a broken pyexpat).
-#   3. Creates `.venv/`, upgrades pip, and installs DataBuilder with the
-#      right platform extra (`.[mac]` on Darwin, `.[cuda]` on Linux+NVIDIA,
-#      `.[all]` otherwise — the pyproject markers make `[all]` safe now).
-#   4. Prints a one-liner to launch the app.
+# Strategy:
+#   1. If `uv` (Astral's Rust-based Python installer) isn't on PATH, we
+#      bootstrap it with the official `curl | sh` one-liner. uv lives
+#      in ~/.local/bin; no admin / sudo / Homebrew required.
+#   2. uv downloads a known-good Python 3.12 build (python-build-standalone)
+#      so we never depend on the system Python — no broken Homebrew
+#      pyexpat, no Python 3.14 wheel issues, no PATH gymnastics.
+#   3. uv creates `.venv/` and installs DataBuilder with the right extra
+#      ([mac] on Darwin, [cuda] on Linux+NVIDIA, [all] otherwise).
 #
 # Re-runnable: detects an existing venv and skips creation.
 # ============================================================================
@@ -28,8 +28,12 @@ die()  { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
 
 printf "${BOLD}\n"
 printf "═══════════════════════════════════════════════════════════════\n"
-printf "   DataBuilder — Installer\n"
+printf "   DataBuilder — One-click installer\n"
 printf "═══════════════════════════════════════════════════════════════${NC}\n\n"
+
+# ── Anchor to script directory (when double-clicked from Finder/Files) ──
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # ── Detect OS ────────────────────────────────────────────────────────
 OS="$(uname -s)"
@@ -47,118 +51,90 @@ if [ -d .git ]; then
         || warn "Could not git-pull (offline or detached HEAD) — using local source"
 fi
 
-# ── Find a supported Python (3.10 – 3.13) ────────────────────────────
-say "Looking for Python 3.10 – 3.13 …"
-PYTHON_CMD=""
-PYTHON_VER=""
-for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-        ver=$("$cmd" -c \
-            'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' \
-            2>/dev/null) || continue
-        case "$ver" in
-            3.10|3.11|3.12|3.13)
-                PYTHON_CMD="$cmd"
-                PYTHON_VER="$ver"
-                ok "Found $cmd → Python $ver"
-                break
-                ;;
-        esac
-    fi
-done
+# ── Bootstrap uv ─────────────────────────────────────────────────────
+# uv is a single static binary that can download Python interpreters
+# (via python-build-standalone) without admin privileges. It's our
+# escape hatch from the system-Python jungle.
+ensure_uv_in_path() {
+    # uv installs to ~/.local/bin by default; some older releases used
+    # ~/.cargo/bin. Add both to PATH so `command -v uv` finds it
+    # immediately, no shell restart required.
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+}
 
-if [ -z "$PYTHON_CMD" ]; then
-    printf "\n${RED}No supported Python (3.10 – 3.13) found.${NC}\n\n"
-    if [ "$PLATFORM" = "macos" ]; then
-        printf "Install one with either:\n"
-        printf "  ${BOLD}brew install python@3.12${NC}\n"
-        printf "or download the official installer:\n"
-        printf "  ${BOLD}https://www.python.org/downloads/release/python-31210/${NC}\n"
-    else
-        printf "Install with:\n"
-        printf "  ${BOLD}sudo apt install python3.12 python3.12-venv${NC}\n"
-        printf "  (or your distro's equivalent)\n"
+ensure_uv_in_path
+if ! command -v uv >/dev/null 2>&1; then
+    say "Installing uv (Astral's Python installer) …"
+    if ! command -v curl >/dev/null 2>&1; then
+        die "curl not found — please install curl and re-run."
     fi
-    printf "\nThen re-run this script.\n"
-    exit 1
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ensure_uv_in_path
+    if ! command -v uv >/dev/null 2>&1; then
+        die "uv install completed but binary not on PATH. Restart your terminal and re-run."
+    fi
+    ok "uv installed: $(command -v uv)"
+else
+    ok "uv already installed: $(command -v uv)"
 fi
 
-# ── Sanity-check that the chosen Python can build a working venv ────
-# Homebrew has shipped broken python@3.12 builds where pyexpat is linked
-# against a libexpat the OS doesn't have. Catch that early — the error
-# is opaque if pip discovers it later.
-say "Verifying $PYTHON_CMD can create a venv …"
-VENV_TEST="$(mktemp -d)/databuilder_venv_check"
-if ! "$PYTHON_CMD" -m venv "$VENV_TEST" 2>/tmp/databuilder_venv_check.log; then
-    printf "\n${RED}$PYTHON_CMD cannot create a virtual environment.${NC}\n"
-    printf "Error log:\n"
-    sed 's/^/  /' /tmp/databuilder_venv_check.log
-    printf "\n"
-    if [ "$PLATFORM" = "macos" ]; then
-        printf "${YELLOW}Common cause on macOS:${NC} Homebrew shipped a Python whose\n"
-        printf "pyexpat is linked against a libexpat your system doesn't have.\n\n"
-        printf "Fix — install the official build from python.org instead:\n"
-        printf "  ${BOLD}https://www.python.org/downloads/release/python-31210/${NC}\n"
-        printf "  (download the macOS 64-bit universal2 .pkg, run it, then re-run\n"
-        printf "  this script — it will pick up the new python3.12.)\n\n"
-    fi
-    rm -rf "$VENV_TEST" /tmp/databuilder_venv_check.log
-    exit 1
-fi
-rm -rf "$VENV_TEST" /tmp/databuilder_venv_check.log
-ok "venv creation works"
+# ── Install Python 3.12 via uv ───────────────────────────────────────
+# This downloads a hermetic python-build-standalone build to uv's cache.
+# It does NOT modify the system Python or require admin rights.
+say "Ensuring Python 3.12 is available (via uv) …"
+uv python install 3.12 -q
+ok "Python 3.12 ready"
 
 # ── Create or reuse the project venv ─────────────────────────────────
 if [ -d .venv ]; then
-    say ".venv/ already exists — reusing it"
+    # Sanity-check that the existing venv was built with the right Python.
+    # If it's the broken Homebrew Python we've seen before, it would still
+    # appear to "work" until pip explodes — wipe and rebuild instead.
+    if .venv/bin/python -c 'import ssl, ensurepip' >/dev/null 2>&1; then
+        say "Reusing existing .venv/"
+    else
+        warn "Existing .venv/ is broken — recreating with uv-managed Python"
+        rm -rf .venv
+        uv venv .venv --python 3.12 -q
+        ok ".venv/ rebuilt"
+    fi
 else
-    say "Creating .venv/ with Python $PYTHON_VER …"
-    "$PYTHON_CMD" -m venv .venv
+    say "Creating .venv/ with Python 3.12 …"
+    uv venv .venv --python 3.12 -q
     ok ".venv/ created"
 fi
 
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-# ── Upgrade pip / wheel / setuptools ─────────────────────────────────
-say "Upgrading pip, wheel, setuptools …"
-pip install --upgrade pip wheel setuptools -q
-ok "Build tooling up to date"
-
 # ── Pick the right install extra ─────────────────────────────────────
 EXTRA="all"
 if [ "$PLATFORM" = "macos" ]; then
-    # On Mac, skip CUDA / Linux-only deps entirely — `[mac]` is the
-    # curated set that won't try to fetch wheels that don't exist.
     EXTRA="mac"
-elif [ "$PLATFORM" = "linux" ]; then
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        EXTRA="cuda"
-    fi
+elif [ "$PLATFORM" = "linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    EXTRA="cuda"
 fi
 say "Installing DataBuilder with extra: ${BOLD}.[${EXTRA}]${NC}"
 
-# ── Install PyTorch with the right backend ───────────────────────────
-# We let the [training] extra do the heavy lifting except on Linux+CUDA
-# where we need to point pip at the matching CUDA wheel index.
+# ── For Linux+NVIDIA, point pip at the CUDA wheel index for PyTorch ──
 if [ "$EXTRA" = "cuda" ]; then
     say "Installing CUDA-enabled PyTorch (cu128 → cu126 fallback) …"
-    if ! pip install -q torch torchvision torchaudio \
+    if ! uv pip install -q torch torchvision torchaudio \
             --index-url https://download.pytorch.org/whl/cu128; then
-        warn "CUDA 12.8 wheel unavailable — falling back to cu126"
-        if ! pip install -q torch torchvision torchaudio \
+        warn "CUDA 12.8 wheels unavailable — trying cu126"
+        if ! uv pip install -q torch torchvision torchaudio \
                 --index-url https://download.pytorch.org/whl/cu126; then
             warn "CUDA wheels unavailable — falling back to CPU PyTorch"
-            pip install -q torch torchvision torchaudio
+            uv pip install -q torch torchvision torchaudio
         fi
     fi
 fi
 
-# ── Install DataBuilder + the extra ──────────────────────────────────
-if ! pip install ".[${EXTRA}]"; then
-    printf "\n${RED}pip install failed.${NC}\n"
+# ── Install DataBuilder + the platform extra ─────────────────────────
+if ! uv pip install ".[${EXTRA}]"; then
+    printf "\n${RED}Install failed.${NC}\n"
     printf "Try a smaller install to isolate the broken dep:\n"
-    printf "  ${BOLD}pip install \".[training,export]\"${NC}\n\n"
+    printf "  ${BOLD}source .venv/bin/activate && uv pip install \".[training,export]\"${NC}\n\n"
     exit 1
 fi
 
@@ -194,10 +170,9 @@ for mod in ("diffusers", "transformers", "peft"):
         line(f"{mod}:", "not installed (training won't work)")
 PY
 
-# ── Done — print the launch instructions ─────────────────────────────
+# ── Done ─────────────────────────────────────────────────────────────
 printf "\n${BOLD}═══════════════════════════════════════════════════════════════${NC}\n"
 printf "${GREEN}   Install complete.${NC}\n\n"
-printf "   To launch DataBuilder:\n"
-printf "     ${BOLD}source .venv/bin/activate${NC}\n"
-printf "     ${BOLD}python -m dataset_sorter${NC}\n\n"
+printf "   To launch DataBuilder, double-click ${BOLD}run.command${NC}\n"
+printf "   (or in a terminal: ${BOLD}./run.sh${NC})\n"
 printf "${BOLD}═══════════════════════════════════════════════════════════════${NC}\n\n"

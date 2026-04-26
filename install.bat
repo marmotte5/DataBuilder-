@@ -2,134 +2,123 @@
 setlocal enabledelayedexpansion
 
 :: ============================================================================
-:: DataBuilder - One-shot installer for Windows.
+:: DataBuilder - true one-click installer for Windows.
 ::
-:: What this script does:
-::   1. Locates a supported Python (3.10 - 3.13). 3.14+ is rejected because
-::      most ML wheels don't ship for it yet.
-::   2. Creates .venv\, upgrades pip, installs DataBuilder with the right
-::      extra ([cuda] when an NVIDIA GPU is present, [all] otherwise — the
-::      pyproject markers make this safe across hardware now).
-::   3. Prints how to launch the app.
+:: Strategy:
+::   1. If `uv` (Astral's Rust-based Python installer) isn't installed, we
+::      bootstrap it with the official PowerShell one-liner. uv lands in
+::      %USERPROFILE%\.local\bin; no admin / Visual Studio required.
+::   2. uv downloads a known-good Python 3.12 build (python-build-standalone)
+::      so we never touch the system Python.
+::   3. uv creates .venv\ and installs DataBuilder with the right extra
+::      ([cuda] when an NVIDIA GPU is present, [all] otherwise).
 :: ============================================================================
 
 title DataBuilder Installer
 color 0A
 
-:: When double-clicked from Explorer, the working directory may be
-:: somewhere else (system32 etc.). Anchor to this script's location.
+:: Anchor to this script's directory (Explorer launches with cwd = system32).
 cd /d "%~dp0"
 
 echo.
 echo  ===============================================================
-echo     DataBuilder - Installer
+echo     DataBuilder - One-click installer
 echo  ===============================================================
 echo.
 
 :: ── Update local checkout if possible ─────────────────────────────────
 git pull --ff-only >nul 2>&1
 if %errorlevel% equ 0 (
-    echo [ok] Repo updated to latest revision
+    echo [ok]   Repo updated to latest revision
 ) else (
-    echo [info] Could not git-pull ^(offline or detached HEAD^) - using local source
+    echo [info] Could not git-pull -- using local source
 )
 
-:: ── Find a supported Python (3.10 - 3.13) ─────────────────────────────
-echo.
-echo [1/5] Looking for Python 3.10 - 3.13 ...
+:: ── Make sure %USERPROFILE%\.local\bin is on PATH for THIS session ──
+set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
 
-set "PYTHON_CMD="
-set "PYTHON_VER="
-
-for %%P in (py python python3 python3.13 python3.12 python3.11 python3.10) do (
-    if not defined PYTHON_CMD (
-        where %%P >nul 2>&1
-        if !errorlevel! equ 0 (
-            for /f "tokens=*" %%V in ('%%P -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do (
-                if "%%V"=="3.10" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
-                if "%%V"=="3.11" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
-                if "%%V"=="3.12" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
-                if "%%V"=="3.13" set "PYTHON_CMD=%%P" & set "PYTHON_VER=%%V"
-            )
-        )
-    )
-)
-
-if not defined PYTHON_CMD (
+:: ── Bootstrap uv if missing ───────────────────────────────────────────
+where uv >nul 2>&1
+if %errorlevel% neq 0 (
     echo.
-    echo ERROR: No supported Python ^(3.10 - 3.13^) found in PATH.
-    echo.
-    echo Download from: https://www.python.org/downloads/release/python-31210/
-    echo IMPORTANT: tick "Add Python to PATH" during installation.
-    echo Then re-run this script.
-    pause
-    exit /b 1
-)
-echo        Found %PYTHON_CMD% --^> Python %PYTHON_VER%
-
-:: ── Create or reuse the project venv ──────────────────────────────────
-echo.
-echo [2/5] Creating .venv\ ...
-if exist ".venv" (
-    echo        .venv\ already exists, reusing.
-) else (
-    %PYTHON_CMD% -m venv .venv
+    echo [1/4] Installing uv ^(Astral's Python installer^) ...
+    powershell -ExecutionPolicy ByPass -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"
+    set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
+    where uv >nul 2>&1
     if !errorlevel! neq 0 (
-        echo ERROR: Failed to create virtual environment.
-        echo Try installing python3-venv or download Python from python.org.
+        echo.
+        echo ERROR: uv install completed but binary not on PATH.
+        echo Open a new Command Prompt and re-run this script.
         pause
         exit /b 1
     )
-    echo        .venv\ created with Python %PYTHON_VER%.
+    echo        uv installed.
+) else (
+    echo.
+    echo [1/4] uv already installed.
 )
-call .venv\Scripts\activate.bat
 
-:: ── Upgrade pip / wheel / setuptools ──────────────────────────────────
+:: ── Install Python 3.12 via uv (no admin needed) ─────────────────────
 echo.
-echo [3/5] Upgrading pip, wheel, setuptools ...
-python -m pip install --upgrade pip wheel setuptools -q
+echo [2/4] Ensuring Python 3.12 is available (via uv) ...
+uv python install 3.12 -q
 if %errorlevel% neq 0 (
-    echo ERROR: Failed to upgrade pip.
+    echo ERROR: uv could not install Python 3.12.
     pause
     exit /b 1
 )
-echo        Build tooling up to date.
+echo        Python 3.12 ready.
 
-:: ── Pick the right extra ──────────────────────────────────────────────
+:: ── Create or reuse the project venv ──────────────────────────────────
+echo.
+echo [3/4] Creating .venv\ ...
+if exist ".venv" (
+    echo        .venv\ already exists, reusing.
+) else (
+    uv venv .venv --python 3.12 -q
+    if !errorlevel! neq 0 (
+        echo ERROR: Failed to create venv.
+        pause
+        exit /b 1
+    )
+    echo        .venv\ created.
+)
+call .venv\Scripts\activate.bat
+
+:: ── Pick the right extra (cuda vs all) ────────────────────────────────
 set "EXTRA=all"
 where nvidia-smi >nul 2>&1
-if %errorlevel% equ 0 (
-    set "EXTRA=cuda"
-)
-echo.
-echo [4/5] Installing DataBuilder with extra: .[%EXTRA%]
+if %errorlevel% equ 0 set "EXTRA=cuda"
 
-:: ── Install CUDA-enabled PyTorch first if NVIDIA GPU detected ─────────
+echo.
+echo [4/4] Installing DataBuilder with extra: .[%EXTRA%]
+
+:: ── For CUDA: install the matching PyTorch wheel first ───────────────
 if "%EXTRA%"=="cuda" (
-    echo        Installing CUDA-enabled PyTorch ^(cu128, then cu126 fallback^)...
-    pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+    echo        Installing CUDA-enabled PyTorch ^(cu128 -> cu126 fallback^)...
+    uv pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
     if !errorlevel! neq 0 (
-        echo        CUDA 12.8 wheel unavailable - falling back to cu126
-        pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+        echo        cu128 wheel unavailable - trying cu126
+        uv pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
         if !errorlevel! neq 0 (
             echo        CUDA wheels unavailable - falling back to CPU PyTorch
-            pip install -q torch torchvision torchaudio
+            uv pip install -q torch torchvision torchaudio
         )
     )
 )
 
-pip install ".[%EXTRA%]"
+uv pip install ".[%EXTRA%]"
 if %errorlevel% neq 0 (
     echo.
     echo ERROR: pip install failed.
-    echo Try a smaller install:  pip install ".[training,export]"
+    echo Try a smaller install:  uv pip install ".[training,export]"
     pause
     exit /b 1
 )
 
 :: ── Final sanity check ────────────────────────────────────────────────
 echo.
-echo [5/5] Verifying the install ...
+echo Verifying the install ...
 python -c "import sys; print('  Python:       ' + sys.version.split()[0])"
 python -c "import PyQt6.QtCore as q; print('  PyQt6:        ' + q.PYQT_VERSION_STR)" 2>nul
 python -c "import torch; print('  PyTorch:      ' + torch.__version__); print('  CUDA:         ' + (torch.version.cuda if torch.cuda.is_available() else 'CPU only')); print('  GPU:          ' + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-'))" 2>nul
@@ -141,9 +130,7 @@ echo.
 echo  ===============================================================
 echo     Install complete.
 echo.
-echo     To launch DataBuilder:
-echo       .venv\Scripts\activate.bat
-echo       python -m dataset_sorter
+echo     To launch DataBuilder, double-click  run.bat
 echo  ===============================================================
 echo.
 
