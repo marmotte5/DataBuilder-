@@ -56,10 +56,43 @@ class SD2Backend(TrainBackendBase):
         # Use DDPMScheduler explicitly to ensure alphas_cumprod is available
         self.noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
+        # SD 2.0-base ships with prediction_type="epsilon"; SD 2.0 (non-base)
+        # and SD 2.1 ship with "v_prediction". The class default above is
+        # v_prediction (the more common case at 768px), but we MUST honor
+        # whatever the loaded scheduler config says — otherwise loading SD
+        # 2.0-base would silently train with the wrong loss target (v-pred
+        # math applied to an epsilon model -> garbage gradients).
+        detected = self._detect_prediction_type(
+            self.noise_scheduler, type(self).prediction_type,
+        )
+        if detected != self.prediction_type:
+            log.info(
+                "SD2: scheduler config reports prediction_type=%r; "
+                "overriding class default %r.",
+                detected, self.prediction_type,
+            )
+            self.prediction_type = detected  # instance attr shadows class attr
+
         self.vae.to(self.device, dtype=self.vae_dtype)
         self.vae.requires_grad_(False)
 
         log.info(f"Loaded SD 2.x model from {model_path}")
+
+    @staticmethod
+    def _detect_prediction_type(scheduler, default: str) -> str:
+        """Read prediction_type from a loaded scheduler config.
+
+        Returns ``default`` if the scheduler doesn't expose a config or the
+        prediction_type field is missing/empty. Diffusers schedulers store
+        config as a FrozenDict; both attribute and dict access work.
+        """
+        cfg = getattr(scheduler, "config", None)
+        if cfg is None:
+            return default
+        value = getattr(cfg, "prediction_type", None)
+        if value is None and hasattr(cfg, "get"):
+            value = cfg.get("prediction_type", None)
+        return value or default
 
     def encode_text_batch(self, captions: list[str]) -> tuple:
         """Encode with OpenCLIP ViT-H."""
