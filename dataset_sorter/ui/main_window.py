@@ -2286,6 +2286,10 @@ class MainWindow(QMainWindow):
                     category="View", shortcut="Ctrl+/", icon="⌨",
                     description="List every keyboard shortcut at a glance",
                     keywords=["help", "keys", "bindings"]),
+            Command("Replay Onboarding Tour", self._replay_onboarding,
+                    category="View", icon="🎓",
+                    description="Walk through the introductory tour again",
+                    keywords=["welcome", "intro", "guide", "help"]),
 
             # ── General ────────────────────────────────────────────
             Command("Cancel Current Operation", self._cancel_operation,
@@ -2323,6 +2327,12 @@ class MainWindow(QMainWindow):
         from dataset_sorter.ui.dialogs import ShortcutsHelpDialog
         dlg = ShortcutsHelpDialog(self)
         dlg.exec()
+
+    def _replay_onboarding(self):
+        """Restart the first-launch onboarding tour on demand."""
+        from dataset_sorter.ui.onboarding import OnboardingTour
+        tour = OnboardingTour(self)
+        tour.start()
 
     def _refresh_theme_styles(self):
         """Re-apply all hardcoded widget stylesheets after a theme change."""
@@ -2444,7 +2454,55 @@ class MainWindow(QMainWindow):
                 widget.refresh_theme()
 
     def _toggle_theme(self):
-        """Switch between dark and light themes."""
+        """Switch between dark and light themes with a soft fade transition.
+
+        QGraphicsOpacityEffect briefly dims the central widget while we
+        swap stylesheets and rebuild theme-dependent inline styles.  The
+        whole crossfade lands in ~280 ms — fast enough to feel snappy,
+        long enough to hide the flash of unstyled content.
+        """
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+
+        cw = self.centralWidget()
+        # If we can't reach the central widget for any reason, fall back
+        # to the original instant swap rather than failing the toggle.
+        if cw is None:
+            self._apply_theme_swap()
+            return
+
+        # Reuse a single effect so consecutive presses don't stack.
+        effect = getattr(self, "_theme_fade_effect", None)
+        if effect is None:
+            effect = QGraphicsOpacityEffect(cw)
+            cw.setGraphicsEffect(effect)
+            self._theme_fade_effect = effect
+        effect.setOpacity(1.0)
+
+        fade_out = QPropertyAnimation(effect, b"opacity", self)
+        fade_out.setDuration(140)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.55)
+        fade_out.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(140)
+        fade_in.setStartValue(0.55)
+        fade_in.setEndValue(1.0)
+        fade_in.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        def _midpoint_swap():
+            self._apply_theme_swap()
+            fade_in.start()
+
+        fade_out.finished.connect(_midpoint_swap)
+        # Hold a strong ref so the animations aren't garbage-collected
+        # before they finish.
+        self._theme_fade_anims = (fade_out, fade_in)
+        fade_out.start()
+
+    def _apply_theme_swap(self):
+        """Actually flip stylesheet + theme-dependent inline styles."""
         new_mode = toggle_theme()
         QApplication.instance().setStyleSheet(get_stylesheet())
         self.btn_theme.setText("Dark" if new_mode == "light" else "Light")
@@ -3857,6 +3915,13 @@ def run():
         if splash is not None:
             splash.close()
         window._restore_or_prompt_project()
+        # First-launch onboarding tour. No-op for returning users; the
+        # helper consults AppSettings before showing anything.
+        try:
+            from dataset_sorter.ui.onboarding import maybe_show_onboarding
+            maybe_show_onboarding(window)
+        except Exception:
+            log.exception("Onboarding tour bootstrap failed")
 
     QTimer.singleShot(0, _open_project_flow)
 
