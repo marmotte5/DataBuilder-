@@ -18,7 +18,9 @@ contexts without PyQt6 being installed.
 """
 
 import logging
+import os
 import platform
+import re
 import sys
 import traceback
 import urllib.parse
@@ -30,6 +32,21 @@ GITHUB_ISSUES_URL = "https://github.com/marmotte5/DataBuilder-/issues/new"
 
 # Labels applied to auto-generated issues (GitHub labels must already exist)
 _AUTO_LABELS = "bug,auto-reported"
+
+
+def _scrub_paths(text: str) -> str:
+    """Replace user-identifying path fragments with placeholders.
+
+    Strips the home directory and Windows user folder so reports can be
+    pasted to public issue trackers without leaking the local username.
+    """
+    home = os.path.expanduser("~")
+    if home and home != "/":
+        text = text.replace(home, "<HOME>")
+    text = re.sub(r"/home/[^/\s'\"]+", "/home/<USER>", text)
+    text = re.sub(r"/Users/[^/\s'\"]+", "/Users/<USER>", text)
+    text = re.sub(r"[A-Za-z]:\\Users\\[^\\\s'\"]+", r"C:\\Users\\<USER>", text)
+    return text
 
 
 def _databuilder_version() -> str:
@@ -58,6 +75,10 @@ def format_bug_report(error: BaseException | None = None, context: str = "") -> 
     else:
         error_line = "_No exception object available_"
         tb_text = traceback.format_exc() or "_No traceback available_"
+
+    error_line = _scrub_paths(error_line)
+    tb_text = _scrub_paths(tb_text)
+    context = _scrub_paths(context) if context else context
 
     try:
         import torch

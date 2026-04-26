@@ -1035,7 +1035,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         """Open a file picker for selecting a base model (.safetensors or .ckpt)."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Base Model",
-            "", "Safetensors (*.safetensors);;Checkpoint (*.ckpt);;All (*)",
+            "", "Model weights (*.safetensors *.ckpt *.pt *.bin);;Safetensors (*.safetensors);;Checkpoint (*.ckpt);;All (*)",
         )
         if path:
             self.model_path_input.setText(path)

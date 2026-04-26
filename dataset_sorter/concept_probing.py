@@ -244,7 +244,13 @@ class ConceptProber:
                 text=[concept], images=images,
                 return_tensors="pt", padding=True,
             )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # CLIP model is loaded in fp16; pixel_values must match model dtype
+            # (input_ids/attention_mask are integer tensors, unaffected)
+            inputs = {
+                k: v.to(self.device, dtype=torch.float16) if v.is_floating_point()
+                   else v.to(self.device)
+                for k, v in inputs.items()
+            }
 
             with torch.no_grad():
                 outputs = clip_model(**inputs)
