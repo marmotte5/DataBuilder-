@@ -9,13 +9,13 @@
 
 <div align="center">
 
-**The fastest trainer and generator for text-to-image AI models.**
+**An all-in-one desktop trainer and generator for text-to-image AI models.**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41cd52?logo=qt&logoColor=white)](https://www.riverbankcomputing.com/software/pyqt/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-pytest-orange?logo=pytest&logoColor=white)](tests/)
-[![Models](https://img.shields.io/badge/Models-17%20architectures-purple)](docs/QUICKSTART.md)
+[![Models](https://img.shields.io/badge/Models-16%20architectures-purple)](docs/QUICKSTART.md)
 
 [Quick Start](#quick-start) · [Supported Models](#supported-architectures) · [Documentation](docs/QUICKSTART.md) · [Contributing](CONTRIBUTING.md)
 
@@ -23,9 +23,9 @@
 
 ---
 
-DataBuilder is a high-performance desktop application covering the **full text-to-image training pipeline**: dataset preparation, tag management, LoRA and full fine-tune training, image generation, and model/LoRA library management. Built with PyQt6, optimized for RTX 4090 / H100 class hardware, and supporting 17 model architectures including Flux, SD3.5, HiDream, and more.
+DataBuilder is a desktop application covering the **full text-to-image training pipeline**: dataset preparation, tag management, LoRA and full fine-tune training, image generation, and model/LoRA library management. Built with PyQt6, targeting RTX 4090 / H100 class hardware, with backends for 16 model architectures including Flux, SD3.5, and HiDream.
 
-> **Why DataBuilder?** Most trainers force you to juggle separate tools for dataset prep, training, and generation. DataBuilder does it all in one place — with a native desktop UI, zero-bottleneck dataloading, custom Triton kernels, FP8 training, and the Marmotte optimizer (10-20× less memory than Adam). No web server, no config file hell, no CLI expertise required.
+> **Why DataBuilder?** Most trainers force you to juggle separate tools for dataset prep, training, and generation. DataBuilder bundles them into one native desktop UI. Speed is a primary goal — we ship with `torch.compile` integration, custom Triton kernels, optional FP8 training (Ada/Hopper), memory-mapped datasets, and the Marmotte optimizer (10-20× less optimizer memory than AdamW). Whether DataBuilder is *the* fastest at any given task depends on the model and hardware; the project is honest about being a work in progress on that front.
 
 ---
 
@@ -51,8 +51,8 @@ DataBuilder is a high-performance desktop application covering the **full text-t
 - **One-click pipeline** — Automated clean + train workflow for beginners
 
 ### Training
-- **17 model architectures** — See [full table below](#supported-architectures)
-- **12 optimizers** — Including the custom Marmotte optimizer (10-20× less memory than AdamW)
+- **16 model architectures** — See [full table below](#supported-architectures)
+- **14 optimizers** — Including the custom Marmotte optimizer (10-20× less optimizer state memory than AdamW)
 - **7 training presets** — Character LoRA, Style LoRA, Concept LoRA, Photorealistic, Quick Test, DPO, ControlNet
 - **ControlNet training** — 9 conditioning types (canny, depth, pose, segmentation, normal, MLSD, softedge, scribble, inpaint)
 - **DPO training** — Direct Preference Optimization with sigmoid, hinge, and IPO loss
@@ -61,19 +61,19 @@ DataBuilder is a high-performance desktop application covering the **full text-t
 - **Smart resume** — Analyzes loss curves and auto-adjusts LR/optimizer on resume
 - **SpeeD (CVPR 2025)** — Asymmetric timestep sampling + change-aware loss weighting
 
-### Speed (The Marmotte Philosophy)
-Speed is the #1 priority after correctness. Every millisecond matters.
+### Speed optimizations (The Marmotte Philosophy)
+Speed is a primary goal after correctness. The optimizations below are integrated and configurable from the UI; the *speedup* and *memory* columns are the published or commonly-cited ranges for the underlying technique, not validated DataBuilder benchmarks. Real-world numbers depend heavily on model, GPU, and config — please benchmark on your own hardware before relying on a specific number.
 
-| Optimization | Speedup | Notes |
+| Optimization | Reported range | Notes |
 |---|---|---|
-| `torch.compile` | 20-40% | Full graph capture |
+| `torch.compile` | 20-40% | Full graph capture; benefits vary by backend |
 | Triton fused kernels | 5-15% | AdamW, MSE loss, flow interpolation |
-| FP8 training | ~2× TFLOPS | Ada/Hopper GPUs |
-| `channels_last` layout | 10-20% | Reduced memory bandwidth |
-| Sequence packing | 10-30% | Zero padding waste for DiT models |
+| FP8 training | up to ~2× FP16 TFLOPS | Ada (RTX 40xx) / Hopper only; quality impact under evaluation |
+| `channels_last` layout | 10-20% | Reduced memory bandwidth on conv-based UNets |
+| Sequence packing | 10-30% | Removes padding waste for DiT models |
 | Zero-bottleneck DataLoader | Bypasses GIL | mmap + pinned DMA |
 | Memory-mapped datasets | Zero-copy I/O | `mmap_dataset.py` |
-| Marmotte optimizer | 10-20× less memory | vs AdamW |
+| Marmotte optimizer | 10-20× less optimizer memory | vs AdamW; convergence still being characterised on full FT runs |
 
 ### UI & UX
 - **Dark/light theme** — Ctrl+T, persisted across sessions
@@ -94,27 +94,28 @@ Speed is the #1 priority after correctness. Every millisecond matters.
 
 ## Supported Architectures
 
-| Model | Backend | Prediction | Text Encoder(s) | Notes |
-|---|---|---|---|---|
-| SD 1.5 | `train_backend_sd15.py` | epsilon | CLIP | Classic workhorse |
-| SD 2.x | `train_backend_sd2.py` | v-prediction | OpenCLIP | |
-| SDXL / Pony | `train_backend_sdxl.py` | epsilon | CLIP-L + CLIP-G | Widely used |
-| SD 3 | `train_backend_sd3.py` | flow | CLIP-L + CLIP-G + T5-XXL | |
-| SD 3.5 | `train_backend_sd35.py` | flow | CLIP-L + CLIP-G + T5-XXL | |
-| Flux | `train_backend_flux.py` | flow | CLIP-L + T5-XXL | State-of-the-art |
-| Flux 2 | `train_backend_flux2.py` | flow | LLM (Mistral-3/Qwen-3) | |
-| Z-Image | `train_backend_zimage.py` | flow | Qwen3 (chat template) | With exclusive speed inventions |
-| PixArt | `train_backend_pixart.py` | flow | T5-XXL | |
-| Kolors | `train_backend_kolors.py` | epsilon | ChatGLM-6B | |
-| Stable Cascade | `train_backend_cascade.py` | epsilon | CLIP-G | |
-| Chroma | `train_backend_chroma.py` | flow | T5-XXL | |
-| AuraFlow | `train_backend_auraflow.py` | flow | T5 | |
-| Sana | `train_backend_sana.py` | flow | Gemma-2B | |
-| HunyuanDiT | `train_backend_hunyuan.py` | epsilon | CLIP-L + mT5 | |
-| HiDream | `train_backend_hidream.py` | flow | CLIP-L + CLIP-G + T5-XXL + Llama | |
-| Chroma | `train_backend_chroma.py` | flow | T5-XXL | |
+| Model | Backend | Prediction | Text Encoder(s) |
+|---|---|---|---|
+| SD 1.5 | `train_backend_sd15.py` | epsilon | CLIP |
+| SD 2.x | `train_backend_sd2.py` | v-prediction | OpenCLIP |
+| SDXL / Pony | `train_backend_sdxl.py` | epsilon | CLIP-L + CLIP-G |
+| SD 3 | `train_backend_sd3.py` | flow | CLIP-L + CLIP-G + T5-XXL |
+| SD 3.5 | `train_backend_sd35.py` | flow | CLIP-L + CLIP-G + T5-XXL |
+| Flux | `train_backend_flux.py` | flow | CLIP-L + T5-XXL |
+| Flux 2 | `train_backend_flux2.py` | flow | LLM (Mistral-3 / Qwen-3) |
+| Z-Image | `train_backend_zimage.py` | flow | Qwen3 (chat template) |
+| PixArt | `train_backend_pixart.py` | flow | T5-XXL |
+| Kolors | `train_backend_kolors.py` | epsilon | ChatGLM-6B |
+| Stable Cascade | `train_backend_cascade.py` | epsilon | CLIP-G |
+| Chroma | `train_backend_chroma.py` | flow | T5-XXL |
+| AuraFlow | `train_backend_auraflow.py` | flow | T5 |
+| Sana | `train_backend_sana.py` | flow | Gemma-2B |
+| HunyuanDiT | `train_backend_hunyuan.py` | epsilon | CLIP-L + mT5 |
+| HiDream | `train_backend_hidream.py` | flow | CLIP-L + CLIP-G + T5-XXL + Llama |
 
-All backends support both **diffusers directories** and **single-file `.safetensors`/`.ckpt` checkpoints**.
+Distilled variants (Lightning, LCM, Hyper-SD, Turbo, Flux Schnell, DMD/DMD2) are auto-detected by filename and routed to CFG=1.0 with low step counts.
+
+All backends support both **diffusers directories** and **single-file `.safetensors` / `.ckpt` checkpoints**.
 
 ---
 

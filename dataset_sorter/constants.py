@@ -695,6 +695,24 @@ MODEL_DEFAULT_CFG: dict[str, float] = {
     "pixart": 4.5, "sana": 4.5, "auraflow": 3.5,
     "sd3": 5.0, "sd35": 5.0,
 }
+
+# ── Distilled-model recommended overrides ────────────────────────────────
+# Distilled checkpoints (Lightning, LCM, Hyper-SD, SDXL Turbo, Flux Schnell,
+# DMD/DMD2) ignore CFG and need very few steps. Running them with the base
+# model's defaults (CFG=7, 28 steps) produces saturated, burnt outputs.
+# Detection is by filename keyword — see model_detection.detect_distillation_from_filename.
+# Step counts are conservative defaults; many variants ship in 1/2/4/8-step
+# flavours and the user can still override in the UI.
+DISTILLED_DEFAULTS: dict[str, dict] = {
+    "lightning": {"cfg_scale": 1.0, "steps": 8},
+    "lcm":       {"cfg_scale": 1.0, "steps": 4},
+    "hyper":     {"cfg_scale": 1.0, "steps": 8},
+    "turbo":     {"cfg_scale": 1.0, "steps": 4},
+    "schnell":   {"cfg_scale": 1.0, "steps": 4},
+    "dmd":       {"cfg_scale": 1.0, "steps": 4},
+    "dmd2":      {"cfg_scale": 1.0, "steps": 4},
+}
+
 DEFAULT_IMG2IMG_STRENGTH: float = 0.75  # img2img denoising strength (0=no change, 1=full noise)
 DEFAULT_PAG_SCALE: float = 0.0          # Perturbed Attention Guidance (0 = off, 3.0 typical)
 DEFAULT_PAG_LAYERS: str = "mid"         # PAG-applied layers preset
