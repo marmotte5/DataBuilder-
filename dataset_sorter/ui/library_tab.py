@@ -649,19 +649,19 @@ class LibraryTab(QWidget):
         bar.addWidget(self._folder_display, stretch=1)
 
         self._browse_btn = QPushButton("Browse")
-        self._browse_btn.setFixedHeight(30)
+        self._browse_btn.setMinimumHeight(36)
         self._browse_btn.setStyleSheet(nav_button_style())
         self._browse_btn.clicked.connect(self._browse_folder)
         bar.addWidget(self._browse_btn)
 
         self._add_btn = QPushButton("+ Add Folder")
-        self._add_btn.setFixedHeight(30)
+        self._add_btn.setMinimumHeight(36)
         self._add_btn.setStyleSheet(nav_button_style())
         self._add_btn.clicked.connect(self._add_folder)
         bar.addWidget(self._add_btn)
 
         self._remove_btn = QPushButton("Remove Folder")
-        self._remove_btn.setFixedHeight(30)
+        self._remove_btn.setMinimumHeight(36)
         self._remove_btn.setStyleSheet(nav_button_style())
         self._remove_btn.clicked.connect(self._remove_folder)
         bar.addWidget(self._remove_btn)
@@ -727,10 +727,10 @@ class LibraryTab(QWidget):
             f"border: 1px solid {COLORS['border']}; "
             f"border-radius: 12px; padding: 14px; }}"
         )
-        # Height grew slightly because Note/Tags moved to their own row for
-        # proper alignment (the previous inline layout collapsed badly when
-        # the metadata label was empty).
-        self._detail_frame.setFixedHeight(220)
+        # Min-height (not fixed) so the panel can grow if a future row is
+        # added or the OS uses larger native widget metrics. 240 covers
+        # the action buttons row which is now 36 px tall.
+        self._detail_frame.setMinimumHeight(240)
 
         layout = QVBoxLayout(self._detail_frame)
         layout.setContentsMargins(16, 10, 16, 10)
@@ -807,36 +807,39 @@ class LibraryTab(QWidget):
 
         layout.addLayout(user_meta_row)
 
-        # Action buttons
+        # Action buttons. Min-height 36px instead of fixed 30px — the
+        # nav_button_style / accent_button_style padding (8-10px) plus
+        # 13px font needs ~36px to render the border + label without
+        # clipping into invisibility on macOS.
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
         self._btn_copy_path = QPushButton("Copy Path")
-        self._btn_copy_path.setFixedHeight(30)
+        self._btn_copy_path.setMinimumHeight(36)
         self._btn_copy_path.setStyleSheet(nav_button_style())
         self._btn_copy_path.setToolTip("Copy full file path to clipboard")
         self._btn_copy_path.clicked.connect(self._copy_path)
 
         self._btn_open_folder = QPushButton("Open Folder")
-        self._btn_open_folder.setFixedHeight(30)
+        self._btn_open_folder.setMinimumHeight(36)
         self._btn_open_folder.setStyleSheet(nav_button_style())
         self._btn_open_folder.setToolTip("Open containing folder in file manager")
         self._btn_open_folder.clicked.connect(self._open_folder)
 
         self._btn_use_generate = QPushButton("Use in Generate")
-        self._btn_use_generate.setFixedHeight(30)
+        self._btn_use_generate.setMinimumHeight(36)
         self._btn_use_generate.setStyleSheet(accent_button_style())
         self._btn_use_generate.setToolTip("Send this model/LoRA to the Generate tab")
         self._btn_use_generate.clicked.connect(self._emit_use_generate)
 
         self._btn_use_train = QPushButton("Use in Train")
-        self._btn_use_train.setFixedHeight(30)
+        self._btn_use_train.setMinimumHeight(36)
         self._btn_use_train.setStyleSheet(accent_button_style())
         self._btn_use_train.setToolTip("Send this model to the Training tab as base model")
         self._btn_use_train.clicked.connect(self._emit_use_train)
 
         self._btn_export_gguf = QPushButton("Export GGUF")
-        self._btn_export_gguf.setFixedHeight(30)
+        self._btn_export_gguf.setMinimumHeight(36)
         self._btn_export_gguf.setStyleSheet(nav_button_style())
         self._btn_export_gguf.setToolTip(
             "Convert this .safetensors model to llama.cpp's GGUF format "
@@ -847,7 +850,7 @@ class LibraryTab(QWidget):
         self._btn_export_gguf.clicked.connect(self._export_gguf)
 
         self._btn_delete = QPushButton("Delete")
-        self._btn_delete.setFixedHeight(30)
+        self._btn_delete.setMinimumHeight(36)
         self._btn_delete.setStyleSheet(danger_button_style())
         self._btn_delete.setToolTip("Permanently delete this file from disk")
         self._btn_delete.clicked.connect(self._delete_selected)
