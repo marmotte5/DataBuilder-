@@ -293,7 +293,21 @@ class ModelMergeTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        # Wrap the merge tab in a QScrollArea so small windows scroll the
+        # form vertically instead of letting QGroupBox rows collapse and
+        # overlap on tight screens (1280×800 laptops, smaller windows).
+        from PyQt6.QtWidgets import QScrollArea, QFrame
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        root = QVBoxLayout(content)
         root.setContentsMargins(16, 12, 16, 12)
         root.setSpacing(10)
 

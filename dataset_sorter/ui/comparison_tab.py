@@ -60,13 +60,13 @@ class _SideConfig(QGroupBox):
         super().__init__(f"Side {label}", parent)
         self._label = label
         self._color = color
-        # Ensure the form has room for all 4 rows (Steps / Seed / LoRA path /
-        # Weight). Without this floor Mac's compact widget metrics collapse
-        # the rows and inputs visually overlap labels from other rows.
-        self.setMinimumHeight(220)
+        # The parent ComparisonTab wraps the whole form in a QScrollArea,
+        # so we can use a Fixed vertical policy here — the widget keeps
+        # its sizeHint even on small windows; the scroll area handles
+        # overflow.
         from PyQt6.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Policy.Preferred,
-                           QSizePolicy.Policy.MinimumExpanding)
+                           QSizePolicy.Policy.Fixed)
         self._apply_group_style()
         self._build_form()
 
@@ -269,7 +269,20 @@ class ComparisonTab(QWidget):
     # ── UI Construction ──────────────────────────────────────────────
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        # Wrap the whole tab in a QScrollArea so small windows scroll
+        # instead of letting the form rows compress on top of each other.
+        from PyQt6.QtWidgets import QScrollArea
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        root = QVBoxLayout(content)
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(8)
 
