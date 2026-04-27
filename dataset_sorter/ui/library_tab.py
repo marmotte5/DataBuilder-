@@ -718,10 +718,14 @@ class LibraryTab(QWidget):
     def _build_detail_panel(self) -> QFrame:
         """Create the bottom detail panel showing info for the selected item."""
         self._detail_frame = QFrame()
+        # Scope styles to QFrame ONLY — without the selector, Qt cascades
+        # `border` and `border-radius` to every descendant widget, which
+        # turns plain QLabels ("Note:", "Tags:") into rounded boxes that
+        # look like empty inputs.
         self._detail_frame.setStyleSheet(
-            f"background-color: {COLORS['bg_alt']}; "
+            f"QFrame {{ background-color: {COLORS['bg_alt']}; "
             f"border: 1px solid {COLORS['border']}; "
-            f"border-radius: 12px; padding: 14px;"
+            f"border-radius: 12px; padding: 14px; }}"
         )
         # Height grew slightly because Note/Tags moved to their own row for
         # proper alignment (the previous inline layout collapsed badly when
