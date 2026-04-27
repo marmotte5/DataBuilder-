@@ -60,14 +60,24 @@ class _SideConfig(QGroupBox):
         super().__init__(f"Side {label}", parent)
         self._label = label
         self._color = color
+        # The parent ComparisonTab wraps the whole form in a QScrollArea,
+        # so we can use a Fixed vertical policy here — the widget keeps
+        # its sizeHint even on small windows; the scroll area handles
+        # overflow.
+        from PyQt6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Fixed)
         self._apply_group_style()
         self._build_form()
 
     def _apply_group_style(self):
+        # Per-widget stylesheets fully replace the global QGroupBox rule,
+        # so we have to repeat enough padding to keep the form rows from
+        # crashing into the box's title and side borders.
         self.setStyleSheet(
             f"QGroupBox {{ border: 2px solid {self._color}; border-radius: 8px; "
-            f"margin-top: 12px; padding-top: 12px; font-weight: 700; "
-            f"color: {self._color}; background: transparent; }} "
+            f"margin-top: 14px; padding: 22px 14px 14px 14px; "
+            f"font-weight: 700; color: {self._color}; background: transparent; }} "
             f"QGroupBox::title {{ subcontrol-origin: margin; left: 12px; "
             f"padding: 0 6px; }}"
         )
@@ -80,7 +90,13 @@ class _SideConfig(QGroupBox):
 
     def _build_form(self):
         layout = QGridLayout(self)
-        layout.setSpacing(6)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
+        # Make the input columns absorb extra width so labels stay snug.
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 1)
 
         # Steps override
         layout.addWidget(QLabel("Steps:"), 0, 0)
@@ -116,18 +132,22 @@ class _SideConfig(QGroupBox):
         self.negative_edit.setPlaceholderText("(empty = use shared negative)")
         layout.addWidget(self.negative_edit, 1, 3)
 
-        # LoRA override
+        # LoRA override — path on its own row spanning the full width,
+        # weight on its own row so the small spinbox isn't dwarfed by an
+        # empty column 3.
         layout.addWidget(QLabel("LoRA path:"), 2, 0)
         self.lora_edit = QLineEdit()
         self.lora_edit.setPlaceholderText("Optional — side-specific LoRA")
-        layout.addWidget(self.lora_edit, 2, 1, 1, 2)
+        layout.addWidget(self.lora_edit, 2, 1, 1, 3)
 
+        layout.addWidget(QLabel("Weight:"), 3, 0)
         self.lora_weight_spin = QDoubleSpinBox()
         self.lora_weight_spin.setRange(-2.0, 2.0)
         self.lora_weight_spin.setSingleStep(0.05)
         self.lora_weight_spin.setValue(1.0)
-        self.lora_weight_spin.setMaximumWidth(75)
-        layout.addWidget(self.lora_weight_spin, 2, 3)
+        self.lora_weight_spin.setMinimumWidth(80)
+        self.lora_weight_spin.setToolTip("LoRA strength (negative inverts; 1.0 = full strength)")
+        layout.addWidget(self.lora_weight_spin, 3, 1)
 
     def get_overrides(self) -> dict:
         """Return non-default overrides as a dict."""
@@ -249,7 +269,20 @@ class ComparisonTab(QWidget):
     # ── UI Construction ──────────────────────────────────────────────
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        # Wrap the whole tab in a QScrollArea so small windows scroll
+        # instead of letting the form rows compress on top of each other.
+        from PyQt6.QtWidgets import QScrollArea
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        root = QVBoxLayout(content)
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(8)
 

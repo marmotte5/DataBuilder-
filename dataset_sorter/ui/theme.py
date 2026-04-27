@@ -201,11 +201,15 @@ def get_stylesheet() -> str:
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
 
-    /* ═══ Inputs ═══ */
+    /* ═══ Inputs ═══
+       min-height covers the actual widget height (not just content area)
+       on macOS where the native style metrics shrink controls below the
+       label height — without this the QGridLayout rows collapse and
+       inputs overlap labels from neighbouring rows. */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {c['input_bg']}; color: {c['text']};
         border: 1px solid {c['border']}; border-radius: 10px;
-        padding: 8px 14px; min-height: 24px;
+        padding: 6px 12px; min-height: 22px;
         selection-background-color: {c['accent']};
         selection-color: white;
     }}
@@ -227,14 +231,16 @@ def get_stylesheet() -> str:
         selection-color: white;
         padding: 6px; border-radius: 10px; outline: none;
     }}
+    /* Spinbox steppers — transparent so they blend into the input
+       instead of looking like a detached panel against input_bg. */
     QSpinBox::up-button, QSpinBox::down-button,
     QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-        background-color: {c['surface']}; border: none; width: 22px;
-        border-radius: 4px;
+        background-color: transparent; border: none; width: 16px;
+        margin-right: 2px;
     }}
     QSpinBox::up-button:hover, QSpinBox::down-button:hover,
     QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
-        background-color: {c['surface_hover']};
+        background-color: {c['surface_hover']}; border-radius: 3px;
     }}
 
     /* ═══ Buttons ═══ */

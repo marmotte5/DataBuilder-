@@ -210,7 +210,21 @@ class BatchGenerationTab(QWidget):
     # ── UI Construction ──────────────────────────────────────────────
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        # Wrap in a scroll area so a narrow window scrolls the controls
+        # row instead of clipping "Add Prompt" / "Remove Selected" /
+        # "Import" buttons.
+        from PyQt6.QtWidgets import QScrollArea, QFrame
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        root = QVBoxLayout(content)
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(8)
 
