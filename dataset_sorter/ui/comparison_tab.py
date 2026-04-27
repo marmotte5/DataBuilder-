@@ -60,14 +60,24 @@ class _SideConfig(QGroupBox):
         super().__init__(f"Side {label}", parent)
         self._label = label
         self._color = color
+        # Ensure the form has room for all 4 rows (Steps / Seed / LoRA path /
+        # Weight). Without this floor Mac's compact widget metrics collapse
+        # the rows and inputs visually overlap labels from other rows.
+        self.setMinimumHeight(220)
+        from PyQt6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.MinimumExpanding)
         self._apply_group_style()
         self._build_form()
 
     def _apply_group_style(self):
+        # Per-widget stylesheets fully replace the global QGroupBox rule,
+        # so we have to repeat enough padding to keep the form rows from
+        # crashing into the box's title and side borders.
         self.setStyleSheet(
             f"QGroupBox {{ border: 2px solid {self._color}; border-radius: 8px; "
-            f"margin-top: 12px; padding-top: 12px; font-weight: 700; "
-            f"color: {self._color}; background: transparent; }} "
+            f"margin-top: 14px; padding: 22px 14px 14px 14px; "
+            f"font-weight: 700; color: {self._color}; background: transparent; }} "
             f"QGroupBox::title {{ subcontrol-origin: margin; left: 12px; "
             f"padding: 0 6px; }}"
         )
@@ -80,7 +90,13 @@ class _SideConfig(QGroupBox):
 
     def _build_form(self):
         layout = QGridLayout(self)
-        layout.setSpacing(6)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
+        # Make the input columns absorb extra width so labels stay snug.
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 1)
 
         # Steps override
         layout.addWidget(QLabel("Steps:"), 0, 0)

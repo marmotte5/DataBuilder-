@@ -201,11 +201,15 @@ def get_stylesheet() -> str:
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
 
-    /* ═══ Inputs ═══ */
+    /* ═══ Inputs ═══
+       min-height covers the actual widget height (not just content area)
+       on macOS where the native style metrics shrink controls below the
+       label height — without this the QGridLayout rows collapse and
+       inputs overlap labels from neighbouring rows. */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {c['input_bg']}; color: {c['text']};
         border: 1px solid {c['border']}; border-radius: 10px;
-        padding: 8px 14px; min-height: 24px;
+        padding: 6px 12px; min-height: 22px;
         selection-background-color: {c['accent']};
         selection-color: white;
     }}
