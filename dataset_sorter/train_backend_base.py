@@ -522,6 +522,18 @@ class TrainBackendBase(ABC):
         if config.sdpa and self.device.type == "cuda":
             torch.backends.cuda.enable_flash_sdp(True)
             torch.backends.cuda.enable_mem_efficient_sdp(True)
+            # cuDNN attention backend (PyTorch 2.6+) — ~10% end-to-end vs the
+            # default flash backend on Hopper / Blackwell. The toggle ships
+            # in PyTorch but only takes effect when cuDNN >= 9.0 is present;
+            # we silently no-op on older PyTorch / Torch-ROCm where the
+            # attribute is missing.
+            if getattr(config, "cudnn_attention", True) and hasattr(
+                torch.backends.cuda, "enable_cudnn_sdp"
+            ):
+                try:
+                    torch.backends.cuda.enable_cudnn_sdp(True)
+                except (RuntimeError, AttributeError) as exc:
+                    log.debug("cuDNN SDPA backend not available: %s", exc)
 
         if config.xformers and self.unet is not None:
             try:

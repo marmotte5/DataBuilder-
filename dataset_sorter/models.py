@@ -184,7 +184,7 @@ class _MemoryView(_ConfigView):
         "safetensors_cache", "fp16_latent_cache", "cache_to_ram_disk",
         "lmdb_cache",
         # CUDA optimizations
-        "xformers", "sdpa", "flash_attention",
+        "xformers", "sdpa", "cudnn_attention", "flash_attention",
         "torch_compile", "compile_mode", "regional_compile",
         "cudnn_benchmark", "enable_tf32",
         "fp8_base_model", "quantize_text_encoder", "quantize_unet",
@@ -421,6 +421,8 @@ class TrainingConfig:
     # CUDA optimizations
     xformers: bool = False
     sdpa: bool = True               # Scaled dot-product attention (PyTorch 2.0+)
+    cudnn_attention: bool = True    # cuDNN SDPA backend — adds ~10% speed on H100;
+                                    # auto-disabled on non-CUDA / old PyTorch / cuDNN <9.0
     flash_attention: bool = False   # Flash Attention 2
     torch_compile: bool = False     # torch.compile() JIT
     compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
