@@ -1899,12 +1899,14 @@ class MainWindow(QMainWindow):
         leaving the keyboard / mouse focus on the work area.
         """
         menu = QMenu(self)
-        api_act = menu.addAction("API Keys…")
-        api_act.setShortcut("Ctrl+,")
+        # Don't set per-action setShortcut() on macOS popups — Cocoa
+        # interprets "Ctrl+," as the system Preferences shortcut and the
+        # collision can SIGTRAP libdispatch on some Qt builds. The same
+        # shortcuts are already registered globally on the main window.
+        api_act = menu.addAction("API Keys…  (Ctrl+,)")
         api_act.triggered.connect(self._show_api_keys_dialog)
 
-        debug_act = menu.addAction("Toggle Debug Console")
-        debug_act.setShortcut("F12")
+        debug_act = menu.addAction("Toggle Debug Console  (F12)")
         debug_act.triggered.connect(self._toggle_debug_console)
 
         menu.addSeparator()
@@ -1922,8 +1924,7 @@ class MainWindow(QMainWindow):
         help_act.triggered.connect(lambda: self._switch_nav("help"))
 
         menu.addSeparator()
-        shortcuts_act = menu.addAction("Keyboard Shortcuts…")
-        shortcuts_act.setShortcut("Ctrl+/")
+        shortcuts_act = menu.addAction("Keyboard Shortcuts…  (Ctrl+/)")
         shortcuts_act.triggered.connect(self._show_shortcuts_help)
 
         about_act = menu.addAction("About DataBuilder")

@@ -3,6 +3,23 @@
 import os
 import sys
 
+# Native crash diagnostics — must be the very first thing we do so that any
+# SIGSEGV / SIGABRT / SIGILL / SIGBUS / SIGFPE / SIGTRAP from a C extension
+# (PIL libjpeg, torch CUDA driver, libdispatch on macOS) gets a Python
+# traceback dumped to stderr instead of "Trace/BPT trap: 5" with no clue.
+# SIGTRAP is the macOS Cocoa / GCD assertion path and is not in the
+# faulthandler default set, so we register it explicitly when available.
+import faulthandler
+faulthandler.enable()
+try:
+    import signal
+    if hasattr(signal, "SIGTRAP"):
+        faulthandler.register(signal.SIGTRAP, chain=True)
+except (ImportError, OSError):
+    # Windows lacks SIGTRAP; faulthandler.register can also refuse on
+    # locked-down macOS sandboxes — it's just diagnostics, never fatal.
+    pass
+
 # On Windows, PyQt6 modifies the DLL search path which prevents PyTorch
 # from finding c10.dll afterwards.  We must register torch's DLL
 # directories AND preload the key DLLs before anything else is imported.
