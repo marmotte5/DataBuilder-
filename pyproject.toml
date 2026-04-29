@@ -33,14 +33,17 @@ dependencies = [
 
 [project.optional-dependencies]
 # Core ML stack — works on every supported platform (Linux, macOS, Windows).
+# Floors bumped 2026-04 so newer-architecture backends (Z-Image, Flux2,
+# HiDream) work out of the box; older diffusers/transformers ship without
+# the necessary pipeline classes.
 training = [
-    "torch>=2.1",
-    "torchvision>=0.16",
-    "diffusers>=0.28",
-    "transformers>=4.38",
-    "accelerate>=0.27",
-    "safetensors>=0.4",
-    "peft>=0.10",
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "diffusers>=0.30",
+    "transformers>=4.45",
+    "accelerate>=0.32",
+    "safetensors>=0.4.3",
+    "peft>=0.12",
     "lycoris-lora>=3.0",
     "Pillow>=10.0",
 ]

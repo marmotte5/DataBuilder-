@@ -126,7 +126,7 @@ class ImageTab(QWidget):
 
         self.bucket_label = QLabel("")
         self.bucket_label.setStyleSheet(TAG_BADGE_STYLE)
-        self.bucket_label.setFixedHeight(26)
+        self.bucket_label.setMinimumHeight(26)
         layout.addWidget(self.bucket_label)
 
         self.tags_text = QTextEdit()

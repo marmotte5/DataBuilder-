@@ -3748,7 +3748,10 @@ class Trainer:
                 except Exception as e:
                     log.warning(f"Could not restore full finetune weights: {e}")
             elif checkpoint_dir.exists() and self.backend.pipeline is not None:
-                # Try loading full pipeline from checkpoint root
+                # Try loading full pipeline from checkpoint root.
+                # checkpoint_dir is the user's own training output dir; trust_remote_code
+                # was already confirmed via security_prompts.confirm_trust_remote_code()
+                # before training started (training_tab.py).
                 try:
                     from diffusers import DiffusionPipeline
                     pipe = DiffusionPipeline.from_pretrained(

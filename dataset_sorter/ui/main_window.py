@@ -879,10 +879,10 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Header bar (60px) ──────────────────────────────────────────────
+        # ── Header bar (60px min, grows on high-DPI) ─────────────────────
         header = QWidget()
         self._header_widget = header
-        header.setFixedHeight(60)
+        header.setMinimumHeight(60)
         header.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border-bottom: 1px solid {COLORS['border']};"
@@ -912,7 +912,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(mode_lbl)
 
         self.btn_simple_mode = QPushButton("Simple")
-        self.btn_simple_mode.setFixedHeight(30)
+        self.btn_simple_mode.setMinimumHeight(30)
         self.btn_simple_mode.setMinimumWidth(72)
         self.btn_simple_mode.setCheckable(True)
         self.btn_simple_mode.setChecked(True)
@@ -924,7 +924,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.btn_simple_mode)
 
         self.btn_advanced_mode = QPushButton("Advanced")
-        self.btn_advanced_mode.setFixedHeight(30)
+        self.btn_advanced_mode.setMinimumHeight(30)
         self.btn_advanced_mode.setMinimumWidth(80)
         self.btn_advanced_mode.setCheckable(True)
         self.btn_advanced_mode.setChecked(False)
@@ -955,14 +955,14 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(profile_lbl)
 
         self._profile_combo = QComboBox()
-        self._profile_combo.setFixedHeight(30)
+        self._profile_combo.setMinimumHeight(30)
         self._profile_combo.setMinimumWidth(200)
         self._profile_combo.setToolTip("Select a training profile to load")
         self._profile_combo.activated.connect(self._on_profile_selected)
         header_layout.addWidget(self._profile_combo)
 
         btn_save_profile = QPushButton("Save")
-        btn_save_profile.setFixedHeight(30)
+        btn_save_profile.setMinimumHeight(30)
         btn_save_profile.setMinimumWidth(50)
         btn_save_profile.setToolTip("Save current training settings as a profile")
         btn_save_profile.setStyleSheet(
@@ -976,7 +976,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(btn_save_profile)
 
         btn_del_profile = QPushButton("Del")
-        btn_del_profile.setFixedHeight(30)
+        btn_del_profile.setMinimumHeight(30)
         btn_del_profile.setMinimumWidth(50)
         btn_del_profile.setToolTip("Delete selected profile (built-in profiles cannot be deleted)")
         btn_del_profile.setStyleSheet(
@@ -997,7 +997,7 @@ class MainWindow(QMainWindow):
 
         # More... button (now opens sub-nav bar)
         self.btn_more = QPushButton("More ▾")
-        self.btn_more.setFixedHeight(30)
+        self.btn_more.setMinimumHeight(30)
         self.btn_more.setMinimumWidth(70)
         self.btn_more.setToolTip("Access secondary tools")
         self.btn_more.setStyleSheet(
@@ -1012,7 +1012,7 @@ class MainWindow(QMainWindow):
         # Theme toggle
         self.btn_theme = QPushButton("Light")
         self.btn_theme.setToolTip("Toggle dark/light theme (Ctrl+T)")
-        self.btn_theme.setFixedHeight(30)
+        self.btn_theme.setMinimumHeight(30)
         self.btn_theme.setMinimumWidth(60)
         self.btn_theme.setStyleSheet(
             f"QPushButton {{ padding: 4px; font-size: 11px; font-weight: 500; "
@@ -1028,7 +1028,7 @@ class MainWindow(QMainWindow):
         # ── Stepper bar (50px) ────────────────────────────────────────────
         stepper_widget = QWidget()
         self._stepper_widget = stepper_widget
-        stepper_widget.setFixedHeight(50)
+        stepper_widget.setMinimumHeight(50)
         stepper_widget.setStyleSheet(
             f"background-color: {COLORS['bg']}; "
             f"border-bottom: 1px solid {COLORS['border_subtle']};"
@@ -1052,7 +1052,7 @@ class MainWindow(QMainWindow):
             nav_target = "train" if step_id == "_train3" else step_id
             btn = QPushButton(f"{num}. {label}")
             btn.setToolTip(tip)
-            btn.setFixedHeight(34)
+            btn.setMinimumHeight(34)
             btn.setMinimumWidth(110)
             btn.setStyleSheet(self._stepper_button_style("default"))
             btn.clicked.connect(lambda checked, nid=nav_target: self._switch_nav(nid))
@@ -1065,7 +1065,7 @@ class MainWindow(QMainWindow):
         # ── More sub-navigation bar (hidden until a More page is active) ──
         more_nav = QWidget()
         self._more_nav_widget = more_nav
-        more_nav.setFixedHeight(40)
+        more_nav.setMinimumHeight(40)
         more_nav.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border-bottom: 1px solid {COLORS['border']};"
@@ -1086,7 +1086,7 @@ class MainWindow(QMainWindow):
         self._more_nav_btns: dict[str, QPushButton] = {}
         for label, nav_id in _more_pages:
             btn = QPushButton(label)
-            btn.setFixedHeight(28)
+            btn.setMinimumHeight(28)
             btn.setStyleSheet(self._more_nav_btn_style("default"))
             btn.clicked.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
             more_nav_layout.addWidget(btn)
@@ -1482,7 +1482,7 @@ class MainWindow(QMainWindow):
         # ── Footer bar (50px) ──────────────────────────────────────────────
         footer = QWidget()
         self._footer_widget = footer
-        footer.setFixedHeight(50)
+        footer.setMinimumHeight(50)
         footer.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border-top: 1px solid {COLORS['border']};"
@@ -1526,7 +1526,7 @@ class MainWindow(QMainWindow):
 
         # Back / Next buttons
         self.btn_footer_back = QPushButton("← Back")
-        self.btn_footer_back.setFixedHeight(32)
+        self.btn_footer_back.setMinimumHeight(32)
         self.btn_footer_back.setMinimumWidth(80)
         self.btn_footer_back.setStyleSheet(
             f"QPushButton {{ padding: 4px 10px; font-size: 11px; font-weight: 600; "
@@ -1539,7 +1539,7 @@ class MainWindow(QMainWindow):
         footer_layout.addWidget(self.btn_footer_back)
 
         self.btn_footer_next = QPushButton("Next →")
-        self.btn_footer_next.setFixedHeight(32)
+        self.btn_footer_next.setMinimumHeight(32)
         self.btn_footer_next.setMinimumWidth(80)
         self.btn_footer_next.setStyleSheet(
             f"QPushButton {{ background-color: {COLORS['accent']}; color: white; "

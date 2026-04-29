@@ -403,7 +403,7 @@ class ModelCard(QFrame):
         # Model type badge
         self._badge_label = QLabel(self._item.model_type)
         self._badge_label.setStyleSheet(tag_badge_style())
-        self._badge_label.setFixedHeight(20)
+        self._badge_label.setMinimumHeight(20)
         self._badge_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         layout.addWidget(self._badge_label)
 
@@ -572,7 +572,7 @@ class LibraryTab(QWidget):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(key == "models")
-            btn.setFixedHeight(34)
+            btn.setMinimumHeight(34)
             btn.setMinimumWidth(90)
             btn.setProperty("category", key)
             btn.setStyleSheet(self._toggle_button_style(key == "models"))
@@ -592,7 +592,7 @@ class LibraryTab(QWidget):
         # Favorites filter toggle
         self._fav_filter_btn = QPushButton("Favorites")
         self._fav_filter_btn.setCheckable(True)
-        self._fav_filter_btn.setFixedHeight(34)
+        self._fav_filter_btn.setMinimumHeight(34)
         self._fav_filter_btn.setMinimumWidth(90)
         self._fav_filter_btn.setStyleSheet(
             f"QPushButton {{ border: 1px solid {COLORS['border']}; border-radius: 6px; "
@@ -607,7 +607,7 @@ class LibraryTab(QWidget):
         self._sort_combo = QComboBox()
         self._sort_combo.addItems(["Name", "Size", "Date Modified"])
         self._sort_combo.setMinimumWidth(130)
-        self._sort_combo.setFixedHeight(34)
+        self._sort_combo.setMinimumHeight(34)
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         toolbar.addWidget(self._sort_combo)
 
@@ -615,13 +615,13 @@ class LibraryTab(QWidget):
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("Search...")
         self._search_edit.setMinimumWidth(200)
-        self._search_edit.setFixedHeight(34)
+        self._search_edit.setMinimumHeight(34)
         self._search_edit.textChanged.connect(lambda: self._search_timer.start())
         toolbar.addWidget(self._search_edit)
 
         # Refresh button
         self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.setFixedHeight(34)
+        self._refresh_btn.setMinimumHeight(34)
         self._refresh_btn.setStyleSheet(nav_button_style())
         self._refresh_btn.clicked.connect(self.refresh)
         toolbar.addWidget(self._refresh_btn)
@@ -743,7 +743,7 @@ class LibraryTab(QWidget):
         name_row.addWidget(self._detail_name)
 
         self._btn_favorite = QPushButton("Favorite")
-        self._btn_favorite.setFixedHeight(28)
+        self._btn_favorite.setMinimumHeight(28)
         self._btn_favorite.setCheckable(True)
         self._btn_favorite.setEnabled(False)
         self._btn_favorite.setStyleSheet(

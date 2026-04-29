@@ -128,6 +128,38 @@ def _allowed_host(url: str) -> bool:
     return host.lower() in _ALLOWED_DIRECT_DOMAINS
 
 
+class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Revalidate the allowlist on every redirect hop.
+
+    The default urllib redirect handler follows Location: headers without
+    re-checking the host — so a server in the allowlist could redirect to
+    an arbitrary domain. We refuse hops that leave the allowlist.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise urllib.error.HTTPError(
+                newurl, code, f"refusing non-HTTPS redirect to {newurl!r}",
+                headers, fp,
+            )
+        if not _allowed_host(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code,
+                f"redirect host not in allowlist: {newurl!r}",
+                headers, fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# Install the allowlist-revalidating redirect handler globally so that
+# every urllib.request.urlopen() call in this module benefits from it.
+# Tests patching `urllib.request.urlopen` keep working because they bypass
+# the opener entirely.
+urllib.request.install_opener(
+    urllib.request.build_opener(_AllowlistRedirectHandler())
+)
+
+
 def _http_get_json(url: str, *, headers: dict | None = None,
                    timeout: float = _METADATA_TIMEOUT) -> Any:
     """Minimal JSON-over-HTTPS GET. Returns the parsed body."""

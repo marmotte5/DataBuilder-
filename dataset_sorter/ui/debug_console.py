@@ -41,6 +41,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
+from dataset_sorter.ui.theme import COLORS
+
 log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -243,19 +245,19 @@ class DebugConsole(QWidget):
         # Error / warning counters
         self._error_counter_label = QLabel("0 errors")
         self._error_counter_label.setStyleSheet(
-            "color: #6b7280; font-size: 11px; padding: 0 4px;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; padding: 0 4px; }}"
         )
         toolbar.addWidget(self._error_counter_label)
 
         self._warning_counter_label = QLabel("0 warnings")
         self._warning_counter_label.setStyleSheet(
-            "color: #6b7280; font-size: 11px; padding: 0 4px;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; padding: 0 4px; }}"
         )
         toolbar.addWidget(self._warning_counter_label)
 
         # Line count
         self._line_count_label = QLabel("0 lines")
-        self._line_count_label.setStyleSheet("color: #8b8fa3;")
+        self._line_count_label.setStyleSheet(f"QLabel {{ color: {COLORS['text_muted']}; }}")
         toolbar.addWidget(self._line_count_label)
 
         # Buttons
@@ -277,13 +279,13 @@ class DebugConsole(QWidget):
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search logs (Ctrl+F)...")
         self._search_input.setStyleSheet(
-            "QLineEdit {"
-            "  background-color: #131520;"
-            "  color: #e0e2f0;"
-            "  border: 1px solid #262938;"
-            "  border-radius: 4px;"
-            "  padding: 4px 8px;"
-            "}"
+            f"QLineEdit {{"
+            f"  background-color: {COLORS['input_bg']};"
+            f"  color: {COLORS['text']};"
+            f"  border: 1px solid {COLORS['border']};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 8px;"
+            f"}}"
         )
         search_row.addWidget(self._search_input, 1)
 
@@ -294,7 +296,7 @@ class DebugConsole(QWidget):
         search_row.addWidget(self._btn_search_next)
 
         self._search_status = QLabel("")
-        self._search_status.setStyleSheet("color: #8b8fa3; font-size: 11px;")
+        self._search_status.setStyleSheet(f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; }}")
         self._search_status.setMinimumWidth(100)
         search_row.addWidget(self._search_status)
 
@@ -308,21 +310,21 @@ class DebugConsole(QWidget):
         font.setStyleHint(QFont.StyleHint.Monospace)
         self._text.setFont(font)
         self._text.setStyleSheet(
-            "QPlainTextEdit {"
-            "  background-color: #0a0c12;"
-            "  color: #e0e2f0;"
-            "  border: 1px solid #262938;"
-            "  border-radius: 6px;"
-            "  padding: 6px;"
-            "  selection-background-color: #3d4157;"
-            "}"
+            f"QPlainTextEdit {{"
+            f"  background-color: {COLORS['bg']};"
+            f"  color: {COLORS['text']};"
+            f"  border: 1px solid {COLORS['border']};"
+            f"  border-radius: 6px;"
+            f"  padding: 6px;"
+            f"  selection-background-color: {COLORS['accent']};"
+            f"}}"
         )
         self._text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         layout.addWidget(self._text, 1)
 
         # ── Log file path indicator ──
         self._file_label = QLabel("")
-        self._file_label.setStyleSheet("color: #555970; font-size: 11px;")
+        self._file_label.setStyleSheet(f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; }}")
         layout.addWidget(self._file_label)
 
     def _connect_signals(self):
@@ -553,9 +555,13 @@ class DebugConsole(QWidget):
         self._error_count = 0
         self._warning_count = 0
         self._error_counter_label.setText("0 errors")
-        self._error_counter_label.setStyleSheet("color: #6b7280; font-size: 11px; padding: 0 4px;")
+        self._error_counter_label.setStyleSheet(
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; padding: 0 4px; }}"
+        )
         self._warning_counter_label.setText("0 warnings")
-        self._warning_counter_label.setStyleSheet("color: #6b7280; font-size: 11px; padding: 0 4px;")
+        self._warning_counter_label.setStyleSheet(
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 11px; padding: 0 4px; }}"
+        )
 
     def _search_next(self):
         """Find next occurrence of search text."""
