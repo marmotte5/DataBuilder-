@@ -170,7 +170,7 @@ class _ApiKeyRow(QWidget):
             "info":  COLORS['text_muted'],
         }.get(level, COLORS['text_muted'])
         self._status.setText(text)
-        self._status.setStyleSheet(f"color: {colour}; font-size: 11px;")
+        self._status.setStyleSheet(f"QLabel {{ color: {colour}; font-size: 11px; }}")
 
 
 # ─────────────────────────────────────────────────────────────────────────

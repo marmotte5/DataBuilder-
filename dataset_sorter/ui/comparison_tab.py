@@ -398,20 +398,20 @@ class ComparisonTab(QWidget):
         self._lbl_a = QLabel("Side A")
         self._lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_a.setStyleSheet(
-            f"font-weight: 700; color: {COLORS['accent']}; "
-            f"border: none; background: transparent;"
+            f"QLabel {{ font-weight: 700; color: {COLORS['accent']}; "
+            f"border: none; background: transparent; }}"
         )
         side_a_layout.addWidget(self._lbl_a)
         self._image_a = QLabel()
         self._image_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_a.setMinimumSize(400, 400)
-        self._image_a.setStyleSheet("border: none; background: transparent;")
+        self._image_a.setStyleSheet("QLabel { border: none; background: transparent; }")
         self._image_a.setText("Generate to see Side A")
         side_a_layout.addWidget(self._image_a, 1)
         self._info_a = QLabel("")
         self._info_a.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
-            f"background: transparent;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent; }}"
         )
         self._info_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._info_a.setWordWrap(True)
@@ -428,20 +428,20 @@ class ComparisonTab(QWidget):
         self._lbl_b = QLabel("Side B")
         self._lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_b.setStyleSheet(
-            f"font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
-            f"border: none; background: transparent;"
+            f"QLabel {{ font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
+            f"border: none; background: transparent; }}"
         )
         side_b_layout.addWidget(self._lbl_b)
         self._image_b = QLabel()
         self._image_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_b.setMinimumSize(400, 400)
-        self._image_b.setStyleSheet("border: none; background: transparent;")
+        self._image_b.setStyleSheet("QLabel { border: none; background: transparent; }")
         self._image_b.setText("Generate to see Side B")
         side_b_layout.addWidget(self._image_b, 1)
         self._info_b = QLabel("")
         self._info_b.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
-            f"background: transparent;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent; }}"
         )
         self._info_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._info_b.setWordWrap(True)
@@ -793,18 +793,18 @@ class ComparisonTab(QWidget):
             f"border-radius: 12px; background: {COLORS['surface']}; }}"
         )
         self._lbl_a.setStyleSheet(
-            f"font-weight: 700; color: {COLORS['accent']}; "
-            f"border: none; background: transparent;"
+            f"QLabel {{ font-weight: 700; color: {COLORS['accent']}; "
+            f"border: none; background: transparent; }}"
         )
         self._lbl_b.setStyleSheet(
-            f"font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
-            f"border: none; background: transparent;"
+            f"QLabel {{ font-weight: 700; color: {COLORS.get('success', '#22c55e')}; "
+            f"border: none; background: transparent; }}"
         )
         self._info_a.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
-            f"background: transparent;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent; }}"
         )
         self._info_b.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 10px; border: none; "
-            f"background: transparent;"
+            f"QLabel {{ color: {COLORS['text_muted']}; font-size: 10px; border: none; "
+            f"background: transparent; }}"
         )

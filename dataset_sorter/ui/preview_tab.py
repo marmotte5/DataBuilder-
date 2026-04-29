@@ -70,7 +70,7 @@ class PreviewTab(QWidget):
             wl.setSpacing(6)
 
             img_label = QLabel()
-            img_label.setStyleSheet("border: none; background: transparent;")
+            img_label.setStyleSheet("QLabel { border: none; background: transparent; }")
             pixmap = QPixmap(str(entry.image_path))
             if not pixmap.isNull():
                 scaled = pixmap.scaled(self.THUMB_W, self.THUMB_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
