@@ -995,19 +995,33 @@ class MainWindow(QMainWindow):
         sep_lbl2.setStyleSheet(f"color: {COLORS['border']}; background: transparent;")
         header_layout.addWidget(sep_lbl2)
 
-        # More... button (now opens sub-nav bar)
-        self.btn_more = QPushButton("More ▾")
-        self.btn_more.setMinimumHeight(30)
-        self.btn_more.setMinimumWidth(70)
-        self.btn_more.setToolTip("Access secondary tools")
-        self.btn_more.setStyleSheet(
-            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+        # ── Top-right utility icons: Settings ⚙ + Help ? + Theme ──────────
+        # Replaces the old "More ▾" button, which conflated tools navigation
+        # with settings access. Tools / Library / Analyze now live in the
+        # persistent section bar below; the corner icons stay focused on
+        # global preferences and reference material.
+        _icon_btn_style = (
+            f"QPushButton {{ padding: 0px; font-size: 16px; font-weight: 600; "
             f"border-radius: 6px; color: {COLORS['text_muted']}; "
-            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; }} "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; "
+            f"min-width: 32px; }} "
             f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; }}"
         )
-        self.btn_more.clicked.connect(self._show_more_menu)
-        header_layout.addWidget(self.btn_more)
+        self.btn_settings = QPushButton("⚙")
+        self.btn_settings.setMinimumHeight(30)
+        self.btn_settings.setMinimumWidth(34)
+        self.btn_settings.setToolTip("Settings (API keys, debug console)")
+        self.btn_settings.setStyleSheet(_icon_btn_style)
+        self.btn_settings.clicked.connect(self._show_settings_popup)
+        header_layout.addWidget(self.btn_settings)
+
+        self.btn_help = QPushButton("?")
+        self.btn_help.setMinimumHeight(30)
+        self.btn_help.setMinimumWidth(34)
+        self.btn_help.setToolTip("Help & shortcuts")
+        self.btn_help.setStyleSheet(_icon_btn_style)
+        self.btn_help.clicked.connect(self._show_help_popup)
+        header_layout.addWidget(self.btn_help)
 
         # Theme toggle
         self.btn_theme = QPushButton("Light")
@@ -1062,38 +1076,75 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(stepper_widget)
 
-        # ── More sub-navigation bar (hidden until a More page is active) ──
-        more_nav = QWidget()
-        self._more_nav_widget = more_nav
-        more_nav.setMinimumHeight(40)
-        more_nav.setStyleSheet(
+        # ── Persistent section navigation bar ─────────────────────────────
+        # Replaces the toggle-on-demand "More" bar. Always visible, holds
+        # four sections that map onto user goals rather than implementation
+        # boundaries:
+        #   • Workflow  — the Dataset → Train → Generate stepper
+        #   • Library   — top-level access to models / LoRAs / embeddings
+        #   • Tools ▾   — Batch · Compare · Merge (creative tooling)
+        #   • Analyze ▾ — Cluster · Recommendations (insight tooling)
+        # The stepper below only renders when Workflow is the active section.
+        section_nav = QWidget()
+        self._section_nav_widget = section_nav
+        section_nav.setMinimumHeight(40)
+        section_nav.setStyleSheet(
             f"background-color: {COLORS['bg_alt']}; "
             f"border-bottom: 1px solid {COLORS['border']};"
         )
-        more_nav_layout = QHBoxLayout(more_nav)
-        more_nav_layout.setContentsMargins(16, 4, 16, 4)
-        more_nav_layout.setSpacing(4)
+        section_nav_layout = QHBoxLayout(section_nav)
+        section_nav_layout.setContentsMargins(16, 4, 16, 4)
+        section_nav_layout.setSpacing(6)
 
-        _more_pages = [
-            ("Batch",    "batch"),
-            ("Compare",  "compare"),
-            ("Merge",    "merge"),
-            ("Library",  "library"),
-            ("Cluster",  "cluster"),
-            ("Settings", "settings"),
-            ("Help",     "help"),
+        # Section button definitions: (section_id, label, dropdown_items)
+        # dropdown_items=None means a direct nav target (id matches the
+        # nav target page); a list builds a QMenu for that section.
+        self._section_dropdown_pages: dict[str, set[str]] = {
+            "workflow": {"dataset", "train", "_train3", "generate"},
+            "library":  {"library"},
+            "tools":    {"batch", "compare", "merge"},
+            "analyze":  {"cluster", "settings"},
+        }
+        _section_defs = [
+            ("workflow", "Workflow", None),
+            ("library",  "Library",  None),
+            ("tools",    "Tools  ▾", [
+                ("batch",   "Batch Generate"),
+                ("compare", "A/B Compare"),
+                ("merge",   "Merge Models"),
+            ]),
+            ("analyze",  "Analyze  ▾", [
+                ("cluster",  "Latent Space (Cluster)"),
+                ("settings", "Recommendations"),
+            ]),
         ]
-        self._more_nav_btns: dict[str, QPushButton] = {}
-        for label, nav_id in _more_pages:
+        self._section_nav_btns: dict[str, QPushButton] = {}
+        for section_id, label, items in _section_defs:
             btn = QPushButton(label)
             btn.setMinimumHeight(28)
-            btn.setStyleSheet(self._more_nav_btn_style("default"))
-            btn.clicked.connect(lambda checked, nid=nav_id: self._switch_nav(nid))
-            more_nav_layout.addWidget(btn)
-            self._more_nav_btns[nav_id] = btn
-        more_nav_layout.addStretch()
-        more_nav.setVisible(False)
-        outer.addWidget(more_nav)
+            btn.setStyleSheet(self._section_nav_btn_style("default"))
+            if items is None:
+                # Direct nav: workflow → current workflow step (default
+                # dataset); library → library page.
+                if section_id == "workflow":
+                    btn.clicked.connect(self._goto_current_workflow_step)
+                else:
+                    btn.clicked.connect(
+                        lambda checked, nid=section_id: self._switch_nav(nid)
+                    )
+            else:
+                # Dropdown menu — clicking opens it under the button.
+                menu = QMenu(self)
+                for nav_id, item_label in items:
+                    act = menu.addAction(item_label)
+                    act.triggered.connect(
+                        lambda checked, nid=nav_id: self._switch_nav(nid)
+                    )
+                btn.setMenu(menu)
+            section_nav_layout.addWidget(btn)
+            self._section_nav_btns[section_id] = btn
+        section_nav_layout.addStretch()
+        outer.addWidget(section_nav)
 
         # ── Main area: path bar + content + helper panel ──────────────────
         main_area = QWidget()
@@ -1667,15 +1718,20 @@ class MainWindow(QMainWindow):
         # it tracks layout shifts (window resize, simple/advanced toggle).
         self._update_active_stepper_glow(active_btn)
 
-        # More sub-nav bar: visible only when on a More page
-        _more_nav_ids = {"batch", "compare", "merge", "library", "settings", "help"}
-        is_more = nav_id in _more_nav_ids
-        self._more_nav_widget.setVisible(is_more)
-        if is_more:
-            for page_id, btn in self._more_nav_btns.items():
-                btn.setStyleSheet(
-                    self._more_nav_btn_style("active" if page_id == nav_id else "default")
-                )
+        # ── Section bar highlighting + stepper visibility ─────────────────
+        # Stepper is only relevant for the linear Dataset → Train → Generate
+        # workflow; hide it on Library / Tools / Analyze pages so the
+        # secondary section gets the full vertical real estate.
+        active_section = self._section_for_nav(nav_id)
+        self._stepper_widget.setVisible(active_section == "workflow")
+        for sid, btn in self._section_nav_btns.items():
+            btn.setStyleSheet(
+                self._section_nav_btn_style("active" if sid == active_section else "default")
+            )
+        # Remember the most recent workflow step so the "Workflow" section
+        # button can return us there with one click after a detour.
+        if active_section == "workflow":
+            self._last_workflow_nav = nav_id
 
         # Section title: show for secondary sections, hide for main stepper ones
         title = nav_to_title.get(nav_id, "")
@@ -1795,35 +1851,86 @@ class MainWindow(QMainWindow):
         self.btn_simple_mode.setStyleSheet(active_style if simple else inactive_style)
         self.btn_advanced_mode.setStyleSheet(inactive_style if simple else active_style)
 
-    # ── More button: show sub-nav bar ─────────────────────────────────────
+    # ── Section nav helpers ────────────────────────────────────────────────
 
-    def _show_more_menu(self):
-        """Toggle the More sub-navigation bar and navigate to Batch (first More page)."""
-        _more_nav_ids = {"batch", "compare", "merge", "library", "settings", "help"}
-        if self._current_nav not in _more_nav_ids:
-            self._switch_nav("batch")
-        else:
-            # Already on a More page: toggle the sub-nav bar visibility
-            self._more_nav_widget.setVisible(not self._more_nav_widget.isVisible())
+    def _section_for_nav(self, nav_id: str) -> str | None:
+        """Return the section_id that owns the given nav_id, or None."""
+        for sid, members in self._section_dropdown_pages.items():
+            if nav_id in members:
+                return sid
+        return None
 
-    # ── More sub-nav button style ──────────────────────────────────────────
+    def _goto_current_workflow_step(self) -> None:
+        """Workflow section button: return to the most recent workflow step.
 
-    def _more_nav_btn_style(self, state: str) -> str:
-        """Return stylesheet for a More sub-nav button. state: 'active' | 'default'."""
+        Defaults to "dataset" on first use so the stepper shows up exactly
+        where new users would expect.
+        """
+        target = getattr(self, "_last_workflow_nav", "dataset") or "dataset"
+        self._switch_nav(target)
+
+    def _section_nav_btn_style(self, state: str) -> str:
+        """Return stylesheet for a section-nav button. state: 'active' | 'default'."""
         if state == "active":
             return (
                 f"QPushButton {{ background-color: {COLORS['accent_subtle']}; "
                 f"color: {COLORS['accent']}; border: 1px solid {COLORS['accent']}50; "
-                f"border-radius: 8px; font-size: 11px; font-weight: 700; padding: 5px 14px; }} "
-                f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }}"
+                f"border-radius: 8px; font-size: 12px; font-weight: 700; "
+                f"padding: 5px 16px; }} "
+                f"QPushButton:hover {{ background-color: {COLORS['accent_subtle']}; }} "
+                f"QPushButton::menu-indicator {{ width: 0; }}"
             )
         return (
             f"QPushButton {{ background-color: transparent; "
             f"color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 8px; font-size: 11px; font-weight: 500; padding: 5px 14px; }} "
+            f"border-radius: 8px; font-size: 12px; font-weight: 600; "
+            f"padding: 5px 16px; }} "
             f"QPushButton:hover {{ color: {COLORS['text']}; border-color: {COLORS['accent']}; "
-            f"background-color: {COLORS['surface']}; }}"
+            f"background-color: {COLORS['surface']}; }} "
+            f"QPushButton::menu-indicator {{ width: 0; }}"
         )
+
+    # ── Top-right corner icon menus (Settings ⚙ + Help ?) ──────────────────
+
+    def _show_settings_popup(self) -> None:
+        """Drop a small QMenu under the ⚙ button with global settings entries.
+
+        Mirrors the Settings menu in the menubar but reachable without
+        leaving the keyboard / mouse focus on the work area.
+        """
+        menu = QMenu(self)
+        api_act = menu.addAction("API Keys…")
+        api_act.setShortcut("Ctrl+,")
+        api_act.triggered.connect(self._show_api_keys_dialog)
+
+        debug_act = menu.addAction("Toggle Debug Console")
+        debug_act.setShortcut("F12")
+        debug_act.triggered.connect(self._toggle_debug_console)
+
+        menu.addSeparator()
+        reco_act = menu.addAction("Training Recommendations")
+        reco_act.triggered.connect(lambda: self._switch_nav("settings"))
+
+        # Anchor the menu under the gear button.
+        pos = self.btn_settings.mapToGlobal(self.btn_settings.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _show_help_popup(self) -> None:
+        """Drop a small QMenu under the ? button with help / docs entries."""
+        menu = QMenu(self)
+        help_act = menu.addAction("Open Help page")
+        help_act.triggered.connect(lambda: self._switch_nav("help"))
+
+        menu.addSeparator()
+        shortcuts_act = menu.addAction("Keyboard Shortcuts…")
+        shortcuts_act.setShortcut("Ctrl+/")
+        shortcuts_act.triggered.connect(self._show_shortcuts_help)
+
+        about_act = menu.addAction("About DataBuilder")
+        about_act.triggered.connect(self._show_about_dialog)
+
+        pos = self.btn_help.mapToGlobal(self.btn_help.rect().bottomLeft())
+        menu.exec(pos)
 
     # ── Stepper availability ───────────────────────────────────────────────
 
@@ -2399,19 +2506,24 @@ class MainWindow(QMainWindow):
             f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
             f"QPushButton:hover {{ color: {c['danger']}; border-color: {c['danger']}; }}"
         )
-        # More sub-nav bar
-        self._more_nav_widget.setStyleSheet(
+        # Persistent section nav bar
+        self._section_nav_widget.setStyleSheet(
             f"background-color: {c['bg_alt']}; border-bottom: 1px solid {c['border']};"
         )
-        for page_id, btn in self._more_nav_btns.items():
-            state = "active" if page_id == getattr(self, "_current_nav", "") else "default"
-            btn.setStyleSheet(self._more_nav_btn_style(state))
-        self.btn_more.setStyleSheet(
-            f"QPushButton {{ padding: 4px 8px; font-size: 11px; font-weight: 600; "
+        active_section = self._section_for_nav(getattr(self, "_current_nav", ""))
+        for sid, btn in self._section_nav_btns.items():
+            state = "active" if sid == active_section else "default"
+            btn.setStyleSheet(self._section_nav_btn_style(state))
+        # ⚙ + ? icon buttons in the header corner
+        _icon_btn_style = (
+            f"QPushButton {{ padding: 0px; font-size: 16px; font-weight: 600; "
             f"border-radius: 6px; color: {c['text_muted']}; "
-            f"background: {c['surface']}; border: 1px solid {c['border']}; }} "
+            f"background: {c['surface']}; border: 1px solid {c['border']}; "
+            f"min-width: 32px; }} "
             f"QPushButton:hover {{ color: {c['text']}; border-color: {c['accent']}; }}"
         )
+        self.btn_settings.setStyleSheet(_icon_btn_style)
+        self.btn_help.setStyleSheet(_icon_btn_style)
         self.btn_theme.setStyleSheet(
             f"QPushButton {{ padding: 4px; font-size: 11px; font-weight: 500; "
             f"border-radius: 6px; color: {c['text_muted']}; "
