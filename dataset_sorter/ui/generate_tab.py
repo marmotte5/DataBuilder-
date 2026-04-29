@@ -608,6 +608,20 @@ class GenerateTab(QWidget):
         )
         self.taylorseer_check.stateChanged.connect(self._on_taylorseer_toggled)
         speed_row.addWidget(self.taylorseer_check)
+
+        # Nunchaku INT4 / FP4 — CUDA-only, falls back silently if unavailable
+        self.nunchaku_check = QCheckBox("Nunchaku INT4 (3× faster, ~3× less VRAM)")
+        self.nunchaku_check.setToolTip(
+            "Replace the transformer with a Nunchaku-quantized INT4 version\n"
+            "(SVDQuant, ICLR 2025). Roughly 3× faster generation and lets\n"
+            "FLUX.1 12B fit in 16 GB VRAM. CUDA only — Mac / AMD users see\n"
+            "no behaviour change. Supported architectures: Flux, Flux 2,\n"
+            "Z-Image, Sana, PixArt-Sigma. Install with:\n"
+            "    pip install nunchaku"
+        )
+        self.nunchaku_check.stateChanged.connect(self._on_nunchaku_toggled)
+        speed_row.addWidget(self.nunchaku_check)
+
         speed_row.addStretch()
         left.addWidget(self._speed_widget)
 
@@ -1164,6 +1178,21 @@ class GenerateTab(QWidget):
         """Toggle TaylorSeer cache on the loaded pipeline."""
         if self._worker:
             self._worker.set_taylorseer(bool(state))
+
+    def _on_nunchaku_toggled(self, state):
+        """Toggle Nunchaku INT4 acceleration. Takes effect on next model load.
+
+        We deliberately don't re-swap the transformer of an already-loaded
+        pipeline — Nunchaku's int4 transformer is a different class and
+        re-installing it mid-session needs a clean reload anyway. The next
+        ``Load model`` (or LoRA add) will pick up the new flag.
+        """
+        if self._worker is not None:
+            self._worker.use_nunchaku_int4 = bool(state)
+            if state and self._worker.pipe is not None:
+                self.status_label.setText(
+                    "Nunchaku INT4 enabled — reload the model to activate."
+                )
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         """Add a newly generated image to the gallery, evicting old ones if over capacity."""

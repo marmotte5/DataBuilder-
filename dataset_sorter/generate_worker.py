@@ -255,6 +255,13 @@ class GenerateWorker(QThread):
         self.torch_compile_enabled = False  # torch.compile() the transformer/unet
         self.torch_compile_mode = "default"  # default, reduce-overhead, max-autotune
 
+        # Nunchaku INT4 / FP4 inference (CUDA only) — swaps the transformer
+        # for a quantized version after the pipeline is loaded. Off by
+        # default so users who don't install nunchaku see no behaviour change.
+        self.use_nunchaku_int4 = False
+        self.nunchaku_precision = "int4"        # "int4" | "fp4" (Blackwell)
+        self.nunchaku_weights_path = ""          # Optional override; "" → default repo
+
         # Modes
         self._mode = "generate"  # "load" or "generate"
         self._stop_requested = False
@@ -490,6 +497,28 @@ class GenerateWorker(QThread):
                 pipe.enable_vae_slicing()
             if hasattr(pipe, "enable_vae_tiling"):
                 pipe.enable_vae_tiling()
+
+            # ── Optional Nunchaku INT4 / FP4 acceleration (CUDA only) ──
+            # Swap the transformer for a Nunchaku-quantized version BEFORE
+            # LoRAs are attached so the LoRA scaffolding lives on the new
+            # backbone. apply_nunchaku_int4 is silent on Mac / non-CUDA and
+            # on architectures Nunchaku doesn't ship a quantized variant
+            # for — it returns False and we keep the BF16 backbone.
+            if self.use_nunchaku_int4:
+                self._emit(self.progress, 65, 100, "Applying Nunchaku INT4…")
+                try:
+                    from dataset_sorter.nunchaku_inference import apply_nunchaku_int4
+                    apply_nunchaku_int4(
+                        pipe,
+                        self._model_type,
+                        weights_path=self.nunchaku_weights_path or None,
+                        precision=self.nunchaku_precision,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "Nunchaku integration raised unexpectedly (%s) — "
+                        "continuing with standard inference", exc,
+                    )
 
             self._emit(self.progress, 70, 100, "Loading LoRA adapters...")
 
