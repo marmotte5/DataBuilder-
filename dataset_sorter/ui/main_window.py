@@ -1932,12 +1932,41 @@ class MainWindow(QMainWindow):
         debug_act.triggered.connect(self._toggle_debug_console)
 
         menu.addSeparator()
+        diag_act = menu.addAction("Copy Diagnostic Info")
+        diag_act.setStatusTip(
+            "Copy versions, GPU, platform, and feature flags to clipboard "
+            "— paste into bug reports."
+        )
+        diag_act.triggered.connect(self._copy_diagnostic_info)
+
+        menu.addSeparator()
         reco_act = menu.addAction("Training Recommendations")
         reco_act.triggered.connect(lambda: self._switch_nav("settings"))
 
         # Anchor the menu under the gear button.
         pos = self.btn_settings.mapToGlobal(self.btn_settings.rect().bottomLeft())
         menu.exec(pos)
+
+    def _copy_diagnostic_info(self) -> None:
+        """Capture the startup-log diagnostic block and put it on the clipboard.
+
+        Far more useful than asking users to scroll their terminal — they
+        click ⚙ → Copy Diagnostic Info and paste straight into an issue.
+        Wrapped so a broken diagnostic helper can't take down the app.
+        """
+        try:
+            import contextlib
+            import io
+            from dataset_sorter.startup_log import print_startup_log
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                print_startup_log()
+            text = buf.getvalue()
+        except Exception as exc:
+            text = f"(diagnostic capture failed: {exc})"
+
+        QApplication.clipboard().setText(text)
+        self._toast("Diagnostic info copied to clipboard.", "success")
 
     def _show_help_popup(self) -> None:
         """Drop a small QMenu under the ? button with help / docs entries."""
