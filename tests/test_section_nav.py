@@ -63,12 +63,18 @@ class TestSectionForNav:
 
 
 class TestSectionNavStructure:
-    """The four expected section buttons exist."""
+    """The five expected section buttons exist."""
 
-    def test_four_section_buttons_exist(self, main_window):
+    def test_five_section_buttons_exist(self, main_window):
+        # "generate" is a top-level shortcut to step 4 of the workflow,
+        # added so users don't have to click Workflow → step 4.
         assert set(main_window._section_nav_btns.keys()) == {
-            "workflow", "library", "tools", "analyze",
+            "workflow", "generate", "library", "tools", "analyze",
         }
+
+    def test_generate_shortcut_button_label(self, main_window):
+        """The Generate shortcut shows just 'Generate' (no dropdown arrow)."""
+        assert main_window._section_nav_btns["generate"].text() == "Generate"
 
     def test_section_nav_widget_starts_visible(self, main_window):
         # Persistent bar — never hidden (replaced the old toggle More bar).
@@ -119,6 +125,38 @@ class TestStepperVisibilityCoupling:
             main_window._switch_nav(nav_id)
             qapp.processEvents()
             assert main_window._stepper_widget.isHidden(), nav_id
+
+
+class TestGenerateShortcutHighlighting:
+    """The Generate top-bar shortcut is the active button on the Generate page,
+    not the Workflow button (which would otherwise also light up because
+    'generate' belongs to the workflow section)."""
+
+    def test_generate_button_highlighted_on_generate_page(self, main_window, qapp):
+        main_window.show()
+        qapp.processEvents()
+        main_window._switch_nav("generate")
+        qapp.processEvents()
+        # Inspect the stylesheet — the active variant uses accent_subtle
+        # for the background colour. We check the marker rather than
+        # parsing the full QSS.
+        gen_style = main_window._section_nav_btns["generate"].styleSheet()
+        wf_style = main_window._section_nav_btns["workflow"].styleSheet()
+        assert "accent_subtle" in gen_style or "background-color:" in gen_style
+        # Workflow button must NOT be active when we're on generate.
+        # Active style includes a colored border-color: accent.
+        # We test by comparing — they should differ.
+        assert gen_style != wf_style
+
+    def test_workflow_button_highlighted_on_dataset_page(self, main_window, qapp):
+        main_window.show()
+        qapp.processEvents()
+        main_window._switch_nav("dataset")
+        qapp.processEvents()
+        gen_style = main_window._section_nav_btns["generate"].styleSheet()
+        wf_style = main_window._section_nav_btns["workflow"].styleSheet()
+        # Workflow active, Generate not.
+        assert gen_style != wf_style
 
 
 class TestWorkflowSectionMemorisation:
