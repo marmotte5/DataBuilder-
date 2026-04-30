@@ -1321,7 +1321,9 @@ class MainWindow(QMainWindow):
 
         self._content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._content_splitter.setChildrenCollapsible(False)
-        self._content_splitter.setHandleWidth(4)
+        # 6px handle (was 4px) — easier to grab on Retina / high-DPI
+        # without dominating the layout on standard displays.
+        self._content_splitter.setHandleWidth(6)
         content_row_layout.addWidget(self._content_splitter, 1)
 
         # Main stacked widget
@@ -1364,6 +1366,11 @@ class MainWindow(QMainWindow):
             self._step_indicators.append(lbl)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Same fix as the Generate tab: the default Qt splitter lets you
+        # drag a panel to zero width, clipping its content silently. We
+        # forbid that and bump the handle so it's grabbable on Retina.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
@@ -1388,6 +1395,9 @@ class MainWindow(QMainWindow):
 
         self._right_tabs = right_tabs
         splitter.addWidget(right_tabs)
+        # Stretch the right tabs side; tag panel keeps its width on resize.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([350, 850])
 
         dataset_layout.addWidget(splitter, 1)

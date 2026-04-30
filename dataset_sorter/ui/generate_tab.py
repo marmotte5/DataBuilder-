@@ -232,6 +232,15 @@ class GenerateTab(QWidget):
         root.setSpacing(10)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Splitter behaviour fixes (regression seen on macOS / high-DPI):
+        # - setChildrenCollapsible(False): drag-to-zero clipped the left
+        #   panel's content (e.g. "No model loaded" → "lo model loaded").
+        # - setHandleWidth(6): the default 1px handle is unfindable on a
+        #   Retina display.
+        # - setStretchFactor: the left controls panel keeps its width
+        #   when the window resizes; the right gallery absorbs the delta.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         # ── Left panel: controls ────────────────────────────────────────
         left_scroll = QScrollArea()
@@ -242,6 +251,11 @@ class GenerateTab(QWidget):
         # window is rendered before setSizes() applies.
         left_scroll.setMinimumWidth(380)
         left_widget = QWidget()
+        # Match the scroll area's minimum on the inner widget too. Without
+        # this, the QScrollArea (widgetResizable=True) shrinks the widget
+        # below its content's natural width and labels clip silently —
+        # there's no horizontal scrollbar to recover from it.
+        left_widget.setMinimumWidth(360)
         left = QVBoxLayout(left_widget)
         left.setContentsMargins(4, 4, 4, 4)
         left.setSpacing(8)
@@ -767,6 +781,8 @@ class GenerateTab(QWidget):
         right_layout.addWidget(thumb_scroll)
 
         splitter.addWidget(right)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([450, 550])
 
         root.addWidget(splitter)
