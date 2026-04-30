@@ -28,7 +28,7 @@ from dataset_sorter.models import TrainingConfig
 class TestPresets:
     def test_preset_names(self):
         names = get_preset_names()
-        assert len(names) == 12  # 7 standard + 5 turbo/distilled model presets
+        assert len(names) == 16  # 7 standard + 4 new model/optimizer + 5 turbo
         assert "character_lora" in names
         assert "style_lora" in names
         assert "dpo_preference" in names

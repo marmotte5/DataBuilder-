@@ -249,19 +249,34 @@ class GenerateTab(QWidget):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        # Force NO horizontal scrollbar — the inner widget's
-        # widgetResizable(True) above is supposed to match the viewport,
-        # but on macOS we've seen the inner widget overflow horizontally
-        # and the resulting horizontal scrollbar shifts content out of
-        # view (the bug that produces "lo model loaded" instead of
-        # "No model loaded"). Vertical scroll is needed because the
-        # control list is taller than any viewport.
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Default scroll policies (AsNeeded). We previously forced the
+        # horizontal scrollbar OFF to "fix" left-edge clipping, but that
+        # made things WORSE: when the splitter was dragged narrow, the
+        # inner widget's hSlider got pinned at a non-zero value with no
+        # way for the user to reset it (no scrollbar to drag). The
+        # resizeEvent override below re-zeros the scroll position on
+        # every resize so a viewport that suddenly fits doesn't leave
+        # content stranded off-screen.
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Lock a sensible minimum so form labels ("Positive prompt", "Model
         # type") don't clip when the splitter is dragged narrow or the
         # window is rendered before setSizes() applies.
         left_scroll.setMinimumWidth(380)
+        # Hook resize to reset scroll origin — the docstring above
+        # explains the rationale. We override via a private subclass so
+        # the rest of the codebase keeps using the standard QScrollArea
+        # contract.
+        _orig_resize = left_scroll.resizeEvent
+
+        def _reset_scroll_on_resize(event, _r=_orig_resize, _ls=left_scroll):
+            _r(event)
+            # Snap to zero only if the bar would otherwise be invisible
+            # (AsNeeded → no bar means no user-driven scroll, so any
+            # non-zero pinned value is a Qt quirk and never desired).
+            if not _ls.horizontalScrollBar().isVisible():
+                _ls.horizontalScrollBar().setValue(0)
+        left_scroll.resizeEvent = _reset_scroll_on_resize
         left_widget = QWidget()
         # Match the scroll area's minimum on the inner widget too. Without
         # this, the QScrollArea (widgetResizable=True) shrinks the widget
@@ -283,10 +298,21 @@ class GenerateTab(QWidget):
         left.addWidget(self._model_banner)
 
         # -- Model group --
+        # Layout split across THREE rows so cramped panels don't truncate
+        # labels ("Model path:" → "Mode") or render emoji buttons blank
+        # (macOS font fallback is unreliable for U+1F4CB / U+27F3 in Qt's
+        # default PushButton font). Action buttons use plain text labels.
         model_grp = QGroupBox("Model")
         mg = QGridLayout(model_grp)
         mg.setSpacing(6)
+        # Only the path/combo column stretches; the rest stay at sizeHint
+        # so labels never get clipped. Column 1 is the "stretch column".
+        mg.setColumnStretch(0, 0)
+        mg.setColumnStretch(1, 1)
+        mg.setColumnStretch(2, 0)
+        mg.setColumnStretch(3, 0)
 
+        # Row 0 — path + Browse
         mg.addWidget(QLabel("Model path:"), 0, 0)
         self.model_path_edit = QLineEdit()
         self.model_path_edit.setPlaceholderText("HuggingFace ID or local path...")
@@ -301,56 +327,53 @@ class GenerateTab(QWidget):
         btn_browse_model.setToolTip("Browse for a model file or directory")
         btn_browse_model.clicked.connect(self._browse_model)
         mg.addWidget(btn_browse_model, 0, 3)
-        # Tight icon buttons need a per-button style override — global
-        # QPushButton padding is 8px 20px so a 28px fixed width swallows
-        # the glyph entirely and the button renders blank. Same fix as
-        # training_tab.py.
-        _icon_btn_style = (
-            "QPushButton { padding: 4px 0px; min-width: 28px; "
-            "font-size: 14px; }"
-        )
-        btn_copy_model = QPushButton("📋")
-        btn_copy_model.setStyleSheet(_icon_btn_style)
-        btn_copy_model.setFixedWidth(36)
+
+        # Row 1 — secondary action buttons + status, in their own QHBoxLayout
+        # so they share the row 0 width without fighting the GridLayout
+        # column distribution. Icon buttons replaced with text labels
+        # (Copy / Scan) so they render reliably across platforms.
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        btn_copy_model = QPushButton("Copy")
         btn_copy_model.setToolTip("Copy model path to clipboard")
         btn_copy_model.clicked.connect(
             lambda: QApplication.clipboard().setText(self.model_path_edit.text())
         )
-        mg.addWidget(btn_copy_model, 0, 4)
-        self._btn_scan_gen = QPushButton("⟳")
-        self._btn_scan_gen.setStyleSheet(_icon_btn_style)
-        self._btn_scan_gen.setFixedWidth(36)
+        action_row.addWidget(btn_copy_model)
+        self._btn_scan_gen = QPushButton("Scan")
         self._btn_scan_gen.setToolTip("Scan for local model files")
         self._btn_scan_gen.clicked.connect(self._start_model_scan)
-        mg.addWidget(self._btn_scan_gen, 0, 5)
+        action_row.addWidget(self._btn_scan_gen)
         # "Recent ▾" — drop-in for the most-recently-loaded models.
         # Populated lazily on click from AppSettings.recent_models so the
         # list stays fresh across tab switches without polling.
         self._btn_recent_gen = QPushButton("Recent ▾")
         self._btn_recent_gen.setToolTip("Reload a recently-used model")
         self._btn_recent_gen.clicked.connect(self._show_recent_models_menu)
-        mg.addWidget(self._btn_recent_gen, 0, 7)
+        action_row.addWidget(self._btn_recent_gen)
         self._lbl_model_status = QLabel("No model")
         self._lbl_model_status.setStyleSheet(
             f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
         )
-        mg.addWidget(self._lbl_model_status, 0, 6)
+        action_row.addWidget(self._lbl_model_status, 1)
+        mg.addLayout(action_row, 1, 0, 1, 4)
         self.model_path_edit.textChanged.connect(self._update_model_status)
 
-        mg.addWidget(QLabel("Model type:"), 1, 0)
+        # Row 2 — type + precision combos
+        mg.addWidget(QLabel("Model type:"), 2, 0)
         self.model_type_combo = QComboBox()
         self.model_type_combo.setToolTip("Architecture type of the base model")
         for k, v in GEN_MODEL_TYPES.items():
             self.model_type_combo.addItem(v, k)
-        mg.addWidget(self.model_type_combo, 1, 1)
+        mg.addWidget(self.model_type_combo, 2, 1)
 
         self._lbl_precision = QLabel("Precision:")
-        mg.addWidget(self._lbl_precision, 1, 2)
+        mg.addWidget(self._lbl_precision, 2, 2)
         self.precision_combo = QComboBox()
         self.precision_combo.setToolTip("Floating-point precision for inference (bf16 recommended)")
         for k, v in GEN_PRECISIONS.items():
             self.precision_combo.addItem(v, k)
-        mg.addWidget(self.precision_combo, 1, 3)
+        mg.addWidget(self.precision_combo, 2, 3)
 
         # Load / Unload buttons
         btn_row = QHBoxLayout()
@@ -366,7 +389,9 @@ class GenerateTab(QWidget):
         self.model_status = QLabel("No model loaded")
         self.model_status.setStyleSheet(MUTED_LABEL_STYLE)
         btn_row.addWidget(self.model_status, 1)
-        mg.addLayout(btn_row, 2, 0, 1, 4)
+        # Row 3 — Load / Unload (Model type/Precision now occupy row 2 after
+        # the path-row split that fixes label-truncation on cramped panels).
+        mg.addLayout(btn_row, 3, 0, 1, 4)
 
         left.addWidget(model_grp)
 
@@ -690,11 +715,7 @@ class GenerateTab(QWidget):
         btn_browse_output.setToolTip("Choose output folder for generated images")
         btn_browse_output.clicked.connect(self._browse_output_folder)
         save_layout.addWidget(btn_browse_output, 1, 2)
-        btn_copy_output = QPushButton("📋")
-        btn_copy_output.setStyleSheet(
-            "QPushButton { padding: 4px 0px; min-width: 28px; font-size: 14px; }"
-        )
-        btn_copy_output.setFixedWidth(36)
+        btn_copy_output = QPushButton("Copy")
         btn_copy_output.setToolTip("Copy output path to clipboard")
         btn_copy_output.clicked.connect(
             lambda: QApplication.clipboard().setText(self.output_folder_edit.text())
@@ -725,6 +746,12 @@ class GenerateTab(QWidget):
 
         # ── Right panel: gallery / preview ──────────────────────────────
         right = QWidget()
+        # Hard min on the gallery side too — prevents the user from
+        # dragging the internal splitter so far left that the image
+        # preview becomes a strip. The min preview is 512x512 (see
+        # image_label below), so 540px gives a few pixels of breathing
+        # room for padding and the next/prev buttons.
+        right.setMinimumWidth(540)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
         right_layout.setSpacing(8)

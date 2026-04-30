@@ -1335,6 +1335,12 @@ class MainWindow(QMainWindow):
 
         # Main stacked widget
         main_content = QWidget()
+        # Hard minimum so the user can never drag the helper splitter so
+        # far right that the GenerateTab / Library / etc. content gets
+        # squeezed to a sliver. setChildrenCollapsible(False) only stops
+        # collapse to zero — without an explicit min on the child, the
+        # splitter happily shrinks below sensible widths.
+        main_content.setMinimumWidth(640)
         main_content_layout = QVBoxLayout(main_content)
         main_content_layout.setContentsMargins(12, 8, 8, 8)
         main_content_layout.setSpacing(8)
