@@ -1185,11 +1185,45 @@ class GenerateTab(QWidget):
         We deliberately don't re-swap the transformer of an already-loaded
         pipeline — Nunchaku's int4 transformer is a different class and
         re-installing it mid-session needs a clean reload anyway. The next
-        ``Load model`` (or LoRA add) will pick up the new flag.
+        ``Load model`` (or LoRA add) will pick up the new flag. We also
+        surface "library missing" / "wrong platform" up front so the user
+        doesn't enable the toggle, reload, and silently get unaccelerated
+        inference with no clue why.
         """
+        if not state:
+            if self._worker is not None:
+                self._worker.use_nunchaku_int4 = False
+            return
+
+        # State is True — validate the prerequisites before pretending to
+        # accept the toggle. We probe inline rather than at construction
+        # time so the user can install nunchaku without restarting the app.
+        from dataset_sorter.nunchaku_inference import is_nunchaku_available
+        if not is_nunchaku_available():
+            self.nunchaku_check.blockSignals(True)
+            self.nunchaku_check.setChecked(False)
+            self.nunchaku_check.blockSignals(False)
+            self.status_label.setText(
+                "Nunchaku not installed — pip install nunchaku (CUDA only)."
+            )
+            return
+
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                self.nunchaku_check.blockSignals(True)
+                self.nunchaku_check.setChecked(False)
+                self.nunchaku_check.blockSignals(False)
+                self.status_label.setText(
+                    "Nunchaku INT4 needs CUDA — Mac / AMD / CPU not supported."
+                )
+                return
+        except ImportError:
+            return
+
         if self._worker is not None:
-            self._worker.use_nunchaku_int4 = bool(state)
-            if state and self._worker.pipe is not None:
+            self._worker.use_nunchaku_int4 = True
+            if self._worker.pipe is not None:
                 self.status_label.setText(
                     "Nunchaku INT4 enabled — reload the model to activate."
                 )
