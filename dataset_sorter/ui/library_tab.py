@@ -546,7 +546,7 @@ class LibraryTab(QWidget):
 
         # Progress bar (hidden until scanning)
         self._progress_bar = QProgressBar()
-        self._progress_bar.setFixedHeight(3)
+        self._progress_bar.setFixedHeight(6)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setStyleSheet(
             f"QProgressBar {{ border: none; background: {COLORS['border']}; }} "

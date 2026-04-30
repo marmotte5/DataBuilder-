@@ -29,6 +29,7 @@ classifiers = [
 dependencies = [
     "PyQt6>=6.5",
     "numpy>=1.24",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
