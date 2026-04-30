@@ -220,3 +220,17 @@ def print_startup_log() -> None:
     # Also log at INFO level for file-based logging
     for line in block:
         log.info(line)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# CLI entry point: `python -m dataset_sorter.startup_log`
+# ─────────────────────────────────────────────────────────────────────────
+# Lets users dump their environment for bug reports without launching the
+# full GUI (which is slow on macOS and can crash before the diagnostics
+# print in the main_window flow). The output is identical to what
+# print_startup_log() prints during normal startup.
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(message)s")
+    print_startup_log()
