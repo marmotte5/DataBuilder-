@@ -130,8 +130,30 @@ echo.
 echo  ===============================================================
 echo     Install complete.
 echo.
-echo     To launch DataBuilder, double-click  run.bat
+echo     To launch DataBuilder, double-click the new Desktop
+echo     shortcut, or  run.bat  here in the project folder.
 echo  ===============================================================
 echo.
+
+:: ── Create a Desktop shortcut with the DataBuilder icon ────────────
+:: Skipped if anything is missing (icon, repo, etc.) so the install
+:: itself never fails because of cosmetics.
+if exist "dataset_sorter\assets\databuilder.ico" (
+    echo Creating Desktop shortcut...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$ws = New-Object -ComObject WScript.Shell;" ^
+        "$lnk = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\\DataBuilder.lnk');" ^
+        "$lnk.TargetPath = (Resolve-Path '%~dp0run.bat').Path;" ^
+        "$lnk.WorkingDirectory = (Resolve-Path '%~dp0').Path;" ^
+        "$lnk.IconLocation = (Resolve-Path '%~dp0dataset_sorter\\assets\\databuilder.ico').Path;" ^
+        "$lnk.Description = 'DataBuilder - Text-to-Image Trainer';" ^
+        "$lnk.Save()" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [ok]   Desktop shortcut "DataBuilder" created.
+    ) else (
+        echo [info] Could not create Desktop shortcut -- run.bat still works.
+    )
+    echo.
+)
 
 pause
