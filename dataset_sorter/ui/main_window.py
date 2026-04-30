@@ -1326,9 +1326,11 @@ class MainWindow(QMainWindow):
 
         self._content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._content_splitter.setChildrenCollapsible(False)
-        # 6px handle (was 4px) — easier to grab on Retina / high-DPI
-        # without dominating the layout on standard displays.
-        self._content_splitter.setHandleWidth(6)
+        # 8px handle (was 6px) — matches macOS native splitter feel and
+        # is comfortably grabbable on Retina without dominating standard
+        # displays.
+        self._content_splitter.setHandleWidth(8)
+        self._content_splitter.setOpaqueResize(True)
         content_row_layout.addWidget(self._content_splitter, 1)
 
         # Main stacked widget

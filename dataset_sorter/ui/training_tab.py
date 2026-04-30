@@ -564,10 +564,12 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         # Splitter: config (left) | logs+samples (right)
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        # Forbid drag-to-zero (clips content silently) and bump the handle
-        # so it's grabbable on Retina / high-DPI.
+        # Forbid drag-to-zero (clips content silently), bump the handle
+        # so it's grabbable on Retina / high-DPI, and keep redraw smooth
+        # during drag (default but pinned to defend against future tweaks).
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(6)
+        splitter.setHandleWidth(8)
+        splitter.setOpaqueResize(True)
 
         # Left: Configuration tabs (grouped for clarity)
         config_tabs = QTabWidget()

@@ -235,17 +235,29 @@ class GenerateTab(QWidget):
         # Splitter behaviour fixes (regression seen on macOS / high-DPI):
         # - setChildrenCollapsible(False): drag-to-zero clipped the left
         #   panel's content (e.g. "No model loaded" → "lo model loaded").
-        # - setHandleWidth(6): the default 1px handle is unfindable on a
-        #   Retina display.
+        # - setHandleWidth(8): the default 1px handle is unfindable on a
+        #   Retina display; 8px is the macOS native splitter feel.
+        # - setOpaqueResize(True): redraw children during drag (smooth
+        #   feel) rather than leaving a ghost line.
         # - setStretchFactor: the left controls panel keeps its width
         #   when the window resizes; the right gallery absorbs the delta.
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(6)
+        splitter.setHandleWidth(8)
+        splitter.setOpaqueResize(True)
 
         # ── Left panel: controls ────────────────────────────────────────
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Force NO horizontal scrollbar — the inner widget's
+        # widgetResizable(True) above is supposed to match the viewport,
+        # but on macOS we've seen the inner widget overflow horizontally
+        # and the resulting horizontal scrollbar shifts content out of
+        # view (the bug that produces "lo model loaded" instead of
+        # "No model loaded"). Vertical scroll is needed because the
+        # control list is taller than any viewport.
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Lock a sensible minimum so form labels ("Positive prompt", "Model
         # type") don't clip when the splitter is dragged narrow or the
         # window is rendered before setSizes() applies.
