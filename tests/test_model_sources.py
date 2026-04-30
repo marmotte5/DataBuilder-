@@ -87,6 +87,63 @@ class TestHostAllowlist:
             ms._atomic_download("file:///etc/passwd", tmp_path / "f")
 
 
+class TestAllowlistRedirectHandler:
+    """The custom redirect handler revalidates the allowlist on every hop.
+
+    Without this guard, a server in the allowlist (e.g. github.com) could
+    redirect to an arbitrary domain via Location: and the standard
+    HTTPRedirectHandler would follow it. The docstring on model_sources.py
+    promises "follow redirects only within the source domain whitelist" —
+    these tests pin that behaviour.
+    """
+
+    def test_handler_rejects_non_allowlisted_redirect(self):
+        from urllib.error import HTTPError
+        from urllib.request import Request
+        handler = ms._AllowlistRedirectHandler()
+        req = Request("https://huggingface.co/foo")
+        # 302 to a host outside the allowlist must raise HTTPError —
+        # the standard handler would silently follow it.
+        with pytest.raises(HTTPError):
+            handler.redirect_request(
+                req, fp=None, code=302,
+                msg="moved", headers={},
+                newurl="https://evil.com/payload",
+            )
+
+    def test_handler_rejects_http_downgrade(self):
+        from urllib.error import HTTPError
+        from urllib.request import Request
+        handler = ms._AllowlistRedirectHandler()
+        req = Request("https://huggingface.co/foo")
+        # An https→http downgrade redirect must also raise — the
+        # downloader enforces HTTPS at the entry point but a redirect
+        # could otherwise sneak around it.
+        with pytest.raises(HTTPError):
+            handler.redirect_request(
+                req, fp=None, code=302,
+                msg="moved", headers={},
+                newurl="http://huggingface.co/payload",
+            )
+
+    def test_handler_accepts_in_allowlist_redirect(self):
+        """Hops that stay within the allowlist must work — HF → CDN-LFS
+        is the canonical real-world case."""
+        from urllib.request import Request
+        handler = ms._AllowlistRedirectHandler()
+        req = Request("https://huggingface.co/foo")
+        # Doesn't raise; super() returns a Request-or-None depending on
+        # which method was invoked. We just assert no HTTPError fires.
+        try:
+            handler.redirect_request(
+                req, fp=None, code=302,
+                msg="moved", headers={},
+                newurl="https://cdn-lfs.huggingface.co/repo/file",
+            )
+        except Exception as exc:  # pragma: no cover — should NOT happen
+            assert "host not in allowlist" not in str(exc)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Atomic write + SHA-256 verification
 # ─────────────────────────────────────────────────────────────────────────

@@ -93,11 +93,21 @@ export = [
     "gguf>=0.10",
 ]
 
+# Nunchaku INT4 / NVFP4 inference (SVDQuant, ICLR 2025). Ships custom
+# CUDA kernels — gated to Linux+CUDA and Windows+CUDA. macOS / ROCm
+# users get no behaviour change because the integration silently
+# returns False when the package can't be imported.
+nunchaku = [
+    "nunchaku>=0.3; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "nunchaku>=0.3; platform_system == 'Windows' and platform_machine == 'AMD64'",
+]
+
 # ── Platform-curated convenience extras ──────────────────────────────
 # `mac` skips every CUDA / Linux-only package so `pip install ".[mac]"`
 # Just Works on Apple Silicon and Intel Macs without raising errors.
 mac = [
     "dataset-sorter[training,export,analysis]",
+    "torchao>=0.8",
     "prodigyopt>=1.0",
     "lion-pytorch>=0.1",
     "dadaptation>=3.1",
@@ -109,13 +119,14 @@ mac = [
 
 # `cuda` is the all-bells-and-whistles install for an NVIDIA Linux box.
 cuda = [
-    "dataset-sorter[training,optimizers,speed,analysis,export]",
+    "dataset-sorter[training,optimizers,speed,analysis,export,nunchaku]",
 ]
 
 # `[all]` is now safe to run on every platform thanks to the markers
-# above — incompatible packages are silently skipped by pip.
+# above — incompatible packages are silently skipped by pip. Includes
+# nunchaku on CUDA-eligible platforms (no-op marker on macOS / ARM Linux).
 all = [
-    "dataset-sorter[training,optimizers,speed,analysis,export]",
+    "dataset-sorter[training,optimizers,speed,analysis,export,nunchaku]",
 ]
 
 [project.scripts]

@@ -429,6 +429,21 @@ class GenerateWorker(QThread):
         else:
             self._device = torch.device("cpu")
 
+        # Enable best-available SDPA backends on CUDA. These are
+        # process-wide flags so once set they apply to every subsequent
+        # forward — both training and inference benefit even when the user
+        # only runs the Generate tab. Each toggle is gated on attribute
+        # presence so AMD ROCm / older PyTorch / MPS pass through cleanly.
+        if self._device.type == "cuda":
+            for attr in ("enable_flash_sdp", "enable_mem_efficient_sdp",
+                         "enable_cudnn_sdp"):
+                fn = getattr(torch.backends.cuda, attr, None)
+                if fn is not None:
+                    try:
+                        fn(True)
+                    except (RuntimeError, AttributeError) as exc:
+                        log.debug("%s() unavailable at runtime: %s", attr, exc)
+
         # Determine dtype
         dtype_map = {
             "torch.bfloat16": torch.bfloat16,
@@ -529,23 +544,51 @@ class GenerateWorker(QThread):
             # Apply TaylorSeer cache for DiT models (3-5x inference speedup)
             self._apply_taylorseer(pipe)
 
-            # torch.compile() the transformer/unet for 20-40% faster inference
+            # torch.compile() the transformer/unet for 20-40% faster inference.
+            # Try regional compilation first (compile each repeated transformer
+            # block individually). For DiT-style models with 19+ identical
+            # blocks (Flux, SD3, PixArt, Z-Image), regional gives the same
+            # runtime speedup as full-graph compilation but with 8-10× faster
+            # cold-start because PyTorch reuses the compiled graph across
+            # identical blocks. Falls back to whole-model compile if no
+            # repeated blocks are detected (UNet models like SD 1.5 / SDXL).
             if self.torch_compile_enabled:
                 _model_component = getattr(pipe, "transformer", None) or getattr(pipe, "unet", None)
                 if _model_component is not None:
+                    _mode = self.torch_compile_mode or "default"
+                    _regional_ok = False
                     try:
-                        _compiled = torch.compile(
-                            _model_component,
-                            mode=self.torch_compile_mode or "default",
-                            fullgraph=False,
-                        )
-                        if hasattr(pipe, "transformer"):
-                            pipe.transformer = _compiled
-                        else:
-                            pipe.unet = _compiled
-                        log.info(f"torch.compile applied to generation pipeline (mode={self.torch_compile_mode!r})")
+                        from dataset_sorter.speed_optimizations import apply_regional_compile
+                        n = apply_regional_compile(_model_component, mode=_mode)
+                        if n > 0:
+                            log.info(
+                                "Regional compile applied to %d blocks (mode=%s)",
+                                n, _mode,
+                            )
+                            _regional_ok = True
                     except Exception as exc:
-                        log.warning("torch.compile on pipeline failed: %s — continuing without it", exc)
+                        log.debug(
+                            "Regional compile unavailable (%s); falling back to "
+                            "full-model compile", exc,
+                        )
+
+                    if not _regional_ok:
+                        try:
+                            _compiled = torch.compile(
+                                _model_component, mode=_mode, fullgraph=False,
+                            )
+                            if hasattr(pipe, "transformer"):
+                                pipe.transformer = _compiled
+                            else:
+                                pipe.unet = _compiled
+                            log.info(
+                                f"torch.compile applied to generation pipeline (mode={_mode!r})",
+                            )
+                        except Exception as exc:
+                            log.warning(
+                                "torch.compile on pipeline failed: %s — "
+                                "continuing without it", exc,
+                            )
 
             self._emit(self.progress, 90, 100, "Finalizing...")
 

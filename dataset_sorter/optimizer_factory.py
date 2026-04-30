@@ -249,7 +249,29 @@ def get_optimizer(config: TrainingConfig, param_groups: list[dict]):
                 param_groups, lr=lr, weight_decay=config.weight_decay,
             )
         except ImportError:
-            log.warning("bitsandbytes not installed, falling back to AdamW")
+            # Tell the user WHY rather than just "not installed". bnb is
+            # Linux/CUDA-only, so on macOS / Windows / ROCm the right
+            # advice is to switch optimizer rather than try harder to
+            # install bnb. We recommend our own Marmotte optimizer first
+            # (10-20× less memory than Adam, cross-platform pure PyTorch)
+            # before falling back to plain AdamW.
+            import sys
+            if sys.platform == "darwin":
+                _hint = (
+                    "macOS lacks bitsandbytes wheels. Try Marmotte (10-20× "
+                    "less optimizer state, cross-platform) or plain AdamW."
+                )
+            elif sys.platform == "win32":
+                _hint = (
+                    "bitsandbytes Windows wheels are unreliable. Try Marmotte "
+                    "(10-20× less optimizer state, native PyTorch) or plain AdamW."
+                )
+            else:
+                _hint = "install with: pip install bitsandbytes"
+            log.warning(
+                "AdamW8bit selected but bitsandbytes is not available — %s. "
+                "Falling back to standard AdamW.", _hint,
+            )
             return torch.optim.AdamW(param_groups, lr=lr, weight_decay=config.weight_decay)
     elif config.optimizer == "Lion":
         try:

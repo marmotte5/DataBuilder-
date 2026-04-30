@@ -52,6 +52,20 @@ def _torch_info() -> list[str]:
         lines.append(f"  BF16 supported    : {bf16}")
         compile_ok = hasattr(torch, "compile")
         lines.append(f"  torch.compile     : {'yes' if compile_ok else 'no'}")
+        # Attention backend availability — surfaces which kernels we can
+        # opt into for both training and inference. Mac/CPU users see all
+        # "no", which is expected.
+        if torch.cuda.is_available():
+            backends = torch.backends.cuda
+            flash = hasattr(backends, "enable_flash_sdp")
+            mem_eff = hasattr(backends, "enable_mem_efficient_sdp")
+            cudnn_sdp = hasattr(backends, "enable_cudnn_sdp")
+            lines.append(
+                f"  SDPA backends     : "
+                f"flash={'yes' if flash else 'no'}, "
+                f"mem_eff={'yes' if mem_eff else 'no'}, "
+                f"cudnn={'yes' if cudnn_sdp else 'no'}"
+            )
     except ImportError:
         lines.append("  PyTorch           : NOT INSTALLED")
     return lines
@@ -83,6 +97,8 @@ def _package_versions() -> list[str]:
         ("python-turbojpeg", "turbojpeg"),
         ("lmdb", "lmdb"),
         ("lz4", "lz4"),
+        ("torchao", "torchao"),
+        ("nunchaku", "nunchaku"),
     ]
     lines = []
     for display, mod in packages:
@@ -204,3 +220,17 @@ def print_startup_log() -> None:
     # Also log at INFO level for file-based logging
     for line in block:
         log.info(line)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# CLI entry point: `python -m dataset_sorter.startup_log`
+# ─────────────────────────────────────────────────────────────────────────
+# Lets users dump their environment for bug reports without launching the
+# full GUI (which is slow on macOS and can crash before the diagnostics
+# print in the main_window flow). The output is identical to what
+# print_startup_log() prints during normal startup.
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(message)s")
+    print_startup_log()

@@ -526,6 +526,8 @@ def recommend(
     config.enable_tf32 = _hw["device"] == "cuda" and _hw.get("supports_bf16", False)
 
     config.sdpa = True              # PyTorch 2.0+ native SDPA (best default)
+    config.cudnn_attention = True   # cuDNN SDPA backend — ~10% faster on H100/Blackwell;
+                                    # auto-disabled on non-CUDA / cuDNN < 9.0
     config.xformers = False         # Only if SDPA unavailable
     config.flash_attention = False  # Requires manual install
     config.torch_compile = False    # Experimental, can be faster on Ampere+

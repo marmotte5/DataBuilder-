@@ -236,7 +236,16 @@ class ScanWorker(QThread):
             log.warning(f"Scan completed with {len(error_log)} error(s)")
             self.scan_errors.emit(len(error_log))
 
-        # Populate metadata cache for fast subsequent queries
+        # Hand the results to the UI BEFORE touching the metadata cache.
+        # The cache write is a best-effort optimization for subsequent
+        # queries; if SQLite hangs (read-only filesystem, broken APFS
+        # snapshot, iCloud Drive lock contention on macOS) the user
+        # should still see their dataset. Previously the order was
+        # reversed and a slow / failing cache write blocked the UI from
+        # rendering the scan results.
+        self.finished_scan.emit(entries)
+
+        # Populate metadata cache for fast subsequent queries.
         try:
             from dataset_sorter.metadata_cache import MetadataCache
             cache = MetadataCache(self.source_dir / ".metadata.db")
@@ -254,9 +263,11 @@ class ScanWorker(QThread):
                 cache.put_batch(batch)
                 log.debug(f"Metadata cache: {len(batch)} entries written")
         except Exception as e:
+            # Catches everything: OSError (disk-full / read-only /
+            # permission-denied), PermissionError on locked iCloud-Drive
+            # folders, sqlite3.OperationalError / DatabaseError on
+            # corrupt or in-use DBs.
             log.debug(f"Metadata cache update skipped: {e}")
-
-        self.finished_scan.emit(entries)
 
 
 def _unique_dest(folder_path: Path, name: str) -> Path:
