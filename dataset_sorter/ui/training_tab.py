@@ -421,18 +421,17 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_model.setToolTip("Browse for a base model file")
         btn_model.clicked.connect(self._browse_model)
         _model_btn_layout.addWidget(btn_model)
-        self._btn_scan_models = QPushButton("⟳")
+        # Action buttons use plain text labels — Mac font fallback is
+        # unreliable for emoji glyphs (📋 / ⟳) inside QPushButton, which
+        # causes them to render blank.
+        self._btn_scan_models = QPushButton("Scan")
         self._btn_scan_models.setToolTip(
             "Scan configured directories for local model files.\n"
             "Configure scan paths in Settings → Model Scan Dirs."
         )
-        self._btn_scan_models.setStyleSheet(_icon_btn_style)
-        self._btn_scan_models.setFixedWidth(36)
         self._btn_scan_models.clicked.connect(self._start_model_scan)
         _model_btn_layout.addWidget(self._btn_scan_models)
-        _btn_copy_model = QPushButton("📋")
-        _btn_copy_model.setStyleSheet(_icon_btn_style)
-        _btn_copy_model.setFixedWidth(36)
+        _btn_copy_model = QPushButton("Copy")
         _btn_copy_model.setToolTip("Copy model path to clipboard")
         _btn_copy_model.clicked.connect(
             lambda: QApplication.clipboard().setText(self.model_path_input.text())
@@ -460,9 +459,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_out.setToolTip("Browse for training output directory")
         btn_out.clicked.connect(self._browse_output)
         _out_btn_layout.addWidget(btn_out)
-        _btn_copy_out = QPushButton("📋")
-        _btn_copy_out.setStyleSheet(_icon_btn_style)
-        _btn_copy_out.setFixedWidth(36)
+        _btn_copy_out = QPushButton("Copy")
         _btn_copy_out.setToolTip("Copy output path to clipboard")
         _btn_copy_out.clicked.connect(
             lambda: QApplication.clipboard().setText(self.output_dir_input.text())
