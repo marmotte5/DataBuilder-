@@ -67,6 +67,7 @@ def get_gpu_info() -> dict:
         info["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1)
         info["bf16_support"] = torch.cuda.is_bf16_supported()
         info["flash_sdp"] = hasattr(torch.backends.cuda, "enable_flash_sdp")
+        info["cudnn_sdp"] = hasattr(torch.backends.cuda, "enable_cudnn_sdp")
         info["cudnn"] = torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None
         info["torch_version"] = torch.__version__
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():

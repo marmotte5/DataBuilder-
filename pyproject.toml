@@ -33,17 +33,17 @@ dependencies = [
 
 [project.optional-dependencies]
 # Core ML stack — works on every supported platform (Linux, macOS, Windows).
-# Floors bumped 2026-04 so newer-architecture backends (Z-Image, Flux2,
-# HiDream) work out of the box; older diffusers/transformers ship without
-# the necessary pipeline classes.
+# Floors bumped 2026-04 so cuDNN attention SDPA (PyTorch 2.6+), Modular
+# Diffusers (0.32+), and the Qwen-Image / Z-Image / Flux2 / HiDream
+# pipelines are guaranteed to load.
 training = [
-    "torch>=2.4",
-    "torchvision>=0.19",
-    "diffusers>=0.30",
-    "transformers>=4.45",
-    "accelerate>=0.32",
-    "safetensors>=0.4.3",
-    "peft>=0.12",
+    "torch>=2.6",
+    "torchvision>=0.21",
+    "diffusers>=0.32",
+    "transformers>=4.48",
+    "accelerate>=0.34",
+    "safetensors>=0.4.5",
+    "peft>=0.13",
     "lycoris-lora>=3.0",
     "Pillow>=10.0",
 ]
@@ -51,8 +51,12 @@ training = [
 # Optional optimisers. Most are pure-Python and run anywhere; bitsandbytes
 # is CUDA-only on Linux (its prebuilt Windows wheels are unreliable and
 # it has no macOS support), so it's gated by an environment marker.
+# torchao provides a cross-platform alternative for INT4 / Float8 paths
+# (CPU + CUDA + ROCm), so users on Windows / macOS still get quantization
+# even when bitsandbytes refuses to install.
 optimizers = [
     "bitsandbytes>=0.43; platform_system == 'Linux'",
+    "torchao>=0.8",
     "prodigyopt>=1.0",
     "lion-pytorch>=0.1",
     "dadaptation>=3.1",
