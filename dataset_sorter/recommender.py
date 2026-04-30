@@ -46,6 +46,10 @@ def _compute_network_rank(
         base_ranks = {"small": 32, "medium": 32, "large": 64, "very_large": 64}
     elif "zimage" in model_type:
         base_ranks = {"small": 16, "medium": 32, "large": 64, "very_large": 64}
+    elif "chroma" in model_type:
+        base_ranks = {"small": 16, "medium": 16, "large": 32, "very_large": 32}
+    elif "hidream" in model_type:
+        base_ranks = {"small": 8, "medium": 16, "large": 32, "very_large": 32}
     else:
         base_ranks = {"small": 32, "medium": 32, "large": 64, "very_large": 128}
 
@@ -147,8 +151,10 @@ def _apply_optimizer_settings(
         config.weight_decay = 0.0    # Muon uses decoupled WD internally
         config.lr_scheduler = "cosine"
     elif optimizer == "Marmotte":
+        config.weight_decay = 0.01
         config.lr_scheduler = "cosine"
-        if ("sdxl" in model_type or "pony" in model_type or "zimage" in model_type) and is_lora:
+        if ("sdxl" in model_type or "pony" in model_type or "zimage" in model_type
+                or "flux" in model_type or "chroma" in model_type) and is_lora:
             config.fused_backward_pass = True
     elif optimizer in ("GaLoreAdamW", "GaLoreAdamW8bit"):
         config.weight_decay = 0.01
@@ -181,13 +187,17 @@ def recommend(
     config.network_type = network_type
 
     is_lora = model_type.endswith("_lora")
-    is_flux = "flux" in model_type
+    is_flux = "flux" in model_type and "flux2" not in model_type
+    is_flux2 = "flux2" in model_type
     is_sd3 = "sd3" in model_type and "sd35" not in model_type
     is_sd35 = "sd35" in model_type
     is_sdxl = "sdxl" in model_type
     is_pony = "pony" in model_type
     is_sd15 = "sd15" in model_type
     is_zimage = "zimage" in model_type
+    is_chroma = "chroma" in model_type
+    is_hidream = "hidream" in model_type
+    is_flow = is_flux or is_flux2 or is_sd3 or is_sd35 or is_zimage or is_chroma
 
     # --- Diversity & size category ---
     diversity = unique_tags / max(total_tag_occurrences, 1)
@@ -205,8 +215,12 @@ def recommend(
     config.resolution = MODEL_RESOLUTIONS.get(model_type, 1024)
     if is_flux and vram_gb <= 12:
         config.resolution = 512
+    if is_flux2 and vram_gb <= 16:
+        config.resolution = 512
     if is_zimage and vram_gb <= 12:
         config.resolution = 768
+    if is_hidream and vram_gb <= 16:
+        config.resolution = 512
 
     config.enable_bucket = True
     config.bucket_reso_steps = 64
@@ -267,7 +281,7 @@ def recommend(
     _apply_optimizer_settings(config, optimizer, is_lora, model_type, vram_gb)
 
     # --- Text encoder ---
-    if is_flux:
+    if is_flux or is_flux2:
         if is_lora:
             config.train_text_encoder = False
             config.train_text_encoder_2 = False
@@ -288,6 +302,14 @@ def recommend(
             config.text_encoder_lr = config.learning_rate * 0.05 if config.train_text_encoder else 0.0
         else:
             config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
+    elif is_chroma:
+        config.train_text_encoder = False
+        config.train_text_encoder_2 = False
+        config.text_encoder_lr = 0.0
+    elif is_hidream:
+        config.train_text_encoder = False
+        config.train_text_encoder_2 = False
+        config.text_encoder_lr = 0.0
     elif is_sdxl or is_pony:
         config.train_text_encoder = True
         config.train_text_encoder_2 = vram_gb >= 24
@@ -358,8 +380,37 @@ def recommend(
     config.async_dataload = True     # Always enable async GPU prefetch
     # MeBP: only if gradient_checkpointing is off (they serve similar purpose)
     config.mebp_enabled = not config.gradient_checkpointing
-    # VJP approx: conservative — only for large models where backward is expensive
-    config.approx_vjp = is_flux and vram_gb <= 24
+    # VJP approx: conservative — only for large transformer models
+    config.approx_vjp = (is_flux or is_flux2 or is_hidream) and vram_gb <= 24
+
+    # --- GPU & memory optimizations ---
+    from dataset_sorter.hardware_detect import detect_hardware, get_available_precisions
+    _hw = detect_hardware()
+    _available = get_available_precisions(_hw["device"])
+
+    # --- TE quantization ---
+    # Quantize frozen text encoders to save VRAM on constrained setups.
+    # Biggest impact on large TEs: T5-XXL (Flux/SD3/Chroma), Qwen3 (Z-Image),
+    # ChatGLM (Kolors), Llama (HiDream).
+    if not config.train_text_encoder:
+        if vram_gb <= 12:
+            config.quantize_text_encoder = "int4"
+        elif vram_gb <= 16 and (is_flux or is_flux2 or is_sd3 or is_sd35 or
+                                is_chroma or is_zimage or is_hidream):
+            config.quantize_text_encoder = "int8"
+        elif vram_gb <= 24 and (is_hidream or is_flux2):
+            config.quantize_text_encoder = "int8"
+        else:
+            config.quantize_text_encoder = "none"
+    else:
+        config.quantize_text_encoder = "none"
+
+    # --- torch.compile ---
+    # Recommend on Ampere+ for DiT models where compile gives 20-40% speedup.
+    # Skip for UNet models (SD 1.5, SDXL) where overhead often exceeds gains.
+    if _hw["device"] == "cuda" and _hw.get("supports_bf16", False):
+        if is_flow and total_images >= 200:
+            config.torch_compile = True
 
     # --- EMA with CPU offloading ---
     if is_lora:
@@ -387,14 +438,22 @@ def recommend(
         config.ema_cpu_offload = True
 
     # --- Epochs ---
-    if is_flux and is_lora:
+    if (is_flux or is_flux2) and is_lora:
         epoch_map = {"small": 5, "medium": 3, "large": 1, "very_large": 1}
-    elif is_flux and not is_lora:
+    elif (is_flux or is_flux2) and not is_lora:
         epoch_map = {"small": 3, "medium": 2, "large": 1, "very_large": 1}
     elif is_zimage and is_lora:
         epoch_map = {"small": 8, "medium": 5, "large": 2, "very_large": 1}
     elif is_zimage and not is_lora:
         epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
+    elif is_chroma and is_lora:
+        epoch_map = {"small": 6, "medium": 4, "large": 2, "very_large": 1}
+    elif is_chroma and not is_lora:
+        epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
+    elif is_hidream and is_lora:
+        epoch_map = {"small": 4, "medium": 3, "large": 1, "very_large": 1}
+    elif is_hidream and not is_lora:
+        epoch_map = {"small": 3, "medium": 2, "large": 1, "very_large": 1}
     elif is_lora:
         if is_sd15:
             epoch_map = {"small": 15, "medium": 10, "large": 3, "very_large": 1}
@@ -419,16 +478,20 @@ def recommend(
         config.total_steps = math.ceil(config.total_steps * 1.25)
         config.epochs = max(config.epochs, math.ceil(config.epochs * 1.25))
 
-    if is_flux and is_lora:
+    if (is_flux or is_flux2) and is_lora:
         if config.total_steps > 2000 and size_cat in ("small", "medium"):
             config.total_steps = 1500
-    elif is_flux and not is_lora:
+    elif (is_flux or is_flux2) and not is_lora:
         if config.total_steps > 3000 and size_cat in ("small", "medium"):
             config.total_steps = 2500
 
     if is_zimage and is_lora:
         if config.total_steps > 3000 and size_cat in ("small", "medium"):
             config.total_steps = 2500
+
+    if is_hidream and is_lora:
+        if config.total_steps > 2000 and size_cat in ("small", "medium"):
+            config.total_steps = 1500
 
     # Warmup
     config.warmup_steps = max(10, min(config.total_steps // 10, 200))
@@ -440,7 +503,7 @@ def recommend(
         config.lr_scheduler = "cosine"
     elif optimizer in ("DAdaptAdam", "AdamWScheduleFree"):
         config.lr_scheduler = "constant"
-    elif optimizer == "Muon":
+    elif optimizer in ("Muon", "Marmotte"):
         config.lr_scheduler = "cosine"
     elif size_cat == "very_large":
         config.lr_scheduler = "cosine_with_restarts"
@@ -485,7 +548,7 @@ def recommend(
         config.sample_every_n_steps = 500
 
     config.sample_sampler = "euler_a"
-    if is_flux or is_sd3 or is_sd35 or is_zimage:
+    if is_flow:
         config.sample_sampler = "euler"
         config.sample_cfg_scale = 1.0  # Flow models use low/no CFG
         config.sample_steps = 28
@@ -509,11 +572,7 @@ def recommend(
     config.save_last_n_checkpoints = 3
     config.save_precision = "bf16"
 
-    # --- GPU & memory optimizations ---
-    # Recommend the best precision for the detected hardware.
-    from dataset_sorter.hardware_detect import detect_hardware, get_available_precisions
-    _hw = detect_hardware()
-    _available = get_available_precisions(_hw["device"])
+    # --- Precision ---
     if "bf16" in _available:
         config.mixed_precision = "bf16"
     elif "fp16" in _available:
@@ -535,9 +594,13 @@ def recommend(
     config.cudnn_benchmark = True
 
     # fp8 base model: saves ~50% VRAM, needed for large models on limited VRAM
-    if is_flux and vram_gb <= 16:
+    if (is_flux or is_flux2) and vram_gb <= 16:
         config.fp8_base_model = True
     elif is_zimage and vram_gb <= 12:
+        config.fp8_base_model = True
+    elif is_hidream and vram_gb <= 24:
+        config.fp8_base_model = True
+    elif is_chroma and vram_gb <= 16:
         config.fp8_base_model = True
     else:
         config.fp8_base_model = False
@@ -548,28 +611,23 @@ def recommend(
     # Flow models (Flux, SD3, Z-Image) use lower values or zero.
     if is_pony:
         config.noise_offset = 0.0357
-    elif is_flux or is_sd3 or is_sd35 or is_zimage:
+    elif is_flow:
         config.noise_offset = 0.05
     else:
         config.noise_offset = 0.1
     config.adaptive_noise_scale = 0.0
 
-    if is_flux or is_sd3 or is_sd35:
+    if is_flow:
         config.min_snr_gamma = 0
         config.debiased_estimation = True
     else:
         config.min_snr_gamma = 5
         config.debiased_estimation = False
 
-    if is_lora and not (is_flux or is_sd3 or is_sd35):
+    if is_lora and not is_flow:
         config.ip_noise_gamma = 0.1
 
-    if is_flux:
-        config.guidance_scale = 1.0
-    elif is_zimage:
-        config.guidance_scale = 1.0
-    else:
-        config.guidance_scale = 1.0
+    config.guidance_scale = 1.0
 
     if not is_lora and optimizer in ("AdamW", "AdamW8bit"):
         config.weight_decay = 0.1
@@ -577,17 +635,20 @@ def recommend(
     if is_sdxl or is_pony:
         config.multires_noise_discount = 0.3
         config.multires_noise_iterations = 6
-    elif is_flux:
+    elif is_flux or is_flux2:
         config.multires_noise_discount = 0.1
         config.multires_noise_iterations = 6
-    elif is_zimage:
+    elif is_zimage or is_chroma:
         config.multires_noise_discount = 0.2
+        config.multires_noise_iterations = 6
+    elif is_hidream:
+        config.multires_noise_discount = 0.15
         config.multires_noise_iterations = 6
 
     # Gradient clipping — flow model full finetunes benefit from tighter
     # clipping (0.01) which allows training at higher LR for longer without
     # overcooking. LoRA and epsilon models use standard 1.0.
-    if not is_lora and (is_flux or is_sd3 or is_sd35):
+    if not is_lora and is_flow:
         config.max_grad_norm = 0.01
     else:
         config.max_grad_norm = 1.0
@@ -595,7 +656,8 @@ def recommend(
     # --- Contextual notes ---
     config.notes = _build_notes(
         model_type, vram_gb, total_images, diversity, size_cat,
-        is_lora, is_flux, is_sd3, is_sd35, is_pony, is_zimage, is_sd15,
+        is_lora, is_flux, is_flux2, is_sd3, is_sd35, is_pony,
+        is_zimage, is_sd15, is_chroma, is_hidream, is_flow,
         max_bucket_images, num_active_buckets,
         optimizer, network_type, config, used_fallback,
     )
@@ -610,13 +672,13 @@ def recommend(
 def _build_notes(
     model_type: str, vram_gb: int, total_images: int,
     diversity: float, size_cat: str, is_lora: bool,
-    is_flux: bool, is_sd3: bool, is_sd35: bool, is_pony: bool, is_zimage: bool, is_sd15: bool,
+    is_flux: bool, is_flux2: bool, is_sd3: bool, is_sd35: bool, is_pony: bool,
+    is_zimage: bool, is_sd15: bool, is_chroma: bool, is_hidream: bool, is_flow: bool,
     max_bucket_images: int, num_active_buckets: int,
     optimizer: str, network_type: str,
     config: TrainingConfig, used_fallback: bool,
 ) -> list[str]:
     notes: list[str] = []
-    is_sd15 = "sd15" in model_type
 
     if used_fallback:
         notes.append(
@@ -794,6 +856,29 @@ def _build_notes(
             "SOAP: strong convergence on DiT models (Flux, SD3, Z-Image). "
             "Use cosine scheduler with weight_decay=0.01."
         )
+    elif optimizer == "Marmotte":
+        notes.append(
+            "Marmotte v2: DataBuilder's custom optimizer. 10-20x less memory than AdamW "
+            "via per-channel adaptive LR + 1-bit momentum with rank-k error feedback. "
+            "LR 1e-4 (LoRA) or 5e-5 (full) with cosine scheduler. "
+            "Ideal for VRAM-constrained setups (8-16 GB)."
+        )
+        if is_lora:
+            notes.append(
+                "Marmotte + LoRA: excellent combo — ultra-low optimizer memory means "
+                "you can use higher rank without running out of VRAM. "
+                "Convergence quality matches AdamW8bit in community tests."
+            )
+        if is_flow:
+            notes.append(
+                "Marmotte + flow models (Flux/SD3/Z-Image/Chroma): proven stable. "
+                "Use cosine scheduler with warmup_steps=50."
+            )
+        if vram_gb <= 12:
+            notes.append(
+                "Marmotte is the recommended optimizer at 12 GB or below — "
+                "other optimizers struggle with memory at this level."
+            )
     elif optimizer == "Muon":
         notes.append(
             "Muon: experimental high-LR optimizer (0.02). Best for DiT-based models. "
@@ -884,16 +969,65 @@ def _build_notes(
                 notes.append("WARNING: Z-Image full finetune not viable below 24 GB. Use LoRA.")
         notes.append("Z-Image: use Base variant (not Turbo) as training checkpoint.")
 
+    if is_flux2:
+        if is_lora:
+            notes.append(
+                "Flux 2: evolved MMDiT with LLM text encoder (Mistral-3/Qwen-3). "
+                "Both TEs frozen. Similar training dynamics to Flux 1 but with "
+                "richer text understanding. Rank 16-32 recommended."
+            )
+            if vram_gb < 16:
+                notes.append("WARNING: Flux 2 LoRA not viable below 16 GB VRAM.")
+        else:
+            notes.append(
+                "Flux 2 full finetune: large model with LLM TE. "
+                "Requires 48+ GB VRAM minimum."
+            )
+            if vram_gb < 48:
+                notes.append("WARNING: Flux 2 full finetune not viable below 48 GB. Use LoRA.")
+
+    if is_chroma:
+        if is_lora:
+            notes.append(
+                "Chroma: T5-only flow matching model (no CLIP). "
+                "Text encoder is always frozen. Rank 16-32 recommended. "
+                "Similar to Flux training dynamics but single-TE architecture."
+            )
+        else:
+            notes.append(
+                "Chroma full finetune: requires 24+ GB VRAM. "
+                "T5 encoder frozen — only transformer is trainable."
+            )
+            if vram_gb < 24:
+                notes.append("WARNING: Chroma full finetune not viable below 24 GB. Use LoRA.")
+
+    if is_hidream:
+        if is_lora:
+            notes.append(
+                "HiDream: large DiT with 4 text encoders (CLIP-L + CLIP-G + T5-XXL + Llama). "
+                "All TEs frozen. Very VRAM-hungry — use low rank (8-16) and fp8 base model. "
+                "TE quantization (INT8/INT4) strongly recommended to fit on 24 GB."
+            )
+            if vram_gb < 16:
+                notes.append("WARNING: HiDream LoRA not viable below 16 GB VRAM.")
+        else:
+            notes.append(
+                "HiDream full finetune: extremely large model. "
+                "Requires 48+ GB VRAM minimum with fp8."
+            )
+            if vram_gb < 48:
+                notes.append("WARNING: HiDream full finetune not viable below 48 GB. Use LoRA.")
+
     if not is_lora:
         notes.append("Full finetune: save checkpoints every 100-200 steps.")
-        if config.max_grad_norm <= 0.1 and (is_flux or is_sd3 or is_sd35):
+        if config.max_grad_norm <= 0.1 and is_flow:
             notes.append(
                 f"Gradient clipping set to {config.max_grad_norm} (tighter than default). "
                 "This allows training at higher LR for longer without overcooking — "
                 "proven for flow model full finetunes."
             )
         if config.use_ema:
-            if is_flux or is_zimage:
+            if is_flux or is_flux2 or is_zimage or is_chroma or is_hidream:
                 notes.append(
                     f"EMA on {model_type}: large transformers drift easily during training. "
                     "Save both EMA and non-EMA checkpoints, then compare at inference — "
@@ -921,15 +1055,76 @@ def _build_notes(
             f"{config.lora_plus_ratio:.0f}x higher LR than lora_A for ~30% faster convergence."
         )
 
+    # TE quantization
+    if config.quantize_text_encoder != "none":
+        quant_label = "INT4" if config.quantize_text_encoder == "int4" else "INT8"
+        te_list = []
+        if is_flux or is_flux2 or is_sd3 or is_sd35 or is_chroma:
+            te_list.append("T5-XXL")
+        if is_zimage:
+            te_list.append("Qwen3")
+        if is_hidream:
+            te_list.append("Llama + T5-XXL")
+        te_names = " + ".join(te_list) if te_list else "text encoder"
+        notes.append(
+            f"TE quantization: {quant_label} applied to frozen {te_names}. "
+            f"Saves ~{'3-6' if quant_label == 'INT4' else '2-3'} GB VRAM. "
+            "Requires bitsandbytes (NVIDIA) or torchao (cross-platform)."
+        )
+
+    # torch.compile
+    if config.torch_compile:
+        notes.append(
+            "torch.compile enabled: 20-40% training speedup on Ampere+ GPUs. "
+            "First epoch is ~2-5 min slower (compilation). "
+            "Recommended for runs of 500+ steps where the upfront cost pays off."
+        )
+
+    # SpeeD
+    if config.speed_asymmetric:
+        notes.append(
+            "SpeeD asymmetric sampling (CVPR 2025): focuses training on "
+            "informative timesteps. ~3x effective speedup with near-zero overhead."
+        )
+    if config.speed_change_aware:
+        notes.append(
+            "SpeeD change-aware weighting: upweights timesteps where the model "
+            "changes most, accelerating convergence on hard regions."
+        )
+
+    # MeBP
+    if config.mebp_enabled:
+        notes.append(
+            "MeBP (memory-efficient backprop): checkpoint-free alternative to "
+            "gradient checkpointing. Saves ~30% VRAM vs no checkpointing, "
+            "with only ~5% speed overhead (vs ~30% for gradient checkpointing)."
+        )
+
+    # VJP approximation
+    if config.approx_vjp:
+        notes.append(
+            "Approximate VJP: uses random projections for the backward pass. "
+            "Saves ~15-20% VRAM on large transformers. Slight noise in gradients "
+            "but convergence quality is preserved for LoRA training."
+        )
+
+    # Nunchaku inference tip
+    if is_flow and is_lora:
+        notes.append(
+            "TIP: After training, use Nunchaku INT4 in the Generate tab for "
+            "~3x faster inference on RTX 4090 (SVDQuant, ICLR 2025). "
+            "Compatible with Flux, Z-Image, Sana, PixArt LoRAs."
+        )
+
     # GPU recommendation
     try:
         import torch
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            notes.append("Apple Metal (MPS) detected. PyTorch 2.1+ recommended for best performance.")
+            notes.append("Apple Metal (MPS) detected. PyTorch 2.6+ recommended for best performance.")
         else:
-            notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
+            notes.append("CUDA 12.4+ with PyTorch 2.6+ recommended for best performance.")
     except (ImportError, OSError):
-        notes.append("CUDA 12.4+ with PyTorch 2.5+ recommended for best performance.")
+        notes.append("CUDA 12.4+ with PyTorch 2.6+ recommended for best performance.")
 
     return notes
 
@@ -1061,12 +1256,18 @@ def format_config(config: TrainingConfig) -> str:
         lines.append(f"    TE LR            {config.text_encoder_lr:.2e}")
     else:
         lines.append(f"    TE LR            -- (frozen)")
-    if "flux" in config.model_type:
+    if "flux2" in config.model_type:
+        lines.append(f"    Note             LLM TE (Mistral/Qwen) frozen")
+    elif "flux" in config.model_type:
         lines.append(f"    Note             T5-XXL & CLIP-L frozen (recommended)")
     elif "sd3" in config.model_type:
         lines.append(f"    Note             T5 frozen, CLIP trainable")
     elif "zimage" in config.model_type:
-        lines.append(f"    Note             S3-DiT CLIP encoder")
+        lines.append(f"    Note             Qwen3 TE")
+    elif "chroma" in config.model_type:
+        lines.append(f"    Note             T5-only (no CLIP), always frozen")
+    elif "hidream" in config.model_type:
+        lines.append(f"    Note             4 TEs (CLIP-L+G, T5, Llama), all frozen")
     if config.cache_text_encoder:
         lines.append(f"    Cache TE         Yes{' (to disk)' if config.cache_text_encoder_to_disk else ' (RAM)'}")
     lines.append("")
@@ -1099,9 +1300,28 @@ def format_config(config: TrainingConfig) -> str:
     lines.append(f"    cuDNN benchmark       {'Yes' if config.cudnn_benchmark else 'No'}")
     if config.fp8_base_model:
         lines.append(f"    fp8 base model        Yes (saves ~50% model VRAM)")
+    if getattr(config, "quantize_text_encoder", "none") != "none":
+        lines.append(f"    TE quantization       {config.quantize_text_encoder.upper()}")
     if config.torch_compile:
-        lines.append(f"    torch.compile         Yes (experimental)")
+        lines.append(f"    torch.compile         Yes (20-40% speedup on Ampere+)")
     lines.append("")
+
+    # ── Speed Optimizations ──
+    speed_opts = []
+    if getattr(config, "speed_asymmetric", False):
+        speed_opts.append("SpeeD asymmetric")
+    if getattr(config, "speed_change_aware", False):
+        speed_opts.append("SpeeD change-aware")
+    if getattr(config, "mebp_enabled", False):
+        speed_opts.append("MeBP")
+    if getattr(config, "approx_vjp", False):
+        speed_opts.append("Approx VJP")
+    if getattr(config, "async_dataload", False):
+        speed_opts.append("Async dataload")
+    if speed_opts:
+        lines.append(f"  -- Speed Optimizations {thin[24:]}")
+        lines.append(f"    Active               {', '.join(speed_opts)}")
+        lines.append("")
 
     # ── Dataset & Tags ──
     lines.append(f"  -- Dataset & Tags {thin[19:]}")
@@ -1264,9 +1484,20 @@ def export_onetrainer_toml(config: TrainingConfig) -> str:
     lines.append(f"cudnn_benchmark = {str(config.cudnn_benchmark).lower()}")
     lines.append(f"torch_compile = {str(config.torch_compile).lower()}")
     lines.append(f"fp8_base_model = {str(config.fp8_base_model).lower()}")
+    if getattr(config, "quantize_text_encoder", "none") != "none":
+        lines.append(f'quantize_text_encoder = "{config.quantize_text_encoder}"')
     if config.fused_backward_pass:
         lines.append(f"fused_backward_pass = true")
     lines.append("")
+
+    if getattr(config, "speed_asymmetric", False) or getattr(config, "mebp_enabled", False):
+        lines.append("[speed]")
+        lines.append(f"speed_asymmetric = {str(getattr(config, 'speed_asymmetric', False)).lower()}")
+        lines.append(f"speed_change_aware = {str(getattr(config, 'speed_change_aware', False)).lower()}")
+        lines.append(f"mebp_enabled = {str(getattr(config, 'mebp_enabled', False)).lower()}")
+        lines.append(f"approx_vjp = {str(getattr(config, 'approx_vjp', False)).lower()}")
+        lines.append(f"async_dataload = {str(getattr(config, 'async_dataload', True)).lower()}")
+        lines.append("")
 
     if config.optimizer == "Adafactor":
         lines.append("[optimizer.adafactor]")
@@ -1342,7 +1573,19 @@ def export_kohya_json(config: TrainingConfig) -> str:
         "xformers": config.xformers,
         "cudnn_benchmark": config.cudnn_benchmark,
         "fp8_base": config.fp8_base_model,
+        "torch_compile": config.torch_compile,
     }
+
+    if getattr(config, "quantize_text_encoder", "none") != "none":
+        data["quantize_text_encoder"] = config.quantize_text_encoder
+
+    if getattr(config, "speed_asymmetric", False):
+        data["speed_asymmetric"] = True
+        data["speed_change_aware"] = getattr(config, "speed_change_aware", False)
+    if getattr(config, "mebp_enabled", False):
+        data["mebp_enabled"] = True
+    if getattr(config, "approx_vjp", False):
+        data["approx_vjp"] = True
 
     # Network (LoRA/DoRA)
     if config.network_type != "full":
