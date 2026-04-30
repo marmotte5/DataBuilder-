@@ -323,6 +323,13 @@ class GenerateTab(QWidget):
         self._btn_scan_gen.setToolTip("Scan for local model files")
         self._btn_scan_gen.clicked.connect(self._start_model_scan)
         mg.addWidget(self._btn_scan_gen, 0, 5)
+        # "Recent ▾" — drop-in for the most-recently-loaded models.
+        # Populated lazily on click from AppSettings.recent_models so the
+        # list stays fresh across tab switches without polling.
+        self._btn_recent_gen = QPushButton("Recent ▾")
+        self._btn_recent_gen.setToolTip("Reload a recently-used model")
+        self._btn_recent_gen.clicked.connect(self._show_recent_models_menu)
+        mg.addWidget(self._btn_recent_gen, 0, 7)
         self._lbl_model_status = QLabel("No model")
         self._lbl_model_status.setStyleSheet(
             f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
@@ -387,7 +394,19 @@ class GenerateTab(QWidget):
         pg = QVBoxLayout(prompt_grp)
         pg.setSpacing(6)
 
-        pg.addWidget(QLabel("Positive prompt:"))
+        # Positive prompt header with a History dropdown so users can
+        # recall a previous prompt without scrolling through their notes.
+        pos_header = QHBoxLayout()
+        pos_header.setContentsMargins(0, 0, 0, 0)
+        pos_header.setSpacing(6)
+        pos_header.addWidget(QLabel("Positive prompt:"))
+        pos_header.addStretch()
+        self._btn_prompt_history = QPushButton("History ▾")
+        self._btn_prompt_history.setToolTip("Restore a recently-used prompt")
+        self._btn_prompt_history.clicked.connect(self._show_prompt_history_menu)
+        pos_header.addWidget(self._btn_prompt_history)
+        pg.addLayout(pos_header)
+
         self.positive_prompt = QTextEdit()
         self.positive_prompt.setPlaceholderText(
             "masterpiece, best quality, 1girl, detailed eyes, beautiful lighting..."
@@ -976,6 +995,109 @@ class GenerateTab(QWidget):
         if path:
             self.model_path_edit.setText(path)
 
+    def _show_recent_models_menu(self):
+        """Drop a popup with the most-recently-loaded models.
+
+        Lazy-built on every click so the list stays fresh after a load
+        (no need to re-render the toolbar). Picking an entry just
+        populates the line edit — the user still has to click Load to
+        avoid a side-effecty single-click that allocates GPU memory.
+        """
+        from PyQt6.QtWidgets import QMenu
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            recents = list(settings.recent_models)
+        except Exception:
+            recents = []
+
+        menu = QMenu(self)
+        if not recents:
+            placeholder = menu.addAction("(no recent models)")
+            placeholder.setEnabled(False)
+        else:
+            for path in recents[:10]:
+                # Show just the trailing component for HF ids and locals
+                # alike — full paths are too wide for a typical popup.
+                label = path if "/" not in path else path.split("/", 1)[-1]
+                # Truncate very long paths so the menu stays readable.
+                if len(label) > 60:
+                    label = "…" + label[-58:]
+                act = menu.addAction(label)
+                act.setToolTip(path)
+                act.triggered.connect(
+                    lambda checked=False, p=path: self.model_path_edit.setText(p)
+                )
+            menu.addSeparator()
+            clear = menu.addAction("Clear recent")
+            clear.triggered.connect(self._clear_recent_models)
+
+        pos = self._btn_recent_gen.mapToGlobal(
+            self._btn_recent_gen.rect().bottomLeft()
+        )
+        menu.exec(pos)
+
+    def _clear_recent_models(self):
+        """Wipe the persisted recent_models list."""
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.recent_models = []
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not clear recent models: %s", exc)
+
+    def _show_prompt_history_menu(self):
+        """Drop a popup with recently-used positive prompts.
+
+        Each entry shows a truncated single-line preview; clicking
+        replaces the current prompt with the full text. Persisted via
+        AppSettings.prompt_history (capped at 25 entries).
+        """
+        from PyQt6.QtWidgets import QMenu
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            history = list(settings.prompt_history)
+        except Exception:
+            history = []
+
+        menu = QMenu(self)
+        if not history:
+            placeholder = menu.addAction("(no prompts yet — generate one!)")
+            placeholder.setEnabled(False)
+        else:
+            for prompt in history[:20]:
+                # Single-line preview: collapse whitespace, truncate at
+                # 70 chars, append ellipsis. The full prompt lives in
+                # the action's tooltip and the on-click setText().
+                preview = " ".join(prompt.split())
+                if len(preview) > 70:
+                    preview = preview[:68] + "…"
+                act = menu.addAction(preview)
+                act.setToolTip(prompt)
+                act.triggered.connect(
+                    lambda checked=False, p=prompt: self.positive_prompt.setPlainText(p)
+                )
+            menu.addSeparator()
+            clear = menu.addAction("Clear history")
+            clear.triggered.connect(self._clear_prompt_history)
+
+        pos = self._btn_prompt_history.mapToGlobal(
+            self._btn_prompt_history.rect().bottomLeft()
+        )
+        menu.exec(pos)
+
+    def _clear_prompt_history(self):
+        """Wipe the persisted prompt history list."""
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.clear_prompt_history()
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not clear prompt history: %s", exc)
+
     def _start_model_scan(self):
         """Background scan for local model files to populate the autocompleter."""
         if self._scan_worker_gen is not None and self._scan_worker_gen.isRunning():
@@ -1083,6 +1205,15 @@ class GenerateTab(QWidget):
         """Handle successful model load: update status and enable generation."""
         self.status_label.setText(message)
         self.model_status.setText(message)
+        # Push the path to the recent-models list so the next session
+        # can one-click reload it.
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.add_recent_model(self.model_path_edit.text().strip())
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not save recent model: %s", exc)
         self._model_banner.setText(f"Model loaded: {self.model_path_edit.text().split('/')[-1]}")
         self._model_banner.setStyleSheet(
             f"background-color: {COLORS.get('success_bg', '#1a3d1a')}; "
@@ -1258,6 +1389,22 @@ class GenerateTab(QWidget):
 
     def _on_image_generated(self, pil_image, index: int, info: str):
         """Add a newly generated image to the gallery, evicting old ones if over capacity."""
+        # Persist the prompt that produced this image so the History
+        # dropdown can recall it. Only push on the FIRST image of a batch
+        # (index == 0) so a 4-image generation doesn't bubble the same
+        # prompt 4 times — add_prompt_to_history dedups but we'd still
+        # fire 4 disk writes.
+        if index == 0:
+            try:
+                prompt = self.positive_prompt.toPlainText().strip()
+                if prompt:
+                    from dataset_sorter.app_settings import AppSettings
+                    settings = AppSettings.load()
+                    settings.add_prompt_to_history(prompt)
+                    settings.save()
+            except Exception as exc:
+                log.debug("Could not save prompt history: %s", exc)
+
         # Auto-save to output folder
         save_path = self._auto_save_image(pil_image)
         if save_path:

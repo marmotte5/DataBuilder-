@@ -37,6 +37,7 @@ _CONFIG_DIR_ENV = "DATABUILDER_CONFIG_DIR"
 _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "databuilder"
 _SETTINGS_FILE = "settings.json"
 _MAX_RECENT = 10
+_MAX_PROMPT_HISTORY = 25
 
 
 @dataclass
@@ -78,6 +79,20 @@ class AppSettings:
     # Last-active project name — reopened automatically on launch so the
     # user resumes where they left off. `None` means "show welcome dialog".
     current_project: str | None = None
+
+    # ── Recent models ──────────────────────────────────────────────────
+    # Most-recently-loaded base models (HF ids or local paths). Pushed by
+    # the Generate / Train tabs every time a model is loaded so users can
+    # one-click reload the same checkpoint instead of re-typing or
+    # re-browsing. Capped at _MAX_RECENT entries (most recent first).
+    recent_models: list[str] = field(default_factory=list)
+
+    # ── Prompt history ─────────────────────────────────────────────────
+    # Recently-used positive prompts in the Generate tab. Pushed after
+    # every successful generation so the user can recall prior prompts
+    # without leaving the app to dig through their notes. Capped at
+    # _MAX_PROMPT_HISTORY entries.
+    prompt_history: list[str] = field(default_factory=list)
 
     # ── UI preferences ─────────────────────────────────────────────────
     ui_preferences: dict[str, Any] = field(default_factory=dict)
@@ -145,6 +160,32 @@ class AppSettings:
         if name in self.recent_projects:
             self.recent_projects.remove(name)
 
+    def add_recent_model(self, path: str) -> None:
+        """Push *path* (HF id or local) to the front of recent_models."""
+        if not path:
+            return
+        if path in self.recent_models:
+            self.recent_models.remove(path)
+        self.recent_models.insert(0, path)
+        self.recent_models = self.recent_models[:_MAX_RECENT]
+
+    def remove_recent_model(self, path: str) -> None:
+        if path in self.recent_models:
+            self.recent_models.remove(path)
+
+    def add_prompt_to_history(self, prompt: str) -> None:
+        """Push *prompt* to the front of prompt_history, dedup + cap."""
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return
+        if prompt in self.prompt_history:
+            self.prompt_history.remove(prompt)
+        self.prompt_history.insert(0, prompt)
+        self.prompt_history = self.prompt_history[:_MAX_PROMPT_HISTORY]
+
+    def clear_prompt_history(self) -> None:
+        self.prompt_history = []
+
     # ─────────────────────────────────────────────────────────────────
     # Serialisation helpers
     # ─────────────────────────────────────────────────────────────────
@@ -168,6 +209,10 @@ class AppSettings:
                     log.debug("Could not parse path for %s: %s", key, exc)
         if "recent_projects" in d and isinstance(d["recent_projects"], list):
             settings.recent_projects = [str(p) for p in d["recent_projects"]][:_MAX_RECENT]
+        if "recent_models" in d and isinstance(d["recent_models"], list):
+            settings.recent_models = [str(p) for p in d["recent_models"]][:_MAX_RECENT]
+        if "prompt_history" in d and isinstance(d["prompt_history"], list):
+            settings.prompt_history = [str(p) for p in d["prompt_history"]][:_MAX_PROMPT_HISTORY]
         if "current_project" in d and d["current_project"] is not None:
             settings.current_project = str(d["current_project"])
         if "ui_preferences" in d and isinstance(d["ui_preferences"], dict):

@@ -438,6 +438,13 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             lambda: QApplication.clipboard().setText(self.model_path_input.text())
         )
         _model_btn_layout.addWidget(_btn_copy_model)
+        # Recent ▾ — symmetric with the Generate tab. Populated lazily on
+        # click from AppSettings.recent_models so the same list is shared
+        # across both tabs.
+        self._btn_recent_train = QPushButton("Recent ▾")
+        self._btn_recent_train.setToolTip("Reload a recently-used base model")
+        self._btn_recent_train.clicked.connect(self._show_recent_models_menu)
+        _model_btn_layout.addWidget(self._btn_recent_train)
         paths_grid.addWidget(_model_btn_widget, 0, 2)
 
         paths_grid.addWidget(self._muted("Output Dir"), 1, 0)
@@ -1121,6 +1128,54 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         if path:
             self.model_path_input.setText(path)
 
+    def _show_recent_models_menu(self):
+        """Drop a popup with the most-recently-loaded models.
+
+        Shares the same AppSettings.recent_models list as the Generate
+        tab so a model loaded in one tab shows up in the other. Lazy
+        population keeps the list fresh after a load without polling.
+        """
+        from PyQt6.QtWidgets import QMenu
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            recents = list(settings.recent_models)
+        except Exception:
+            recents = []
+
+        menu = QMenu(self)
+        if not recents:
+            placeholder = menu.addAction("(no recent models)")
+            placeholder.setEnabled(False)
+        else:
+            for path in recents[:10]:
+                label = path if "/" not in path else path.split("/", 1)[-1]
+                if len(label) > 60:
+                    label = "…" + label[-58:]
+                act = menu.addAction(label)
+                act.setToolTip(path)
+                act.triggered.connect(
+                    lambda checked=False, p=path: self.model_path_input.setText(p)
+                )
+            menu.addSeparator()
+            clear = menu.addAction("Clear recent")
+            clear.triggered.connect(self._clear_recent_models)
+
+        pos = self._btn_recent_train.mapToGlobal(
+            self._btn_recent_train.rect().bottomLeft()
+        )
+        menu.exec(pos)
+
+    def _clear_recent_models(self):
+        """Wipe the persisted recent_models list."""
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.recent_models = []
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not clear recent models: %s", exc)
+
     def _browse_output(self):
         """Open a directory picker for selecting the training output directory."""
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
@@ -1371,6 +1426,16 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         if not output_dir:
             self._log("ERROR: No output directory specified.")
             return
+
+        # Push to recent_models list — the same one the Generate tab
+        # shares — so users can one-click reload it next session.
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.add_recent_model(model_path)
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not save recent model: %s", exc)
 
         # Security: trust_remote_code architectures will execute custom Python
         # from the HuggingFace repo at training start. Confirm before kicking
