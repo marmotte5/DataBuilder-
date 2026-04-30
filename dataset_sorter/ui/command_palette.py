@@ -425,6 +425,9 @@ class CommandPalette(QDialog):
             logging.getLogger(__name__).exception(
                 "Command palette action failed: %s", cmd.name,
             )
+            parent = self.parent()
+            if parent is not None and hasattr(parent, '_toast'):
+                parent._toast(f"Action failed: {cmd.name}", "error")
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 

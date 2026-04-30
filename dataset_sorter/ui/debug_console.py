@@ -427,13 +427,13 @@ class DebugConsole(QWidget):
             self._error_count += 1
             self._error_counter_label.setText(f"{self._error_count} error{'s' if self._error_count != 1 else ''}")
             self._error_counter_label.setStyleSheet(
-                "color: #f87171; font-size: 11px; font-weight: bold; padding: 0 4px;"
+                f"color: {_LEVEL_COLORS['ERROR']}; font-size: 11px; font-weight: bold; padding: 0 4px;"
             )
         elif level == "WARNING":
             self._warning_count += 1
             self._warning_counter_label.setText(f"{self._warning_count} warning{'s' if self._warning_count != 1 else ''}")
             self._warning_counter_label.setStyleSheet(
-                "color: #fbbf24; font-size: 11px; padding: 0 4px;"
+                f"color: {_LEVEL_COLORS['WARNING']}; font-size: 11px; padding: 0 4px;"
             )
 
         # Filter by level
