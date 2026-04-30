@@ -1107,6 +1107,11 @@ class MainWindow(QMainWindow):
         }
         _section_defs = [
             ("workflow", "Workflow", None),
+            # Direct shortcut to the Generate page — same target as
+            # Workflow → step 4 but reachable in one click from anywhere.
+            # The page itself still belongs to the "workflow" section
+            # (see _section_dropdown_pages), so the stepper renders.
+            ("generate", "Generate", None),
             ("library",  "Library",  None),
             ("tools",    "Tools  ▾", [
                 ("batch",   "Batch Generate"),
@@ -1125,7 +1130,7 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet(self._section_nav_btn_style("default"))
             if items is None:
                 # Direct nav: workflow → current workflow step (default
-                # dataset); library → library page.
+                # dataset); library / generate → their own page.
                 if section_id == "workflow":
                     btn.clicked.connect(self._goto_current_workflow_step)
                 else:
@@ -1321,7 +1326,11 @@ class MainWindow(QMainWindow):
 
         self._content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._content_splitter.setChildrenCollapsible(False)
-        self._content_splitter.setHandleWidth(4)
+        # 8px handle (was 6px) — matches macOS native splitter feel and
+        # is comfortably grabbable on Retina without dominating standard
+        # displays.
+        self._content_splitter.setHandleWidth(8)
+        self._content_splitter.setOpaqueResize(True)
         content_row_layout.addWidget(self._content_splitter, 1)
 
         # Main stacked widget
@@ -1364,6 +1373,11 @@ class MainWindow(QMainWindow):
             self._step_indicators.append(lbl)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Same fix as the Generate tab: the default Qt splitter lets you
+        # drag a panel to zero width, clipping its content silently. We
+        # forbid that and bump the handle so it's grabbable on Retina.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         self.tag_panel = TagPanel()
         splitter.addWidget(self.tag_panel)
@@ -1388,6 +1402,9 @@ class MainWindow(QMainWindow):
 
         self._right_tabs = right_tabs
         splitter.addWidget(right_tabs)
+        # Stretch the right tabs side; tag panel keeps its width on resize.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([350, 850])
 
         dataset_layout.addWidget(splitter, 1)
@@ -1724,9 +1741,14 @@ class MainWindow(QMainWindow):
         # secondary section gets the full vertical real estate.
         active_section = self._section_for_nav(nav_id)
         self._stepper_widget.setVisible(active_section == "workflow")
+        # The "Generate" top-bar button is a shortcut into the workflow
+        # section's last page; when the user is actually on Generate it
+        # should light up instead of "Workflow", otherwise the shortcut
+        # would never appear active.
+        active_btn_id = "generate" if nav_id == "generate" else active_section
         for sid, btn in self._section_nav_btns.items():
             btn.setStyleSheet(
-                self._section_nav_btn_style("active" if sid == active_section else "default")
+                self._section_nav_btn_style("active" if sid == active_btn_id else "default")
             )
         # Remember the most recent workflow step so the "Workflow" section
         # button can return us there with one click after a detour.
@@ -2511,9 +2533,13 @@ class MainWindow(QMainWindow):
         self._section_nav_widget.setStyleSheet(
             f"background-color: {c['bg_alt']}; border-bottom: 1px solid {c['border']};"
         )
-        active_section = self._section_for_nav(getattr(self, "_current_nav", ""))
+        _current = getattr(self, "_current_nav", "")
+        active_section = self._section_for_nav(_current)
+        # Mirror _switch_nav: "Generate" shortcut lights up when the user
+        # is actually on the Generate page, not "Workflow".
+        active_btn_id = "generate" if _current == "generate" else active_section
         for sid, btn in self._section_nav_btns.items():
-            state = "active" if sid == active_section else "default"
+            state = "active" if sid == active_btn_id else "default"
             btn.setStyleSheet(self._section_nav_btn_style(state))
         # ⚙ + ? icon buttons in the header corner
         _icon_btn_style = (

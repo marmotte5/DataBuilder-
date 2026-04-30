@@ -229,6 +229,12 @@ class BatchGenerationTab(QWidget):
         root.setSpacing(8)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
+        # Match the rest of the app: forbid drag-to-zero collapse, use
+        # an 8px grabbable handle (matches macOS native splitter feel),
+        # and pin opaque-resize ON for smooth drag feedback.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
+        splitter.setOpaqueResize(True)
 
         # ── Top: Queue table + controls ──
         top = QWidget()
@@ -429,6 +435,9 @@ class BatchGenerationTab(QWidget):
         bottom_layout.addLayout(run_row)
 
         splitter.addWidget(bottom)
+        # Top (queue table) takes the bulk; bottom (preview) stays compact.
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
         splitter.setSizes([500, 300])
 
         root.addWidget(splitter, 1)

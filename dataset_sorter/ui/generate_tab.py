@@ -232,16 +232,42 @@ class GenerateTab(QWidget):
         root.setSpacing(10)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Splitter behaviour fixes (regression seen on macOS / high-DPI):
+        # - setChildrenCollapsible(False): drag-to-zero clipped the left
+        #   panel's content (e.g. "No model loaded" → "lo model loaded").
+        # - setHandleWidth(8): the default 1px handle is unfindable on a
+        #   Retina display; 8px is the macOS native splitter feel.
+        # - setOpaqueResize(True): redraw children during drag (smooth
+        #   feel) rather than leaving a ghost line.
+        # - setStretchFactor: the left controls panel keeps its width
+        #   when the window resizes; the right gallery absorbs the delta.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
+        splitter.setOpaqueResize(True)
 
         # ── Left panel: controls ────────────────────────────────────────
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Force NO horizontal scrollbar — the inner widget's
+        # widgetResizable(True) above is supposed to match the viewport,
+        # but on macOS we've seen the inner widget overflow horizontally
+        # and the resulting horizontal scrollbar shifts content out of
+        # view (the bug that produces "lo model loaded" instead of
+        # "No model loaded"). Vertical scroll is needed because the
+        # control list is taller than any viewport.
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Lock a sensible minimum so form labels ("Positive prompt", "Model
         # type") don't clip when the splitter is dragged narrow or the
         # window is rendered before setSizes() applies.
         left_scroll.setMinimumWidth(380)
         left_widget = QWidget()
+        # Match the scroll area's minimum on the inner widget too. Without
+        # this, the QScrollArea (widgetResizable=True) shrinks the widget
+        # below its content's natural width and labels clip silently —
+        # there's no horizontal scrollbar to recover from it.
+        left_widget.setMinimumWidth(360)
         left = QVBoxLayout(left_widget)
         left.setContentsMargins(4, 4, 4, 4)
         left.setSpacing(8)
@@ -767,6 +793,8 @@ class GenerateTab(QWidget):
         right_layout.addWidget(thumb_scroll)
 
         splitter.addWidget(right)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([450, 550])
 
         root.addWidget(splitter)
