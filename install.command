@@ -25,8 +25,19 @@ RC=$?
 
 echo
 if [ $RC -eq 0 ]; then
+    # Make sure the .app launcher inside the bundle is executable.
+    # git on Windows / fresh checkouts can drop the +x bit.
+    if [ -f "DataBuilder.app/Contents/MacOS/DataBuilder" ]; then
+        chmod +x "DataBuilder.app/Contents/MacOS/DataBuilder" 2>/dev/null
+        # Force Finder to refresh the bundle's icon cache so the custom
+        # icns shows up immediately (otherwise Finder may keep showing
+        # the generic Unix-executable icon until the next login).
+        /usr/bin/touch "DataBuilder.app" 2>/dev/null
+    fi
+
     echo "──────────────────────────────────────────────────────────────"
-    echo " You can now double-click  run.command  to launch DataBuilder."
+    echo " Done. Double-click  DataBuilder.app  to launch the app."
+    echo " (or run.command if you prefer the terminal launcher)"
     echo "──────────────────────────────────────────────────────────────"
 else
     echo "──────────────────────────────────────────────────────────────"

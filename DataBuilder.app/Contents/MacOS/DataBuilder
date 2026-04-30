@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ============================================================================
+# DataBuilder.app — macOS native launcher.
+#
+# This shell script is the executable inside the .app bundle. Finder
+# invokes us with cwd = / (not the bundle), so we walk up to the repo
+# root (three levels above this file) and re-use the existing
+# run.command launcher there.
+#
+# Why a thin shim instead of duplicating run.command?
+#   • Single source of truth: run.command stays the canonical launcher
+#     (also used directly by users who don't want the .app bundle).
+#   • The .app exists purely to give a proper macOS icon + Dock entry;
+#     it should not diverge from the script users may already trust.
+# ============================================================================
+
+# Path layout:
+#   <repo>/DataBuilder.app/Contents/MacOS/DataBuilder   ← us
+#   <repo>/run.command                                  ← target
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SELF_DIR/../../.." && pwd)"
+
+cd "$REPO_DIR" || exit 1
+
+if [ ! -x "./run.command" ]; then
+    /usr/bin/osascript -e 'display alert "DataBuilder" message "run.command not found next to DataBuilder.app. Move the .app back into the project folder."'
+    exit 1
+fi
+
+exec ./run.command

@@ -145,9 +145,15 @@ don't need to install Python yourself, you don't need admin rights.
 
 | Platform | Double-click this | Then double-click |
 | --- | --- | --- |
-| **macOS** | `install.command` | `run.command` |
-| **Windows** | `install.bat` | `run.bat` |
+| **macOS** | `install.command` | `DataBuilder.app` (or `run.command`) |
+| **Windows** | `install.bat` | `DataBuilder` shortcut on Desktop (or `run.bat`) |
 | **Linux** | run `./install.sh` in a terminal, then `./run.sh` | — |
+
+After install, you get a proper app icon to launch:
+- **macOS** — `DataBuilder.app` lives next to the project files. Drag it
+  to your Applications folder or Dock for permanent access.
+- **Windows** — a `DataBuilder` shortcut with the app icon is dropped on
+  your Desktop automatically by the installer.
 
 The installer uses [`uv`](https://github.com/astral-sh/uv) (Astral's
 Rust-based Python installer) under the hood. On first run it:
