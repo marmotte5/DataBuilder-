@@ -389,3 +389,20 @@ class TimestepEMASampler:
             "loss_ema_std": float(self._loss_ema[self._seen_count > 0].std()) if seen > 1 else 0.0,
             "active": self._step >= self.warmup_steps,
         }
+
+    def state_dict(self) -> dict:
+        """Serializable state for checkpoint save/resume."""
+        return {
+            "num_buckets": self.num_buckets,
+            "loss_ema": self._loss_ema.detach().cpu().tolist(),
+            "seen_count": self._seen_count.detach().cpu().tolist(),
+            "step": self._step,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore timestep EMA state. Tolerates bucket count changes."""
+        if state.get("num_buckets") != self.num_buckets:
+            return
+        self._loss_ema = torch.tensor(state["loss_ema"], device=self.device)
+        self._seen_count = torch.tensor(state["seen_count"], dtype=torch.long, device=self.device)
+        self._step = int(state["step"])

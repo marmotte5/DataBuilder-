@@ -3026,6 +3026,12 @@ class Trainer:
                 state_dict["curriculum_sampler"] = self._curriculum_sampler.state_dict()
             except Exception as e:
                 log.debug(f"Could not save curriculum state: {e}")
+        # Per-timestep EMA state: per-bucket loss EMA and step counter.
+        if self._timestep_ema is not None:
+            try:
+                state_dict["timestep_ema"] = self._timestep_ema.state_dict()
+            except Exception as e:
+                log.debug(f"Could not save timestep_ema state: {e}")
         # Save DataLoader generator state for reproducible shuffle on resume
         if getattr(self, '_dl_generator', None) is not None:
             state_dict["dl_generator"] = self._dl_generator.get_state()
@@ -3684,6 +3690,14 @@ class Trainer:
                 log.info("Restored curriculum learning state from checkpoint")
             except Exception as e:
                 log.warning(f"Could not restore curriculum state: {e}")
+
+        # Restore per-timestep EMA state (per-bucket loss EMA).
+        if self._timestep_ema is not None and "timestep_ema" in state:
+            try:
+                self._timestep_ema.load_state_dict(state["timestep_ema"])
+                log.info("Restored timestep EMA state from checkpoint")
+            except Exception as e:
+                log.warning(f"Could not restore timestep_ema state: {e}")
 
         # Restore DataLoader generator state for reproducible shuffle on resume
         if "dl_generator" in state:
