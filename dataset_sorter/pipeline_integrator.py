@@ -38,6 +38,7 @@ class IntegrationReport:
     duplicate_count: int = 0
     duplicate_indices: set[int] = field(default_factory=set)
     tag_analysis_summary: str = ""
+    tag_weights: dict[str, float] = field(default_factory=dict)
     history_applied: bool = False
     history_details: str = ""
     speed_opts_enabled: list[str] = field(default_factory=list)
@@ -241,7 +242,7 @@ def detect_and_handle_duplicates(
     similar = sum(1 for _, _, t in duplicates if t == "similar")
     log.info(
         f"Duplicate check: {exact} exact, {similar} near-duplicates "
-        f"({len(skip_indices)} images will be de-weighted)"
+        f"({len(skip_indices)} images flagged)"
     )
 
     return list(skip_indices)
@@ -690,6 +691,7 @@ def run_pre_training_pipeline(
 
     # 3. Tag importance analysis
     tag_weights = analyze_tags_for_training(captions, config, report)
+    report.tag_weights = tag_weights
 
     if progress_fn:
         progress_fn(3, 5, "Consulting training history...")
