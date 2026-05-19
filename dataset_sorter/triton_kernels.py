@@ -314,22 +314,29 @@ class FusedAdamW:
                     n_elements = p.numel()
                     grid = ((n_elements + BLOCK_SIZE - 1) // BLOCK_SIZE,)
 
-                    # Flatten for Triton. Use .reshape(-1) instead of
-                    # .view(-1) so non-contiguous tensors (e.g., channels_last
-                    # memory format on SDXL UNet conv weights) don't crash.
-                    p_flat = p.data.reshape(-1)
-                    g_flat = grad.reshape(-1)
-                    m_flat = state["exp_avg"].reshape(-1)
-                    v_flat = state["exp_avg_sq"].reshape(-1)
+                    # Make contiguous first — .reshape(-1) on non-contiguous
+                    # tensors (channels_last conv weights) returns a COPY,
+                    # causing Triton writes to be silently discarded.
+                    need_copy_back = not p.data.is_contiguous()
+                    p_cont = p.data.contiguous()
+                    g_cont = grad.contiguous()
+                    m_cont = state["exp_avg"].contiguous()
+                    v_cont = state["exp_avg_sq"].contiguous()
 
                     _fused_adamw_kernel[grid](
-                        p_flat, g_flat, m_flat, v_flat,
+                        p_cont.view(-1), g_cont.view(-1),
+                        m_cont.view(-1), v_cont.view(-1),
                         lr, self.beta1, self.beta2, self.eps,
                         self.weight_decay, step,
                         bias_correction1, bias_correction2_sqrt,
                         n_elements,
                         BLOCK_SIZE=BLOCK_SIZE,
                     )
+
+                    if need_copy_back:
+                        p.data.copy_(p_cont.view_as(p.data))
+                        state["exp_avg"].copy_(m_cont.view_as(state["exp_avg"]))
+                        state["exp_avg_sq"].copy_(v_cont.view_as(state["exp_avg_sq"]))
                 else:
                     # PyTorch fallback for small tensors or CPU
                     p.data.mul_(1 - lr * self.weight_decay)
@@ -493,13 +500,17 @@ def fused_grad_clip_and_step(
             if p.is_cuda and p.numel() >= BLOCK_SIZE:
                 n = p.grad.numel()
                 grid = ((n + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+                g_cont = p.grad.data.contiguous()
+                need_copy = not p.grad.data.is_contiguous()
                 _fused_grad_clip_kernel[grid](
-                    p.grad.data.reshape(-1),
-                    p.data.reshape(-1),
+                    g_cont.view(-1),
+                    p.data.contiguous().view(-1),
                     clip_scale, 0.0, 0.0,  # wd and lr handled by optimizer
                     n,
                     BLOCK_SIZE=BLOCK_SIZE,
                 )
+                if need_copy:
+                    p.grad.data.copy_(g_cont.view_as(p.grad.data))
             else:
                 p.grad.data.mul_(clip_scale)
     elif clip_scale < 1.0:

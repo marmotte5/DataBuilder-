@@ -229,7 +229,7 @@ class MMapTensorStore:
             raise ValueError(
                 f"Cache file appears corrupted: tensor {key!r} at offset "
                 f"{offset} length {nbytes} exceeds mmap size {len(self._mmap)} "
-                f"(file: {getattr(self, '_path', '?')}). Delete the cache "
+                f"(file: {getattr(self, 'path', '?')}). Delete the cache "
                 "directory and re-run to rebuild."
             )
 

@@ -1505,9 +1505,9 @@ class LibraryTab(QWidget):
         """Re-apply all inline styles after a theme change."""
         # Detail panel frame and children
         self._detail_frame.setStyleSheet(
-            f"background-color: {COLORS['bg_alt']}; "
+            f"QFrame {{ background-color: {COLORS['bg_alt']}; "
             f"border: 1px solid {COLORS['border']}; "
-            f"border-radius: 12px; padding: 14px;"
+            f"border-radius: 12px; padding: 14px; }}"
         )
         self._detail_name.setStyleSheet(section_header_style())
         self._detail_path.setStyleSheet(
