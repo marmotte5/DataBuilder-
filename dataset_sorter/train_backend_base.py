@@ -472,7 +472,7 @@ class TrainBackendBase(ABC):
         if self.config.triton_fused_flow:
             from dataset_sorter.triton_kernels import fused_flow_interpolate
             return fused_flow_interpolate(latents, noise, t)
-        t_view = t.view(-1, 1, 1, 1)
+        t_view = t.view(-1, *([1] * (latents.dim() - 1)))
         return (1 - t_view) * latents + t_view * noise
 
     def _pad_and_cat(self, tensors: list[torch.Tensor], dim: int = 1) -> torch.Tensor:

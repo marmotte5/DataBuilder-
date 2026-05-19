@@ -805,24 +805,23 @@ class CachedTrainDataset(Dataset):
                         # Apply caption preprocessor (e.g., Z-Image chat template)
                         # to match the conditioning path's encoding
                         _pp_uncond = caption_preprocessor(uncond_caption) if caption_preprocessor else uncond_caption
-                        _uncond_inputs = tokenizer(
+                        _uncond_tok = tokenizer(
                             [_pp_uncond], padding="max_length",
                             max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
                             truncation=True, return_tensors="pt",
-                        ).input_ids.to(device)
-                        _uncond_out = text_encoder(_uncond_inputs, output_hidden_states=True)
-                        # Match the regular cache path's clip_skip logic:
-                        # _skip = max(clip_skip, 1), clamped to available layers.
-                        _skip = max(clip_skip, 1)
-                        _skip = min(_skip, len(_uncond_out.hidden_states) - 2)
-                        _h = _uncond_out.hidden_states[-(_skip + 1)].squeeze(0)
+                        )
+                        if caption_preprocessor is not None:
+                            _uncond_dev = {k: v.to(device) for k, v in _uncond_tok.items()}
+                            _uncond_out = text_encoder(**_uncond_dev, output_hidden_states=True)
+                            _h = _uncond_out.hidden_states[-2].squeeze(0)
+                        else:
+                            _uncond_inputs = _uncond_tok.input_ids.to(device)
+                            _uncond_out = text_encoder(_uncond_inputs, output_hidden_states=True)
+                            _skip = max(clip_skip, 1)
+                            _skip = min(_skip, len(_uncond_out.hidden_states) - 2)
+                            _h = _uncond_out.hidden_states[-(_skip + 1)].squeeze(0)
                         if caption_preprocessor is not None:
                             # LLM path (Z-Image): store attention mask, not pooled
-                            _uncond_tok = tokenizer(
-                                [uncond_caption], padding="max_length",
-                                max_length=tokenizer.model_max_length if max_token_length <= 0 else max_token_length,
-                                truncation=True, return_tensors="pt",
-                            )
                             _p = _uncond_tok["attention_mask"].squeeze(0).cpu()
                         else:
                             _p = getattr(_uncond_out, "text_embeds", getattr(_uncond_out, "pooler_output", None))

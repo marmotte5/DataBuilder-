@@ -1461,6 +1461,30 @@ class GenerateWorker(QThread):
 
         self._emit(self.progress, 0, total, f"Generating {total} image(s)...")
 
+        # Acquire inference lock to prevent concurrent pipeline access from
+        # batch/comparison workers calling _do_generate_blocking().
+        self._inference_lock.acquire()
+        try:
+            self._do_generate_locked(
+                pipe_ref, model_type, scheduler_name, total,
+                positive_prompt, negative_prompt, seed, steps, cfg_scale,
+                width, height, clip_skip, init_image, mask_image, strength,
+                pag_scale, pag_layers,
+            )
+        finally:
+            self._inference_lock.release()
+
+    def _do_generate_locked(
+        self, pipe_ref, model_type, scheduler_name, total,
+        positive_prompt, negative_prompt, seed, steps, cfg_scale,
+        width, height, clip_skip, init_image, mask_image, strength,
+        pag_scale, pag_layers,
+    ):
+        """Inner generation loop, called with _inference_lock held."""
+        import torch
+        from PIL import Image
+        from dataset_sorter.diagnostics import log_vram_state
+
         # Set scheduler
         _load_scheduler(pipe_ref, scheduler_name, model_type)
 
