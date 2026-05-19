@@ -142,18 +142,12 @@ class StableCascadeBackend(TrainBackendBase):
                 device=latents.device, dtype=latents.dtype,
             )
 
-        timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps,
-            (batch_size,), device=latents.device, dtype=torch.long,
-        )
-        noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+        # DDPMWuerstchenScheduler uses float timesteps in [0, 1], not integers.
+        timestep_ratio = torch.rand(batch_size, device=latents.device)
+        noisy_latents = self.noise_scheduler.add_noise(latents, noise, timestep_ratio)
 
         encoder_hidden = te_out[0]
         pooled = te_out[1] if len(te_out) > 1 else None
-
-        # Cascade expects timestep_ratio in [0, 1]
-        num_steps = self.noise_scheduler.config.num_train_timesteps
-        timestep_ratio = timesteps.float() / num_steps
 
         _act = autocast_device_type()
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
@@ -164,15 +158,11 @@ class StableCascadeBackend(TrainBackendBase):
                 clip_text=encoder_hidden,
             ).sample
 
-        loss = self.compute_loss(noise_pred, noise, latents, timesteps)
+        loss = self._compute_epsilon_loss(noise_pred, noise, latents, None)
 
-        if config.min_snr_gamma > 0:
-            snr_weights = self._compute_snr_weights(timesteps, config.min_snr_gamma)
-            loss = loss * snr_weights
+        # Convert to integer timesteps for weighting features that expect them
+        timesteps = (timestep_ratio * 1000).long()
 
-        # Apply the same weighting features as the base training_step so that
-        # SpeeD, EMA timestep weighting, token weighting, and adaptive sample
-        # weights work correctly for Cascade (not just silently ignored).
         if config.speed_change_aware and self._speed_sampler is not None:
             speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
             loss = loss * speed_weights
@@ -190,14 +180,16 @@ class StableCascadeBackend(TrainBackendBase):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         if getattr(self, '_adaptive_sample_weights', None) is not None:
             weights = self._adaptive_sample_weights
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample loss for adaptive tag weighting (before .mean())
-        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 

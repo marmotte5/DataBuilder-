@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
-    QStackedWidget, QFrame, QMenu, QScrollArea, QComboBox, QInputDialog,
+    QStackedWidget, QMenu, QComboBox, QInputDialog,
     QTextEdit, QPlainTextEdit,
 )
 
@@ -3695,7 +3695,7 @@ class MainWindow(QMainWindow):
             self.deleted_tags.discard(old_tag)
         self._after_tag_edit()
         self.statusBar().showMessage(f"Renamed \"{old_tag}\" -> \"{new_tag}\" ({count} entries).")
-        self._toast(f"Spellcheck fix applied", "success")
+        self._toast("Spellcheck fix applied", "success")
 
     # -- Image tab --
 

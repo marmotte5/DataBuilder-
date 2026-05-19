@@ -152,12 +152,106 @@ class Flux2Backend(TrainBackendBase):
 
         return (encoder_hidden,)
 
+    @staticmethod
+    def _pack_latents(latents: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = latents.shape
+        latents = latents.view(b, c, h // 2, 2, w // 2, 2)
+        latents = latents.permute(0, 2, 4, 1, 3, 5)
+        return latents.reshape(b, (h // 2) * (w // 2), c * 4)
+
+    @staticmethod
+    def _prepare_img_ids(h: int, w: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        img_ids = torch.zeros(h, w, 3, device=device, dtype=dtype)
+        img_ids[..., 1] = torch.arange(h, device=device, dtype=dtype)[:, None]
+        img_ids[..., 2] = torch.arange(w, device=device, dtype=dtype)[None, :]
+        return img_ids.reshape(h * w, 3)
+
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        """Compute a single flow-matching training loss on the given latent batch.
+        """Flux 2 training step with latent packing and RoPE position IDs.
 
-        Delegates to the base class flow_training_step without added conditioning
-        kwargs (Flux 2 does not use SDXL-style time_ids or pooled embeddings).
+        Flux2Transformer2DModel requires packed 3D latent sequences,
+        img_ids/txt_ids for rotary position embeddings, and a guidance
+        embedding.
         """
-        return self.flow_training_step(latents, te_out, batch_size)
+        from dataset_sorter.utils import autocast_device_type
+
+        config = self.config
+        packed = self._pack_latents(latents)
+        packed_h, packed_w = latents.shape[2] // 2, latents.shape[3] // 2
+
+        if self._timestep_ema_sampler is not None:
+            discrete_ts = self._timestep_ema_sampler.sample_timesteps(batch_size)
+            discrete_ts = self._apply_timestep_bias(discrete_ts)
+            t = discrete_ts.float() / 1000.0
+        else:
+            t = self._sample_flow_timesteps(batch_size)
+
+        noise = torch.randn_like(packed)
+        if config.noise_offset > 0:
+            noise += config.noise_offset * torch.randn(
+                packed.shape[0], 1, packed.shape[2],
+                device=packed.device, dtype=packed.dtype,
+            )
+        noisy = self._flow_interpolate(packed, noise, t)
+        timesteps = (t * 1000.0).long()
+
+        encoder_hidden = te_out[0]
+
+        img_ids = self._prepare_img_ids(packed_h, packed_w, packed.device, packed.dtype)
+        txt_ids = torch.zeros(encoder_hidden.shape[1], 3, device=packed.device, dtype=packed.dtype)
+
+        guidance = torch.full((batch_size,), 1.0, device=packed.device, dtype=packed.dtype)
+
+        ts_input = timesteps / 1000.0
+        _act = autocast_device_type()
+        with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
+            noise_pred = self.unet(
+                hidden_states=noisy,
+                timestep=ts_input,
+                encoder_hidden_states=encoder_hidden,
+                img_ids=img_ids,
+                txt_ids=txt_ids,
+                guidance=guidance,
+            ).sample
+
+        loss = self._compute_flow_loss(noise_pred, noise, packed)
+
+        if config.debiased_estimation:
+            weight = 1.0 / torch.clamp(1.0 - t.float() + 1e-6, min=0.01)
+            loss = loss * weight
+
+        if config.speed_change_aware and self._speed_sampler is not None:
+            speed_weights = self._speed_sampler.compute_weights(timesteps, loss.detach())
+            loss = loss * speed_weights
+
+        if self._timestep_ema_sampler is not None:
+            per_sample_loss = loss.detach()
+            if per_sample_loss.dim() > 1:
+                per_sample_loss = per_sample_loss.flatten(1).mean(1)
+            self._timestep_ema_sampler.update(timesteps, per_sample_loss)
+            ema_weights = self._timestep_ema_sampler.compute_loss_weights(timesteps)
+            loss = loss * ema_weights.view(-1, *([1] * (loss.dim() - 1)))
+
+        if getattr(self, '_token_weight_mask', None) is not None:
+            mask = self._token_weight_mask
+            if mask.device != loss.device:
+                mask = mask.to(loss.device)
+            if mask.dim() >= 1 and mask.shape[0] == loss.shape[0]:
+                non_zero = mask > 0
+                sample_weight = mask.sum(dim=-1) / non_zero.sum(dim=-1).clamp(min=1)
+                while sample_weight.dim() < loss.dim():
+                    sample_weight = sample_weight.unsqueeze(-1)
+                loss = loss * sample_weight
+            self._token_weight_mask = None
+
+        self._per_sample_loss = loss.detach()
+
+        if getattr(self, '_adaptive_sample_weights', None) is not None:
+            weights = self._adaptive_sample_weights
+            if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
+                loss = loss * weights
+            self._adaptive_sample_weights = None
+
+        return loss.mean()

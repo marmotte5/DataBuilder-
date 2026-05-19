@@ -225,7 +225,6 @@ class _ComparisonWorker(QThread):
             # Apply per-side LoRA override if specified
             lora_path = config.get("lora_path", "")
             lora_weight = config.get("lora_weight", 1.0)
-            _prev_lora = None
             if lora_path:
                 params["lora_path"] = lora_path
                 params["lora_weight"] = lora_weight

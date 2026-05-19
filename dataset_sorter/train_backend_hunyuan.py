@@ -115,11 +115,13 @@ class HunyuanDiTBackend(TrainBackendBase):
         clip_mask = tok_out_1.attention_mask.to(self.device)
 
         with self._te_no_grad():
-            out_1 = self.text_encoder(tokens_1, output_hidden_states=True)
+            out_1 = self.text_encoder(
+                tokens_1, attention_mask=clip_mask, output_hidden_states=True,
+            )
             skip = max(self.config.clip_skip, 1)
             skip = min(skip, len(out_1.hidden_states) - 2)
             clip_hidden = out_1.hidden_states[-(skip + 1)]
-            pooled = out_1.text_embeds
+            pooled = out_1.pooler_output
 
         # mT5
         tok_out_2 = self.tokenizer_2(
@@ -131,7 +133,7 @@ class HunyuanDiTBackend(TrainBackendBase):
         t5_mask = tok_out_2.attention_mask.to(self.device)
 
         with self._te_no_grad():
-            out_2 = self.text_encoder_2(tokens_2)
+            out_2 = self.text_encoder_2(tokens_2, attention_mask=t5_mask)
             t5_hidden = out_2.last_hidden_state
 
         # Return CLIP hidden, pooled, T5 hidden, and both masks.
@@ -296,15 +298,17 @@ class HunyuanDiTBackend(TrainBackendBase):
             loss = apply_token_weights_to_loss(loss, self._token_weight_mask, te_out[0])
             self._token_weight_mask = None
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         # Adaptive per-sample weights (set by trainer's tag weighter)
         if getattr(self, '_adaptive_sample_weights', None) is not None:
             weights = self._adaptive_sample_weights
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample loss for adaptive tag weighting (before .mean())
-        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 

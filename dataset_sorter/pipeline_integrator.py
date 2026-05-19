@@ -85,7 +85,7 @@ class IntegrationReport:
             lines.append(f"\nTraining History: {self.history_details}")
 
         if self.speed_opts_enabled:
-            lines.append(f"\nAuto-Enabled Optimizations:")
+            lines.append("\nAuto-Enabled Optimizations:")
             for opt in self.speed_opts_enabled:
                 lines.append(f"  + {opt}")
 
@@ -232,14 +232,17 @@ def detect_and_handle_duplicates(
 
     # Collect indices to skip (keep first, skip rest)
     skip_indices = set()
+    exact = 0
+    similar = 0
     for idx_a, idx_b, match_type in duplicates:
-        skip_indices.add(idx_b)  # Always skip the second
+        skip_indices.add(idx_b)
+        if match_type == "exact":
+            exact += 1
+        elif match_type == "similar":
+            similar += 1
 
     report.duplicate_count = len(duplicates)
     report.duplicate_indices = skip_indices
-
-    exact = sum(1 for _, _, t in duplicates if t == "exact")
-    similar = sum(1 for _, _, t in duplicates if t == "similar")
     log.info(
         f"Duplicate check: {exact} exact, {similar} near-duplicates "
         f"({len(skip_indices)} images flagged)"
@@ -269,13 +272,11 @@ def analyze_tags_for_training(
     # Build tag counts from captions
     from collections import Counter
     tag_counts = Counter()
-    tag_to_images: dict[str, list[int]] = {}
-    for idx, cap in enumerate(captions):
+    for cap in captions:
         for tag in cap.split(","):
             tag = tag.strip()
             if tag:
                 tag_counts[tag] += 1
-                tag_to_images.setdefault(tag, []).append(idx)
 
     if not tag_counts:
         report.tag_analysis_summary = "No tags found in captions"
@@ -411,7 +412,6 @@ def auto_enable_speed_optimizations(config, report: IntegrationReport) -> None:
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         compute_cap = (props.major, props.minor)
-        vram_gb = props.total_memory / (1024 ** 3)
 
         # Ampere+ (SM 8.0+): enable bf16, TF32, torch.compile
         if compute_cap >= (8, 0):
@@ -681,10 +681,9 @@ def run_pre_training_pipeline(
 
     # 2. Duplicate detection (only for datasets < 10k to avoid slowdown)
     if len(image_paths) <= 10000:
-        skip_indices = detect_and_handle_duplicates(image_paths, report)
+        detect_and_handle_duplicates(image_paths, report)
     else:
         log.info(f"Skipping duplicate check (dataset too large: {len(image_paths)} images)")
-        skip_indices = []
 
     if progress_fn:
         progress_fn(2, 5, "Analyzing tags...")

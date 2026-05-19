@@ -34,7 +34,7 @@ from pathlib import Path
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QSettings, QSize,
 )
-from PyQt6.QtGui import QCursor, QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QColor, QCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QLineEdit, QScrollArea, QButtonGroup, QFrame,

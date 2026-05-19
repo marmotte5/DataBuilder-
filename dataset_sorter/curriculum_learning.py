@@ -111,7 +111,7 @@ class CurriculumSampler:
             return np.ones(self.num_images, dtype=np.float32) / self.num_images
 
         # Compute weights from loss EMA (clamp to non-negative to prevent NaN from pow)
-        weights = np.maximum(self._loss_ema.copy(), 0.0)
+        weights = np.maximum(self._loss_ema, 0.0)
 
         # Apply temperature scaling (safe: weights >= 0 after clamp)
         if self.temperature != 1.0:
