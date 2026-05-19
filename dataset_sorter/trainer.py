@@ -3672,6 +3672,19 @@ class Trainer:
         is_lora = self.config.model_type.endswith("_lora")
         if is_lora:
             from peft import PeftModel
+            # LyCORIS adapters save only adapter_model.safetensors (no
+            # adapter_config.json). Detect by adapter_type and load via
+            # LycorisNetwork.load_weights() to avoid silently dropping the
+            # adapter on resume.
+            adapter_file = checkpoint_dir / "adapter_model.safetensors"
+            if (getattr(self.backend, "adapter_type", None) == "lycoris"
+                    and getattr(self.backend, "lycoris_net", None) is not None
+                    and adapter_file.exists()):
+                try:
+                    self.backend.lycoris_net.load_weights(str(adapter_file))
+                    log.info("Restored LyCORIS adapter weights from checkpoint")
+                except Exception as e:
+                    log.warning(f"Could not restore LyCORIS weights: {e}")
             # Check for LoRA adapter files
             adapter_config = checkpoint_dir / "adapter_config.json"
             if adapter_config.exists() and self.backend.unet is not None:
@@ -3856,6 +3869,26 @@ class Trainer:
             elif hasattr(dataset, "close"):
                 dataset.close()
 
+        # Close TensorBoard file handle (only closes in train()'s finally
+        # on the happy path — error/stop paths leak the handle otherwise).
+        tb = getattr(self, "_tb_logger", None)
+        if tb is not None:
+            try:
+                tb.close()
+            except Exception:
+                pass
+            self._tb_logger = None
+
+        # FP8 wrapper holds a reference to the unet (self.model = unet).
+        # MUST be cleared BEFORE backend.cleanup() — otherwise backend.unet
+        # release doesn't free the underlying tensors (pinned by the wrapper).
+        if getattr(self, "_fp8_wrapper", None) is not None:
+            self._fp8_wrapper = None
+
+        # CUDA graph holds static GPU tensors + a captured graph object.
+        if getattr(self, "_cuda_graph", None) is not None:
+            self._cuda_graph = None
+
         backend = getattr(self, "backend", None)
         if backend is not None:
             backend.cleanup()
@@ -3875,5 +3908,11 @@ class Trainer:
         self.ema_model = None
         self.dataset = None
         self.grad_scaler = None
+        # Drop other GPU-anchoring helpers so they don't survive a Trainer
+        # reference cycle and pin VRAM across train/cleanup cycles.
+        self._async_optimizer = None
+        self._snr_weights = None
+        self._val_dataset = None
+        self._val_loader = None
         gc.collect()
         empty_cache()

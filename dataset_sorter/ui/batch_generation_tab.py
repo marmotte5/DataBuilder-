@@ -115,7 +115,9 @@ class BatchGenerationWorker(QThread):
         self.default_clip_skip: int = 0
 
     def set_queue(self, queue: list[BatchPrompt]):
-        self._queue = queue
+        # Snapshot the queue so UI mutations during the run cannot corrupt
+        # the iteration indices or skip / duplicate prompts.
+        self._queue = list(queue)
 
     def set_generate_worker(self, worker):
         self._generate_worker = worker
@@ -572,7 +574,7 @@ class BatchGenerationTab(QWidget):
                             cfg_scale=_safe_float(row_data.get("cfg", row_data.get("cfg_scale", "")), 0.0),
                             width=_safe_int(row_data.get("width", ""), 0),
                             height=_safe_int(row_data.get("height", ""), 0),
-                            count=_safe_int(row_data.get("count", ""), 1),
+                            count=max(1, _safe_int(row_data.get("count", ""), 1)),
                         )
                         self._add_row(prompt)
                         count += 1
@@ -608,7 +610,7 @@ class BatchGenerationTab(QWidget):
                     cfg_scale=_safe_float(item.get("cfg_scale", item.get("cfg", 0)), 0.0),
                     width=_safe_int(item.get("width", 0), 0),
                     height=_safe_int(item.get("height", 0), 0),
-                    count=_safe_int(item.get("count", 1), 1),
+                    count=max(1, _safe_int(item.get("count", 1), 1)),
                 )
                 self._add_row(prompt)
                 count += 1
@@ -696,6 +698,9 @@ class BatchGenerationTab(QWidget):
         self._worker.default_height = res[1]
         self._worker.default_negative = self._default_neg.text().strip()
         if self._generate_worker is not None:
+            self._worker.default_clip_skip = getattr(
+                self._generate_worker, 'clip_skip', 0
+            ) or 0
             self._worker.default_scheduler = getattr(
                 self._generate_worker, 'scheduler_name', 'euler_a'
             )

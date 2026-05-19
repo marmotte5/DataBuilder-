@@ -384,6 +384,19 @@ def dpo_training_step(
     # rather than producing NaN losses or sign-flipped gradients.
     _validate_dpo_hyperparams(beta, label_smoothing, loss_type=loss_type)
 
+    # Flux, Flux 2, and Chroma require latent packing, img_ids/txt_ids for
+    # RoPE, and (for Flux) a guidance embedding. The simple forward call
+    # below would crash on these architectures. Defer to a future
+    # implementation rather than producing a confusing AttributeError.
+    _unsupported = {"flux", "flux2", "chroma"}
+    _name = getattr(backend, "model_name", "")
+    if _name in _unsupported:
+        raise NotImplementedError(
+            f"DPO training is not yet supported for {_name}. These models "
+            "require special latent packing and RoPE position IDs that the "
+            "DPO trainer does not currently handle. Use regular fine-tuning."
+        )
+
     # Loud warning when policy and reference share parameters. This is
     # an explicit design choice in DataBuilder (no separate frozen
     # reference is maintained to save VRAM) but it COLLAPSES the DPO
