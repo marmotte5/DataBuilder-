@@ -251,7 +251,7 @@ class TrainBackendBase(ABC):
         """
         mask = self._training_mask
         if mask is None:
-            return loss.mean(dim=list(range(1, len(loss.shape))))
+            return loss.mean(dim=tuple(range(1, len(loss.shape))))
 
         # Resize mask to match loss spatial dims [B, 1, H, W] -> [B, C, H, W]
         if mask.shape[-2:] != loss.shape[-2:]:
@@ -261,8 +261,8 @@ class TrainBackendBase(ABC):
 
         # Weighted mean: sum(loss * mask) / sum(mask) per sample
         masked = loss * mask
-        mask_area = mask.sum(dim=list(range(1, len(mask.shape)))).clamp(min=1.0)
-        return masked.sum(dim=list(range(1, len(masked.shape)))) / mask_area
+        mask_area = mask.sum(dim=tuple(range(1, len(mask.shape)))).clamp(min=1.0)
+        return masked.sum(dim=tuple(range(1, len(masked.shape)))) / mask_area
 
     def _base_loss(
         self, pred: torch.Tensor, target: torch.Tensor,

@@ -127,6 +127,7 @@ class TrainingWorker(QThread):
             except Exception as exc:
                 log.warning("Emergency checkpoint save failed: %s", exc)
 
+        self._atexit_handler = _emergency_checkpoint
         atexit.register(_emergency_checkpoint)
 
     def _emit(self, signal, *args):
@@ -224,6 +225,7 @@ class TrainingWorker(QThread):
                     # Clear reference so partially-initialised trainers
                     # don't linger and leak GPU memory.
                     self.trainer = None
+            atexit.unregister(self._atexit_handler)
             self._emit(self.phase_changed, "idle")
 
     def stop(self):

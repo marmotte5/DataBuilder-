@@ -520,7 +520,6 @@ class ZImageBackend(TrainBackendBase):
         for key, tensor in state_dict.items():
             if "q_proj" in key and "weight" in key:
                 # q_proj weight shape: [num_heads * head_dim, hidden_size]
-                hidden = config.get("hidden_size", tensor.shape[1])
                 head_dim = 128  # common default for Qwen3
                 if tensor.shape[0] % head_dim == 0:
                     config["num_attention_heads"] = tensor.shape[0] // head_dim

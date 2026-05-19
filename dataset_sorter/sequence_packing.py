@@ -178,8 +178,6 @@ class PackedAttention(nn.Module):
     def _packed_attention(self, q, k, v):
         """Use flash_attn_varlen_func for packed sequences."""
         # Reshape from (1, num_heads, total_len, head_dim) to (total_len, num_heads, head_dim)
-        total_len = q.shape[2] if q.dim() == 4 else q.shape[0]
-
         if q.dim() == 4:
             q = q.squeeze(0).permute(1, 0, 2)  # (total_len, num_heads, head_dim)
             k = k.squeeze(0).permute(1, 0, 2)

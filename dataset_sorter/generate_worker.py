@@ -1085,9 +1085,9 @@ class GenerateWorker(QThread):
                     log.debug(f"Fallback {fallback_name} failed: {e}")
                     continue
 
-        self._emit(self.error, 
-            f"Cannot load single .safetensors file. "
-            f"Please use a diffusers-format model folder instead."
+        self._emit(self.error,
+            "Cannot load single .safetensors file. "
+            "Please use a diffusers-format model folder instead."
         )
         return None
 

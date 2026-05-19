@@ -157,7 +157,6 @@ def detect_concept_roots(
 
     # Extract prefixes from compound tags
     prefix_tags: dict[str, set[str]] = defaultdict(set)   # prefix → set of full tags
-    prefix_images: dict[str, set[int]] = defaultdict(set)  # prefix → image coverage
 
     for tag, count in tag_counts.items():
         # Skip captions (sentences)

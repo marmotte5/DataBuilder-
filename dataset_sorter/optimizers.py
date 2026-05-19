@@ -414,13 +414,14 @@ class Marmotte(Optimizer):
 
         # Clamp to prevent blowup: max norm per column = 2 * grad_scale
         max_norm = grad_scale.item() * 2.0
-        for i in range(k):
-            u_norm = U[:, i].norm().item()
-            if u_norm > max_norm and u_norm > 0:
-                U[:, i].mul_(max_norm / u_norm)
-            v_norm = V[:, i].norm().item()
-            if v_norm > max_norm and v_norm > 0:
-                V[:, i].mul_(max_norm / v_norm)
+        u_norms = U.norm(dim=0)
+        u_mask = u_norms > max_norm
+        if u_mask.any():
+            U[:, u_mask] *= (max_norm / u_norms[u_mask].unsqueeze(0))
+        v_norms = V.norm(dim=0)
+        v_mask = v_norms > max_norm
+        if v_mask.any():
+            V[:, v_mask] *= (max_norm / v_norms[v_mask].unsqueeze(0))
 
     @classmethod
     def _pack_signs_fast(cls, flat_signs: torch.Tensor,

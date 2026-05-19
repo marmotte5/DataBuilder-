@@ -149,7 +149,6 @@ def analyze_loss_curve(
     seg3 = smoothed[2*seg_size:3*seg_size]  # mid-late
     seg4 = smoothed[3*seg_size:]            # late
 
-    avg1 = sum(seg1) / max(1, len(seg1))
     avg2 = sum(seg2) / max(1, len(seg2))
     avg3 = sum(seg3) / max(1, len(seg3))
     avg4 = sum(seg4) / max(1, len(seg4))

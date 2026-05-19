@@ -134,7 +134,6 @@ def apply_noise_rescaling(
         return False
 
     if zero_terminal_snr:
-        original_betas = noise_scheduler.betas.clone()
         original_snr = (
             noise_scheduler.alphas_cumprod[-1]
             / (1.0 - noise_scheduler.alphas_cumprod[-1])
