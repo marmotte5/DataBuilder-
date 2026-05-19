@@ -470,24 +470,8 @@ class Trainer:
             )
             # Store tag weights for use during training
             if self._integration_report and config.auto_tag_analysis:
-                # Tag weights are computed inside run_pre_training_pipeline
-                # Re-extract them for use in adaptive weighting
-                try:
-                    from dataset_sorter.tag_importance import compute_tag_importance
-                    from collections import Counter
-                    tag_counts = Counter()
-                    for cap in captions:
-                        for tag in cap.split(","):
-                            tag = tag.strip()
-                            if tag:
-                                tag_counts[tag] += 1
-                    if tag_counts:
-                        importance_scores = compute_tag_importance(
-                            tag_counts, len(captions),
-                        )
-                        self._tag_weights = importance_scores
-                except Exception as e:
-                    log.debug(f"Tag weight extraction failed: {e}")
+                if self._integration_report.tag_weights:
+                    self._tag_weights = self._integration_report.tag_weights
 
             # Log integration report
             if self._integration_report:

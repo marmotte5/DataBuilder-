@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSplitter, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QSpinBox, QCheckBox,
     QStackedWidget, QFrame, QMenu, QScrollArea, QComboBox, QInputDialog,
+    QTextEdit, QPlainTextEdit,
 )
 
 from dataset_sorter.constants import (
@@ -3260,6 +3261,10 @@ class MainWindow(QMainWindow):
 
     def _undo(self):
         """Revert the last tag operation by restoring the previous snapshot from the undo stack."""
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.undo()
+            return
         if not self._undo_stack:
             self.statusBar().showMessage("Nothing to undo.")
             return
@@ -3272,6 +3277,10 @@ class MainWindow(QMainWindow):
 
     def _redo(self):
         """Re-apply a previously undone tag operation from the redo stack."""
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.redo()
+            return
         if not self._redo_stack:
             self.statusBar().showMessage("Nothing to redo.")
             return

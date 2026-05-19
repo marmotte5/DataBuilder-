@@ -396,6 +396,3 @@ class TrainingHistory:
         log.info("Exported %d loss-curve steps to %s", total_steps, output_path)
         return total_steps
 
-    def close(self):
-        """Close database connection."""
-        self._conn.close()
