@@ -2642,7 +2642,14 @@ class Trainer:
                 # HiDream: (t5_hidden, pooled, llama_hidden)
                 t5_h = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[0] is not None else None
                 pooled = te_cache[1].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[1] is not None else None
-                llama_h = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[2] is not None else None
+                llama_h = te_cache[2]
+                if isinstance(llama_h, torch.Tensor):
+                    llama_h = llama_h.to(self.device, dtype=self.dtype, non_blocking=True)
+                    # Cached Llama states are [batch, num_layers, seq, h] after
+                    # collation. Transformer expects [num_layers, batch, seq, h]
+                    # (indexable by layer index).
+                    if llama_h.dim() == 4:
+                        llama_h = llama_h.permute(1, 0, 2, 3)
                 te_out = (t5_h, pooled, llama_h)
             elif len(te_cache) == 2:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)

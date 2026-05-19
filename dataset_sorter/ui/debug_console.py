@@ -932,7 +932,7 @@ def hook_generate_worker(worker, console: "DebugConsole"):
 
     def _on_model_loaded(msg):
         log_worker_event(name, f"model loaded: {msg}")
-        log_vram_state(f"model loaded")
+        log_vram_state("model loaded")
 
     def _on_finished(ok, msg):
         log_worker_event(name, "finished", f"success={ok}, {msg}")
@@ -1015,7 +1015,7 @@ def _deferred_instrument(main_window: QWidget, console: DebugConsole):
     try:
         instrument_widget(main_window, console)
         console.log_ui_action("Widget instrumentation complete",
-                              f"main_window children instrumented")
+                              "main_window children instrumented")
     except Exception as e:
         log.warning("Widget instrumentation failed: %s", e)
 
