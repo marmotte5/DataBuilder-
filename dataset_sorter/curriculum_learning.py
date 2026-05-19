@@ -179,6 +179,31 @@ class CurriculumSampler:
             "weight_ratio": float(weights.max() / max(weights.min(), 1e-8)),
         }
 
+    def state_dict(self) -> dict:
+        """Serializable state for checkpoint save/resume."""
+        return {
+            "num_images": self.num_images,
+            "loss_ema": self._loss_ema.tolist(),
+            "seen_count": self._seen_count.tolist(),
+            "epoch": self._epoch,
+            "active": self._active,
+            "epochs_since_seen": self._epochs_since_seen.tolist(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore curriculum state from a state_dict.
+
+        Tolerates dataset size changes: if num_images differs, the saved
+        per-image EMA is silently dropped (no safe way to remap indices).
+        """
+        if state.get("num_images") != self.num_images:
+            return
+        self._loss_ema = np.asarray(state["loss_ema"], dtype=np.float32)
+        self._seen_count = np.asarray(state["seen_count"], dtype=np.int32)
+        self._epoch = int(state["epoch"])
+        self._active = bool(state["active"])
+        self._epochs_since_seen = np.asarray(state["epochs_since_seen"], dtype=np.int32)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. PER-TIMESTEP EMA WITH ADAPTIVE SKIPPING

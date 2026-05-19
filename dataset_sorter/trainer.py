@@ -3018,6 +3018,14 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
+        # Curriculum learning state: per-image loss EMA + epoch counters.
+        # Without this, resume restarts curriculum from scratch (uniform
+        # weights, must rebuild EMA over warmup_epochs).
+        if self._curriculum_sampler is not None:
+            try:
+                state_dict["curriculum_sampler"] = self._curriculum_sampler.state_dict()
+            except Exception as e:
+                log.debug(f"Could not save curriculum state: {e}")
         # Save DataLoader generator state for reproducible shuffle on resume
         if getattr(self, '_dl_generator', None) is not None:
             state_dict["dl_generator"] = self._dl_generator.get_state()
@@ -3587,6 +3595,17 @@ class Trainer:
         self.state.val_loss = float(state.get("val_loss", float("nan")))
         self.state.val_step = int(state.get("val_step", 0))
 
+        # Restore in-memory loss history from on-disk loss_history.json so
+        # the "min loss" / loss curve report reflects the full run, not just
+        # post-resume. The on-disk file already has cross-run accumulation
+        # via save_loss_history; we just hydrate the in-memory mirror.
+        try:
+            history = load_loss_history(self.output_dir)
+            if history:
+                self._loss_history = history[-self._max_history_len:]
+        except Exception as e:
+            log.debug(f"Could not load loss history on resume: {e}")
+
         # Warn on structural config mismatch. These are the fields the
         # optimizer/scheduler/model state depends on — changing any of
         # them mid-run will either fail to load state or silently corrupt
@@ -3656,6 +3675,15 @@ class Trainer:
                 self.grad_scaler.load_state_dict(state["grad_scaler"])
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore GradScaler state: {e}")
+
+        # Restore curriculum learning state (per-image loss EMA, epoch).
+        if (self._curriculum_sampler is not None
+                and "curriculum_sampler" in state):
+            try:
+                self._curriculum_sampler.load_state_dict(state["curriculum_sampler"])
+                log.info("Restored curriculum learning state from checkpoint")
+            except Exception as e:
+                log.warning(f"Could not restore curriculum state: {e}")
 
         # Restore DataLoader generator state for reproducible shuffle on resume
         if "dl_generator" in state:
@@ -3766,6 +3794,12 @@ class Trainer:
                     del pipe
                 except Exception as e:
                     log.warning(f"Could not restore full finetune pipeline: {e}")
+
+            # Full finetune with train_text_encoder=True saves TE weights
+            # into text_encoder*/ subdirs via pipeline.save_pretrained.
+            # Restore them here — previously the full-finetune branch only
+            # reloaded the unet/transformer, silently losing TE progress.
+            self._resume_text_encoders(checkpoint_dir)
 
         # Restore EMA state
         ema_path = checkpoint_dir / "ema_weights.pt"
