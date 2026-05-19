@@ -64,7 +64,7 @@ def _apply_chat_template(tokenizer, caption: str) -> str:
     messages = [{"role": "user", "content": caption}]
     try:
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False,
+            messages, tokenize=False, add_generation_prompt=True,
             enable_thinking=True,
         )
     except Exception:
@@ -984,15 +984,17 @@ class ZImageBackend(TrainBackendBase):
                 loss = loss * sample_weight
             self._token_weight_mask = None
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         # Adaptive per-sample weights (set by trainer's tag weighter)
         if getattr(self, '_adaptive_sample_weights', None) is not None:
             weights = self._adaptive_sample_weights
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample loss for adaptive tag weighting (before .mean())
-        self._per_sample_loss = loss.detach()
 
         # Z-exclusive: update timestep bandit with observed losses
         if getattr(self, '_timestep_bandit', None) is not None:

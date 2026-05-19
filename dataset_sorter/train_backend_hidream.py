@@ -191,8 +191,8 @@ class HiDreamBackend(TrainBackendBase):
             ).to(self.device)
             with self._te_no_grad():
                 out_4 = self.text_encoder_4(**tokens_4, output_hidden_states=True)
-                llama_hidden = out_4.hidden_states[-1]
-                del out_4  # Free all Llama hidden states from VRAM
+                llama_hidden = torch.stack(out_4.hidden_states[1:], dim=0)
+                del out_4
 
         # Concatenate pooled outputs from CLIP encoders
         pooled = torch.cat(pooled_list, dim=-1) if pooled_list else None
@@ -250,7 +250,7 @@ class HiDreamBackend(TrainBackendBase):
         with torch.autocast(device_type=_act, dtype=self.dtype, enabled=self.device.type != "cpu"):
             noise_pred = self.unet(
                 hidden_states=noisy_latents,
-                timestep=t,
+                timesteps=timesteps,
                 **fwd_kwargs,
             ).sample
 
@@ -287,14 +287,16 @@ class HiDreamBackend(TrainBackendBase):
                 loss = loss * sample_weight
             self._token_weight_mask = None
 
+        # Store per-sample losses before adaptive weighting for curriculum
+        # learning and tag weighting (they need raw prediction error, not
+        # weighted signals — weighted values create a feedback loop).
+        self._per_sample_loss = loss.detach()
+
         if getattr(self, '_adaptive_sample_weights', None) is not None:
             weights = self._adaptive_sample_weights
             if loss.dim() > 0 and loss.shape[0] == weights.shape[0]:
                 loss = loss * weights
             self._adaptive_sample_weights = None
-
-        # Store per-sample loss for adaptive tag weighting (before .mean())
-        self._per_sample_loss = loss.detach()
 
         return loss.mean()
 
