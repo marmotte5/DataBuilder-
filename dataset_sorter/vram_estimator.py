@@ -165,11 +165,31 @@ def estimate_vram(config) -> dict:
         grad_gb *= 0.3  # Recompute activations, save memory
     breakdown["Gradients"] = round(grad_gb, 1)
 
-    # 7. Activation memory (scales with resolution and batch size)
+    # 7. Activation memory (scales with resolution, batch size, AND model
+    # architecture). Per-token activation memory is dominated by the
+    # transformer hidden dim and depth; Flux/SD3-class models have ~3-5x
+    # more activation memory than SD1.5.
     res_factor = (config.resolution / 1024) ** 2
-    act_gb = 1.5 * config.batch_size * res_factor
+    # Architecture multiplier: per-token activation cost relative to SD1.5.
+    _act_mul = {
+        "sd15": 1.0, "sd2": 1.0,
+        "sdxl": 1.5, "pony": 1.5, "kolors": 1.5,
+        "sd3": 2.5, "sd35": 3.0,
+        "flux": 5.0, "flux2": 5.0, "chroma": 4.0,
+        "zimage": 3.5, "hidream": 4.5,
+        "pixart": 2.0, "sana": 1.8, "auraflow": 2.5,
+        "cascade": 1.2, "hunyuan": 2.0,
+    }.get(base, 1.5)
+    act_gb = 1.5 * _act_mul * config.batch_size * res_factor
     if config.gradient_checkpointing:
         act_gb *= 0.4
+    # FP8 training reduces activation precision (halves the storage).
+    if getattr(config, "fp8_training", False):
+        act_gb *= 0.5
+    # Sequence packing eliminates padding waste from variable-length T5 /
+    # LLM inputs — typical savings ~20% for large-TE models.
+    if getattr(config, "sequence_packing", False):
+        act_gb *= 0.8
     breakdown["Activations"] = round(act_gb, 1)
 
     # 8. EMA weights
