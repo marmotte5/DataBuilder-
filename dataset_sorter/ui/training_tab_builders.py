@@ -1872,11 +1872,20 @@ class TrainingTabBuildersMixin:
     def _connect_optimization_interlocks(self):
         """Grey out optimization checkboxes that are incompatible with the current selection.
 
-        Rules:
-        - CUDA Graph + MeBP (gradient checkpointing): mutually exclusive
-        - CUDA Graph + Sequence Packing: CUDA graphs need static shapes
-        - FP8 Training + torch.compile: FP8 causes graph breaks
-        - Async Optimizer + Fused Backward: both replace the optimizer step
+        Pairwise rules:
+        - CUDA Graph ↔ MeBP (gradient checkpointing): mutually exclusive
+        - CUDA Graph ↔ Sequence Packing: CUDA graphs need static shapes
+        - FP8 Training → torch.compile: FP8 causes graph breaks on every linear
+        - Async Optimizer ↔ Fused Backward: both replace the optimizer step
+        - Fused Backward + grad_accum > 1: hooks fire per microbatch, not per window
+
+        Three-way / conditional rules:
+        - Zero-Bottleneck DataLoader requires cache_latents AND cache_text_encoder
+        - Memory-Mapped Dataset requires cache_latents AND cache_text_encoder
+        - Triton Fused AdamW bypasses the optimizer factory — incompatible with
+          non-AdamW optimizers (Marmotte, Prodigy, CAME, Adafactor, etc.)
+        - cache_text_encoder disabled when train_text_encoder is on (frozen TE cache
+          would bypass the trainable forward pass)
         """
         def _update():
             cuda_graph = self.cuda_graph_check.isChecked()
@@ -1884,6 +1893,10 @@ class TrainingTabBuildersMixin:
             compile_ = self.torch_compile_check.isChecked()
             fused_bwd = self.fused_backward_check.isChecked()
             async_opt = self.async_opt_check.isChecked()
+            cache_lat = self.cache_latents_check.isChecked()
+            cache_te = self.cache_te_check.isChecked()
+            train_te = self.train_te_check.isChecked()
+            grad_accum = self.grad_accum_spin.value()
 
             # CUDA Graph ↔ MeBP
             self.mebp_check.setEnabled(not cuda_graph)
@@ -1895,21 +1908,66 @@ class TrainingTabBuildersMixin:
             if cuda_graph and self.sequence_packing_check.isChecked():
                 self.sequence_packing_check.setChecked(False)
 
-            # FP8 → disable torch.compile (graph breaks)
+            # FP8 Training → disable torch.compile (graph breaks)
             self.torch_compile_check.setEnabled(not fp8)
-            self.compile_mode_combo.setEnabled(not fp8 and compile_)
             if fp8 and self.torch_compile_check.isChecked():
                 self.torch_compile_check.setChecked(False)
 
-            # compile mode combo tracks torch.compile checkbox
-            if not fp8:
-                self.compile_mode_combo.setEnabled(compile_)
+            # Compile mode combo tracks torch.compile checkbox
+            self.compile_mode_combo.setEnabled(not fp8 and compile_)
 
             # Async Optimizer ↔ Fused Backward: both replace optimizer.step()
             self.fused_backward_check.setEnabled(not async_opt)
             self.async_opt_check.setEnabled(not fused_bwd)
             if async_opt and fused_bwd:
                 self.fused_backward_check.setChecked(False)
+
+            # Fused Backward + grad_accum > 1: hooks fire per micro-batch
+            if fused_bwd and grad_accum > 1:
+                self.fused_backward_check.setToolTip(
+                    "⚠ Fused backward requires gradient_accumulation=1. "
+                    "Currently grad_accum=%d — will be silently disabled." % grad_accum
+                )
+                self.fused_backward_check.setStyleSheet("color: orange;")
+            else:
+                self.fused_backward_check.setToolTip(
+                    "Fuse optimizer step into backward pass. Massive VRAM savings with Adafactor on SDXL/Flux."
+                )
+                self.fused_backward_check.setStyleSheet("")
+
+            # Zero-Bottleneck + Mmap require both cache_latents AND cache_text_encoder
+            both_cached = cache_lat and cache_te
+            self.zero_bottleneck_check.setEnabled(both_cached)
+            if not both_cached and self.zero_bottleneck_check.isChecked():
+                self.zero_bottleneck_check.setChecked(False)
+            self.mmap_dataset_check.setEnabled(both_cached)
+            if not both_cached and self.mmap_dataset_check.isChecked():
+                self.mmap_dataset_check.setChecked(False)
+
+            _tip_both = " (requires Cache Latents + Cache Text Encoder)"
+            self.zero_bottleneck_check.setToolTip(
+                "Replace standard DataLoader with mmap+pinned+DMA pipeline." + (
+                    _tip_both if not both_cached else ""))
+            self.mmap_dataset_check.setToolTip(
+                "Build mmap cache after latent encoding for zero-copy I/O." + (
+                    _tip_both if not both_cached else ""))
+
+            # Cache TE is meaningless when training TE (cached outputs bypass forward)
+            self.cache_te_check.setEnabled(not train_te)
+            if train_te and self.cache_te_check.isChecked():
+                self.cache_te_check.setChecked(False)
+
+            # Triton Fused AdamW overrides the optimizer — incompatible with
+            # non-AdamW optimizers
+            opt = self.train_optimizer_combo.currentData() or ""
+            adamw_family = opt.lower() in ("adamw", "adamw8bit", "")
+            self.triton_adamw_check.setEnabled(adamw_family)
+            if not adamw_family and self.triton_adamw_check.isChecked():
+                self.triton_adamw_check.setChecked(False)
+            self.triton_adamw_check.setToolTip(
+                "Custom Triton kernel that fuses all AdamW operations into a single kernel launch."
+                + ("" if adamw_family else " (only available with AdamW / AdamW8bit)")
+            )
 
         self.cuda_graph_check.stateChanged.connect(lambda _: _update())
         self.fp8_training_check.stateChanged.connect(lambda _: _update())
@@ -1918,6 +1976,11 @@ class TrainingTabBuildersMixin:
         self.async_opt_check.stateChanged.connect(lambda _: _update())
         self.mebp_check.stateChanged.connect(lambda _: _update())
         self.sequence_packing_check.stateChanged.connect(lambda _: _update())
+        self.cache_latents_check.stateChanged.connect(lambda _: _update())
+        self.cache_te_check.stateChanged.connect(lambda _: _update())
+        self.train_te_check.stateChanged.connect(lambda _: _update())
+        self.grad_accum_spin.valueChanged.connect(lambda _: _update())
+        self.train_optimizer_combo.currentIndexChanged.connect(lambda _: _update())
 
         _update()
 
