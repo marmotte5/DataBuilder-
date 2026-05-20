@@ -1857,6 +1857,7 @@ class TrainingTabBuildersMixin:
         layout.addStretch()
         scroll.setWidget(w)
         self._update_precision_advice()
+        self._connect_optimization_interlocks()
         return scroll
 
     def _browse_validation_dir(self):
@@ -1867,6 +1868,58 @@ class TrainingTabBuildersMixin:
         )
         if chosen:
             self.val_dir_input.setText(chosen)
+
+    def _connect_optimization_interlocks(self):
+        """Grey out optimization checkboxes that are incompatible with the current selection.
+
+        Rules:
+        - CUDA Graph + MeBP (gradient checkpointing): mutually exclusive
+        - CUDA Graph + Sequence Packing: CUDA graphs need static shapes
+        - FP8 Training + torch.compile: FP8 causes graph breaks
+        - Async Optimizer + Fused Backward: both replace the optimizer step
+        """
+        def _update():
+            cuda_graph = self.cuda_graph_check.isChecked()
+            fp8 = self.fp8_training_check.isChecked()
+            compile_ = self.torch_compile_check.isChecked()
+            fused_bwd = self.fused_backward_check.isChecked()
+            async_opt = self.async_opt_check.isChecked()
+
+            # CUDA Graph ↔ MeBP
+            self.mebp_check.setEnabled(not cuda_graph)
+            if cuda_graph and self.mebp_check.isChecked():
+                self.mebp_check.setChecked(False)
+
+            # CUDA Graph ↔ Sequence Packing
+            self.sequence_packing_check.setEnabled(not cuda_graph)
+            if cuda_graph and self.sequence_packing_check.isChecked():
+                self.sequence_packing_check.setChecked(False)
+
+            # FP8 → disable torch.compile (graph breaks)
+            self.torch_compile_check.setEnabled(not fp8)
+            self.compile_mode_combo.setEnabled(not fp8 and compile_)
+            if fp8 and self.torch_compile_check.isChecked():
+                self.torch_compile_check.setChecked(False)
+
+            # compile mode combo tracks torch.compile checkbox
+            if not fp8:
+                self.compile_mode_combo.setEnabled(compile_)
+
+            # Async Optimizer ↔ Fused Backward: both replace optimizer.step()
+            self.fused_backward_check.setEnabled(not async_opt)
+            self.async_opt_check.setEnabled(not fused_bwd)
+            if async_opt and fused_bwd:
+                self.fused_backward_check.setChecked(False)
+
+        self.cuda_graph_check.stateChanged.connect(lambda _: _update())
+        self.fp8_training_check.stateChanged.connect(lambda _: _update())
+        self.torch_compile_check.stateChanged.connect(lambda _: _update())
+        self.fused_backward_check.stateChanged.connect(lambda _: _update())
+        self.async_opt_check.stateChanged.connect(lambda _: _update())
+        self.mebp_check.stateChanged.connect(lambda _: _update())
+        self.sequence_packing_check.stateChanged.connect(lambda _: _update())
+
+        _update()
 
     def _build_sampling_tab(self):
         """Build the Sampling tab with sample generation interval, sampler,
