@@ -3506,6 +3506,19 @@ class Trainer:
             backup_state["grad_scaler"] = self.grad_scaler.state_dict()
         if getattr(self, '_dl_generator', None) is not None:
             backup_state["dl_generator"] = self._dl_generator.get_state()
+        # Mirror the curriculum and timestep-EMA state that _save_checkpoint
+        # writes — without these, a backup restore silently wipes hours of
+        # adaptive-sampling EMA accumulation.
+        if self._curriculum_sampler is not None:
+            try:
+                backup_state["curriculum_sampler"] = self._curriculum_sampler.state_dict()
+            except Exception as e:
+                log.debug(f"Backup: could not capture curriculum state: {e}")
+        if self._timestep_ema is not None:
+            try:
+                backup_state["timestep_ema"] = self._timestep_ema.state_dict()
+            except Exception as e:
+                log.debug(f"Backup: could not capture timestep_ema state: {e}")
         backup_state_path = backup_dir / "training_state.pt"
         backup_tmp_path = backup_dir / "training_state.pt.tmp"
         torch.save(backup_state, str(backup_tmp_path))
