@@ -382,7 +382,7 @@ class Trainer:
 
         props = torch.cuda.get_device_properties(0)
         cc = (props.major, props.minor)
-        vram_gb = props.total_mem / (1024 ** 3)
+        vram_gb = props.total_memory / (1024 ** 3)
         _auto = []
 
         # Ampere+ (SM 8.0): enable TF32 and matmul precision
