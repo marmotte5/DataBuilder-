@@ -555,6 +555,13 @@ class TrainBackendBase(ABC):
                 except (RuntimeError, AttributeError) as exc:
                     log.debug("cuDNN SDPA backend not available: %s", exc)
 
+        if getattr(config, "sage_attention", False):
+            try:
+                from dataset_sorter.speed_optimizations import enable_sage_attention
+                enable_sage_attention()
+            except Exception as e:
+                log.debug("SageAttention not available: %s", e)
+
         if config.xformers and self.unet is not None:
             try:
                 self.unet.enable_xformers_memory_efficient_attention()

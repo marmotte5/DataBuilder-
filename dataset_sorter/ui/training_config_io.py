@@ -174,6 +174,7 @@ class TrainingConfigIOMixin:
         config.quantize_text_encoder = self.te_quant_combo.currentData() or "none"
         config.torch_compile = self.torch_compile_check.isChecked()
         config.compile_mode = self.compile_mode_combo.currentData() or "default"
+        config.sage_attention = self.sage_attention_check.isChecked()
         config.liger_kernels = self.liger_check.isChecked()
 
         # Extreme Speed
@@ -438,6 +439,7 @@ class TrainingConfigIOMixin:
             if self.compile_mode_combo.itemData(i) == _cm:
                 self.compile_mode_combo.setCurrentIndex(i)
                 break
+        self.sage_attention_check.setChecked(getattr(config, "sage_attention", False))
         self.liger_check.setChecked(config.liger_kernels)
 
         # Extreme Speed

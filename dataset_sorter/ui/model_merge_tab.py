@@ -1,9 +1,11 @@
 """Model merge tab — merge, interpolate, and blend model weights.
 
-Provides three merge methods:
+Provides five merge methods:
 - Weighted Sum: output = (1-alpha) * A + alpha * B
 - SLERP: spherical linear interpolation for smoother blending
 - Add Difference: output = A + alpha * (B - C)  (for extracting and applying style diffs)
+- DARE: Drop And REscale — randomly drop delta entries, rescale survivors
+- TIES: TrIm, Elect, Merge — keep only top-k% delta entries by magnitude
 
 Supports both full model checkpoints and LoRA adapters.
 
@@ -12,7 +14,7 @@ Architecture:
         ├── model selector panel (A, B, optional C)
         ├── merge method selector
         ├── alpha slider with preview value
-        ├── per-block alpha (advanced, expandable)
+        ├── DARE/TIES-specific parameter controls
         ├── output path + merge button
         └── progress / status area
 
@@ -46,6 +48,8 @@ MERGE_METHODS = {
     "weighted_sum": "Weighted Sum",
     "slerp": "SLERP (Spherical)",
     "add_difference": "Add Difference (A + alpha*(B-C))",
+    "dare": "DARE (Drop And REscale)",
+    "ties": "TIES (Trim, Elect, Merge)",
 }
 
 
@@ -66,6 +70,9 @@ class MergeWorker(QThread):
         self.method: str = "weighted_sum"
         self.alpha: float = 0.5
         self.fp16_output: bool = True
+        self.dare_drop_rate: float = 0.3
+        self.ties_density: float = 0.2
+        self.dare_seed: int = 0
         self._cancelled = False
 
     def cancel(self):
@@ -162,6 +169,15 @@ class MergeWorker(QThread):
                     else:
                         result_t = ta_f
                         del tb_f
+
+                elif self.method == "dare":
+                    result_t = self._dare_merge(ta_f, tb_f, alpha, ki)
+                    del ta_f, tb_f
+
+                elif self.method == "ties":
+                    result_t = self._ties_merge(ta_f, tb_f, alpha)
+                    del ta_f, tb_f
+
                 else:
                     result_t = ta_f
                     del tb_f
@@ -244,6 +260,39 @@ class MergeWorker(QThread):
 
         return result
 
+    def _dare_merge(self, a, b, alpha: float, key_idx: int):
+        """DARE: Drop And REscale — randomly drop delta entries, rescale survivors."""
+        import torch
+        delta = b - a
+        p = self.dare_drop_rate
+        if p <= 0.0:
+            a.add_(delta, alpha=alpha)
+            return a
+        seed = self.dare_seed + key_idx if self.dare_seed > 0 else None
+        gen = torch.Generator(device="cpu")
+        if seed is not None:
+            gen.manual_seed(seed)
+        mask = torch.bernoulli(torch.full_like(delta, 1.0 - p), generator=gen)
+        delta.mul_(mask).div_(1.0 - p)
+        a.add_(delta, alpha=alpha)
+        return a
+
+    def _ties_merge(self, a, b, alpha: float):
+        """TIES: keep only top-k% of delta entries by magnitude, zero the rest."""
+        import torch
+        delta = b - a
+        density = self.ties_density
+        if density >= 1.0:
+            a.add_(delta, alpha=alpha)
+            return a
+        flat = delta.flatten()
+        k = max(1, int(flat.numel() * density))
+        threshold = flat.abs().kthvalue(flat.numel() - k + 1).values.item()
+        mask = delta.abs() >= threshold
+        delta.mul_(mask)
+        a.add_(delta, alpha=alpha)
+        return a
+
     @staticmethod
     def _slerp(a, b, t: float):
         """Spherical linear interpolation between two tensors."""
@@ -320,8 +369,8 @@ class ModelMergeTab(QWidget):
         root.addWidget(title)
 
         desc = QLabel(
-            "Merge two model checkpoints or LoRAs using weighted sum, SLERP, or add-difference. "
-            "Supports .safetensors files."
+            "Merge two model checkpoints or LoRAs using weighted sum, SLERP, add-difference, "
+            "DARE, or TIES. Supports .safetensors files."
         )
         desc.setStyleSheet(MUTED_LABEL_STYLE)
         desc.setWordWrap(True)
@@ -405,11 +454,45 @@ class ModelMergeTab(QWidget):
         self._method_desc.setWordWrap(True)
         sg.addWidget(self._method_desc, 2, 0, 1, 3)
 
+        # DARE drop rate
+        self._dare_drop_label = QLabel("Drop rate:")
+        sg.addWidget(self._dare_drop_label, 3, 0)
+        self._dare_drop_spin = QDoubleSpinBox()
+        self._dare_drop_spin.setRange(0.0, 0.99)
+        self._dare_drop_spin.setSingleStep(0.05)
+        self._dare_drop_spin.setValue(0.3)
+        self._dare_drop_spin.setToolTip(
+            "Fraction of delta entries to randomly drop (0.3 = drop 30%, rescale remaining by 1/0.7)"
+        )
+        sg.addWidget(self._dare_drop_spin, 3, 1, 1, 2)
+
+        # TIES density
+        self._ties_density_label = QLabel("Density:")
+        sg.addWidget(self._ties_density_label, 4, 0)
+        self._ties_density_spin = QDoubleSpinBox()
+        self._ties_density_spin.setRange(0.01, 1.0)
+        self._ties_density_spin.setSingleStep(0.05)
+        self._ties_density_spin.setValue(0.2)
+        self._ties_density_spin.setToolTip(
+            "Fraction of top delta entries to keep by magnitude (0.2 = keep largest 20%)"
+        )
+        sg.addWidget(self._ties_density_spin, 4, 1, 1, 2)
+
+        # DARE seed (0 = random)
+        self._dare_seed_label = QLabel("Seed:")
+        sg.addWidget(self._dare_seed_label, 5, 0)
+        self._dare_seed_spin = QDoubleSpinBox()
+        self._dare_seed_spin.setDecimals(0)
+        self._dare_seed_spin.setRange(0, 999999)
+        self._dare_seed_spin.setValue(0)
+        self._dare_seed_spin.setToolTip("Random seed for DARE mask (0 = non-deterministic)")
+        sg.addWidget(self._dare_seed_spin, 5, 1, 1, 2)
+
         # FP16 output
         self._fp16_check = QCheckBox("Save as FP16 (half size)")
         self._fp16_check.setChecked(True)
         self._fp16_check.setToolTip("Cast float32 weights to float16 before saving")
-        sg.addWidget(self._fp16_check, 3, 0, 1, 3)
+        sg.addWidget(self._fp16_check, 6, 0, 1, 3)
 
         root.addWidget(settings_grp)
 
@@ -493,10 +576,21 @@ class ModelMergeTab(QWidget):
         self._model_c_edit.setVisible(is_add_diff)
         self._btn_c.setVisible(is_add_diff)
 
+        is_dare = method == "dare"
+        is_ties = method == "ties"
+        self._dare_drop_label.setVisible(is_dare)
+        self._dare_drop_spin.setVisible(is_dare)
+        self._dare_seed_label.setVisible(is_dare)
+        self._dare_seed_spin.setVisible(is_dare)
+        self._ties_density_label.setVisible(is_ties)
+        self._ties_density_spin.setVisible(is_ties)
+
         descs = {
             "weighted_sum": "alpha=0: 100% Model A  |  alpha=0.5: equal blend  |  alpha=1: 100% Model B",
             "slerp": "Spherical interpolation preserves magnitude better than linear blending",
             "add_difference": "Extracts style from B, removes C's contribution: A + alpha*(B - C)",
+            "dare": "A is the base model, B is the fine-tune. Randomly drops delta entries and rescales survivors",
+            "ties": "A is the base model, B is the fine-tune. Keeps only the largest delta entries by magnitude",
         }
         self._method_desc.setText(descs.get(method, ""))
 
@@ -574,6 +668,9 @@ class ModelMergeTab(QWidget):
         self._worker.method = method
         self._worker.alpha = self._alpha_spin.value()
         self._worker.fp16_output = self._fp16_check.isChecked()
+        self._worker.dare_drop_rate = self._dare_drop_spin.value()
+        self._worker.ties_density = self._ties_density_spin.value()
+        self._worker.dare_seed = int(self._dare_seed_spin.value())
 
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)

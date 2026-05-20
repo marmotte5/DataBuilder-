@@ -41,6 +41,12 @@
    - Fused Triton kernels for LayerNorm, RMSNorm, SwiGLU, CrossEntropy
    - Reduces memory and kernel launch overhead
    - Optional dependency: liger-kernel package
+
+11. SageAttention (ICLR 2025 / ICML 2025):
+    - INT8 quantized attention: 2-3x faster than FlashAttention2
+    - 340 TOPS on RTX 4090, plug-and-play via F.scaled_dot_product_attention monkey-patch
+    - Falls back to native SDPA when attn_mask is provided (SageAttention doesn't support masks)
+    - Optional dependency: sageattention package
 """
 
 import logging
@@ -1110,3 +1116,76 @@ def apply_regional_compile(
             )
 
     return compiled
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. SAGE ATTENTION — INT8 QUANTIZED ATTENTION (ICLR 2025 / ICML 2025)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_sage_original_sdpa: Optional[callable] = None
+
+
+def _sage_sdpa_wrapper(
+    query, key, value,
+    attn_mask=None, dropout_p=0.0, is_causal=False, scale=None,
+    enable_gqa=False,
+):
+    """Drop-in replacement for F.scaled_dot_product_attention using SageAttention.
+
+    Falls back to the original SDPA when attn_mask is provided or inputs
+    are not FP16/BF16 (SageAttention requires half-precision).
+    """
+    can_use_sage = (
+        attn_mask is None
+        and dropout_p == 0.0
+        and scale is None
+        and not enable_gqa
+        and query.dtype in (torch.float16, torch.bfloat16)
+    )
+    if can_use_sage:
+        from sageattention import sageattn
+        return sageattn(query, key, value, tensor_layout="HND", is_causal=is_causal)
+    return _sage_original_sdpa(
+        query, key, value,
+        attn_mask=attn_mask, dropout_p=dropout_p,
+        is_causal=is_causal, scale=scale,
+        enable_gqa=enable_gqa,
+    )
+
+
+def enable_sage_attention() -> bool:
+    """Monkey-patch F.scaled_dot_product_attention with SageAttention.
+
+    Returns True if successful, False if sageattention is not installed.
+    """
+    global _sage_original_sdpa
+
+    if _sage_original_sdpa is not None:
+        log.debug("SageAttention already enabled")
+        return True
+
+    try:
+        from sageattention import sageattn  # noqa: F401
+    except ImportError:
+        log.warning(
+            "sageattention not installed — pip install sageattention "
+            "(requires CUDA >= 12.0, Triton >= 3.0)"
+        )
+        return False
+
+    import torch.nn.functional as F
+    _sage_original_sdpa = F.scaled_dot_product_attention
+    F.scaled_dot_product_attention = _sage_sdpa_wrapper
+    log.info("SageAttention enabled — INT8 quantized attention (2-3x faster than FlashAttention2)")
+    return True
+
+
+def disable_sage_attention():
+    """Restore original F.scaled_dot_product_attention."""
+    global _sage_original_sdpa
+    if _sage_original_sdpa is None:
+        return
+    import torch.nn.functional as F
+    F.scaled_dot_product_attention = _sage_original_sdpa
+    _sage_original_sdpa = None
+    log.info("SageAttention disabled — restored native SDPA")

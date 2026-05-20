@@ -692,6 +692,17 @@ class GenerateTab(QWidget):
         self.nunchaku_check.stateChanged.connect(self._on_nunchaku_toggled)
         speed_row.addWidget(self.nunchaku_check)
 
+        self.sage_attention_check = QCheckBox("SageAttention (2-3× faster attn)")
+        self.sage_attention_check.setToolTip(
+            "INT8 quantized attention — 2-3× faster than FlashAttention2,\n"
+            "340 TOPS on RTX 4090. Drop-in replacement via monkey-patch.\n"
+            "Falls back to native SDPA when attention masks are needed.\n"
+            "Requires CUDA >= 12.0. Install with:\n"
+            "    pip install sageattention"
+        )
+        self.sage_attention_check.stateChanged.connect(self._on_sage_attention_toggled)
+        speed_row.addWidget(self.sage_attention_check)
+
         speed_row.addStretch()
         left.addWidget(self._speed_widget)
 
@@ -1376,6 +1387,27 @@ class GenerateTab(QWidget):
         """Toggle TaylorSeer cache on the loaded pipeline."""
         if self._worker:
             self._worker.set_taylorseer(bool(state))
+
+    def _on_sage_attention_toggled(self, state):
+        """Toggle SageAttention INT8 quantized attention."""
+        if self._worker:
+            self._worker.sage_attention_enabled = bool(state)
+        if state:
+            try:
+                from dataset_sorter.speed_optimizations import enable_sage_attention
+                enable_sage_attention()
+            except Exception:
+                from dataset_sorter.ui.toast import show_toast
+                self.sage_attention_check.blockSignals(True)
+                self.sage_attention_check.setChecked(False)
+                self.sage_attention_check.blockSignals(False)
+                show_toast(self, "sageattention not installed — pip install sageattention", "warning")
+        else:
+            try:
+                from dataset_sorter.speed_optimizations import disable_sage_attention
+                disable_sage_attention()
+            except Exception:
+                pass
 
     def _on_nunchaku_toggled(self, state):
         """Toggle Nunchaku INT4 acceleration. Takes effect on next model load.
