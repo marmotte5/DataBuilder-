@@ -1955,8 +1955,9 @@ class Trainer:
                 if _speculative_predictor is not None:
                     _speculative_predictor.correct(self.optimizer)
 
-                # GPU-side accumulation (no .item() sync) — see init above
-                running_loss = running_loss + loss.detach()
+                # GPU-side in-place accumulation (no .item() sync, no
+                # per-step tensor allocation) — see init above.
+                running_loss.add_(loss.detach())
                 _valid_microbatches += 1
                 _accum_count += 1
 
