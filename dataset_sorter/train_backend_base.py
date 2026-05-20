@@ -72,6 +72,15 @@ import torch.nn.functional as F
 from dataset_sorter.models import TrainingConfig
 from dataset_sorter.utils import empty_cache, autocast_device_type
 
+# Hoist Triton kernel imports to module level so the hot loss/interp
+# functions don't re-do a sys.modules lookup every step. triton_kernels
+# handles the no-Triton case internally (functions still exist as
+# PyTorch fallbacks).
+from dataset_sorter.triton_kernels import (
+    fused_mse_loss as _fused_mse_loss,
+    fused_flow_interpolate as _fused_flow_interpolate,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -312,8 +321,7 @@ class TrainBackendBase(ABC):
             and getattr(self.config, "loss_fn", "mse").lower() == "mse"
         )
         if _use_fused:
-            from dataset_sorter.triton_kernels import fused_mse_loss
-            return fused_mse_loss(noise_pred, target)
+            return _fused_mse_loss(noise_pred, target)
         loss = self._base_loss(noise_pred.float(), target.float())
         return self._apply_spatial_mask(loss)
 
@@ -365,8 +373,7 @@ class TrainBackendBase(ABC):
             and getattr(self.config, "loss_fn", "mse").lower() == "mse"
         )
         if _use_fused:
-            from dataset_sorter.triton_kernels import fused_mse_loss
-            return fused_mse_loss(noise_pred, target)
+            return _fused_mse_loss(noise_pred, target)
         loss = self._base_loss(noise_pred.float(), target)
         return self._apply_spatial_mask(loss)
 
@@ -484,8 +491,7 @@ class TrainBackendBase(ABC):
     ) -> torch.Tensor:
         """Flow matching interpolation: (1-t)*x + t*noise."""
         if self.config.triton_fused_flow:
-            from dataset_sorter.triton_kernels import fused_flow_interpolate
-            return fused_flow_interpolate(latents, noise, t)
+            return _fused_flow_interpolate(latents, noise, t)
         t_view = t.view(-1, *([1] * (latents.dim() - 1)))
         return (1 - t_view) * latents + t_view * noise
 

@@ -525,26 +525,32 @@ class ComparisonTab(QWidget):
             else:
                 pair_seed = seed + i
 
-            # Side A config
+            # Per-side seed override is treated as a STARTING seed: we add `i`
+            # so generating multiple pairs doesn't produce duplicate images
+            # (previously every pair got the exact same constant seed).
+            seed_a_override = overrides_a.get("seed", -2)
+            seed_b_override = overrides_b.get("seed", -2)
+            side_a_seed = (seed_a_override + i) if seed_a_override > -2 else pair_seed
+            side_b_seed = (seed_b_override + i) if seed_b_override > -2 else pair_seed
+
             gen_queue.append({
                 "side": "A", "index": i,
                 "prompt": prompt,
                 "negative": overrides_a.get("negative", negative),
                 "steps": overrides_a.get("steps", steps),
                 "cfg": overrides_a.get("cfg_scale", cfg),
-                "seed": overrides_a.get("seed", pair_seed) if overrides_a.get("seed", -2) > -2 else pair_seed,
+                "seed": side_a_seed,
                 "width": res[0], "height": res[1],
                 "lora_path": overrides_a.get("lora_path", ""),
                 "lora_weight": overrides_a.get("lora_weight", 1.0),
             })
-            # Side B config
             gen_queue.append({
                 "side": "B", "index": i,
                 "prompt": prompt,
                 "negative": overrides_b.get("negative", negative),
                 "steps": overrides_b.get("steps", steps),
                 "cfg": overrides_b.get("cfg_scale", cfg),
-                "seed": overrides_b.get("seed", pair_seed) if overrides_b.get("seed", -2) > -2 else pair_seed,
+                "seed": side_b_seed,
                 "width": res[0], "height": res[1],
                 "lora_path": overrides_b.get("lora_path", ""),
                 "lora_weight": overrides_b.get("lora_weight", 1.0),

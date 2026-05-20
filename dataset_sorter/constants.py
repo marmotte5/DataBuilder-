@@ -70,10 +70,12 @@ VRAM_TIERS = [8, 12, 16, 24, 48, 96]
 # 'loha' / 'lokr' / 'locon' / 'dylora' use LyCORIS for training.
 NETWORK_TYPES = {
     "lora":   "LoRA — Low-Rank Adaptation (PEFT)",
+    "dora":   "DoRA — Weight-Decomposed LoRA (PEFT with use_dora=True)",
     "loha":   "LoHa — Low-Rank Hadamard Product (LyCORIS)",
     "lokr":   "LoKr — Kronecker Product, 5-10x param-efficient (LyCORIS)",
     "locon":  "LoCon — LoRA + Conv layers (LyCORIS)",
     "dylora": "DyLoRA — Dynamic-rank LoRA (LyCORIS)",
+    "full":   "Full finetune (no adapter, all weights trainable)",
 }
 
 # Supported optimizers

@@ -315,9 +315,25 @@ def compute_image_log_probs(
 
     # Per-sample MSE: target depends on prediction type
     # - Epsilon models predict the added noise
-    # - Flow-matching models predict the velocity (noise - latents)
-    if getattr(backend, 'prediction_type', 'epsilon') == 'flow':
+    # - v-prediction models predict velocity v = alpha*noise - sigma*latents
+    # - Flow-matching models predict noise - latents
+    pred_type = getattr(backend, 'prediction_type', 'epsilon')
+    if pred_type == 'flow':
         target = noise.float() - latents.float()
+    elif pred_type == 'v_prediction':
+        # Use the scheduler's velocity formula so SD 2.1 / 2.0 DPO doesn't
+        # silently train against a noise target when the model predicts
+        # velocity. get_velocity is the diffusers standard helper.
+        try:
+            target = backend.noise_scheduler.get_velocity(
+                latents.float(), noise.float(), timesteps,
+            )
+        except Exception:
+            # Fall back to direct formula if the scheduler lacks get_velocity.
+            alphas = backend.noise_scheduler.alphas_cumprod.to(latents.device)
+            alpha_t = alphas[timesteps].sqrt().view(-1, 1, 1, 1)
+            sigma_t = (1 - alphas[timesteps]).sqrt().view(-1, 1, 1, 1)
+            target = alpha_t * noise.float() - sigma_t * latents.float()
     else:
         target = noise.float()
     per_sample_mse = F.mse_loss(

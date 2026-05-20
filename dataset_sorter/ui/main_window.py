@@ -3734,14 +3734,15 @@ class MainWindow(QMainWindow):
         """Push the current dataset's image paths to the Cluster Map tab."""
         if not hasattr(self, "cluster_tab") or not hasattr(self.cluster_tab, "set_image_paths"):
             return
-        paths = [str(e.path) for e in self.entries if getattr(e, "path", None)]
+        # ImageEntry uses `image_path`, not `path` (verified models.py).
+        paths = [str(e.image_path) for e in self.entries if getattr(e, "image_path", None)]
         self.cluster_tab.set_image_paths(paths)
 
     def _on_cluster_navigate(self, image_path: str):
         """Cluster point double-clicked — jump to the image in the Images tab."""
         target = str(image_path)
         for idx, entry in enumerate(self.entries):
-            if str(getattr(entry, "path", "")) == target:
+            if str(getattr(entry, "image_path", "")) == target:
                 self._navigate_to_image(idx)
                 self._switch_nav("dataset")
                 return

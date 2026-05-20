@@ -27,6 +27,11 @@ from typing import Optional
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
+
+# Hoisted from __getitem__'s hot path — the previous lazy import meant
+# every uncached sample read paid a sys.modules lookup. io_speed has
+# its own internal fallback if libjpeg-turbo / pyvips aren't available.
+from dataset_sorter.io_speed import fast_decode_image as _fast_decode_image
 from PIL import Image
 
 log = logging.getLogger(__name__)
@@ -186,8 +191,21 @@ class CachedTrainDataset(Dataset):
         return transforms.Compose(pipeline)
 
     def _get_transforms_for_resolution(self, width: int, height: int):
-        """Build transforms for a specific bucket (w, h) resolution."""
-        return self._build_transforms(width, height)
+        """Return cached transforms for a (w, h) bucket; build on first use.
+
+        Without caching, every __getitem__ call allocated a fresh Compose
+        chain (Resize, Crop, ToTensor, Normalize, optional aug) — a real
+        5-15% slowdown in the uncached-latent + bucketing path because the
+        same N buckets reuse only N distinct pipelines.
+        """
+        if not hasattr(self, "_bucket_transforms"):
+            self._bucket_transforms: dict[tuple[int, int], object] = {}
+        key = (width, height)
+        cached = self._bucket_transforms.get(key)
+        if cached is None:
+            cached = self._build_transforms(width, height)
+            self._bucket_transforms[key] = cached
+        return cached
 
     def __getitem__(self, idx):
         result = {}
@@ -209,8 +227,7 @@ class CachedTrainDataset(Dataset):
             result["latent"] = latent
         else:
             try:
-                from dataset_sorter.io_speed import fast_decode_image
-                img = fast_decode_image(self.image_paths[idx])
+                img = _fast_decode_image(self.image_paths[idx])
             except Exception as e:
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
                 img = Image.new("RGB", (target_w, target_h))

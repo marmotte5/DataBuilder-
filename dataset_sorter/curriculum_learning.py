@@ -123,8 +123,11 @@ class CurriculumSampler:
         # Enforce minimum weight to prevent starvation
         weights = np.maximum(weights, self.min_weight)
 
-        # Cap weight ratio to prevent extreme imbalance (log-compress to
-        # reduce the ratio while preserving strict ordering and temperature effect)
+        # Cap weight ratio to prevent extreme imbalance. log1p compresses
+        # the range while preserving strict ordering — high-loss samples
+        # remain weighted higher than low-loss ones, but by a smaller
+        # margin. This is preferable to a hard clip (which would tie
+        # all samples above the cap, losing ordering information).
         w_min = weights.min()
         w_max = weights.max()
         if w_min > 0 and w_max / w_min > self.max_weight_ratio:

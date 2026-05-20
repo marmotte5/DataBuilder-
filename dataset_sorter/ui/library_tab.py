@@ -1270,9 +1270,22 @@ class LibraryTab(QWidget):
             )
             return
         # Map the library item's model_type back to a DataBuilder arch id.
-        arch = (getattr(item, "model_type", "") or "unknown").lower().strip()
-        # Some items report human-readable labels — try to canonicalize.
-        arch = arch.split()[0] if arch else "unknown"
+        # Human-readable labels like "SD 1.5", "SD 3.5", "Flux 2" lost their
+        # version when we naively took .split()[0], producing "sd"/"flux".
+        # Use a label→id map so versioned models route to the right arch.
+        raw = (getattr(item, "model_type", "") or "unknown").lower().strip()
+        _LABEL_TO_ARCH = {
+            "sd 1.5": "sd15", "sd1.5": "sd15", "stable diffusion 1.5": "sd15",
+            "sd 2.x": "sd2", "sd 2": "sd2", "sd2.x": "sd2",
+            "sd 3.5": "sd35", "sd3.5": "sd35",
+            "flux 2": "flux2", "flux2": "flux2",
+            "sdxl": "sdxl", "pony": "pony", "flux": "flux",
+            "sd3": "sd3", "zimage": "zimage", "z-image": "zimage",
+            "pixart": "pixart", "kolors": "kolors", "cascade": "cascade",
+            "chroma": "chroma", "hunyuan": "hunyuan", "auraflow": "auraflow",
+            "sana": "sana", "hidream": "hidream",
+        }
+        arch = _LABEL_TO_ARCH.get(raw, raw.split()[0] if raw else "unknown")
         dialog = GGUFExportDialog(
             source_path=str(item.path),
             arch=arch,
