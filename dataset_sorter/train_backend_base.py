@@ -223,6 +223,7 @@ class TrainBackendBase(ABC):
         # LyCORIS adapter — single file
         if self.adapter_type == "lycoris" and self.lycoris_net is not None:
             from safetensors.torch import save_file as _st_save  # noqa: F401  (presence check)
+            import json
             out_file = save_dir / "adapter_model.safetensors"
             metadata = {
                 "ss_network_module": getattr(self.config, "network_type", "lokr"),
@@ -231,6 +232,19 @@ class TrainBackendBase(ABC):
                 "ss_v2": "False",
             }
             self.lycoris_net.save_weights(str(out_file), self.dtype, metadata)
+            # Write a sidecar config so the resume path can identify this
+            # as a LyCORIS adapter (PEFT's adapter_config.json is absent
+            # here, which previously caused resume to silently skip the
+            # weights).
+            try:
+                (save_dir / "lycoris_config.json").write_text(json.dumps({
+                    "adapter_type": "lycoris",
+                    "network_type": getattr(self.config, "network_type", "lokr"),
+                    "rank": self.config.lora_rank,
+                    "alpha": self.config.lora_alpha,
+                }, indent=2))
+            except Exception as e:
+                log.warning(f"Could not write lycoris_config.json: {e}")
             log.info("Saved %s LyCORIS adapter to %s", self.model_name, out_file)
             return
 

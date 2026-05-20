@@ -115,7 +115,9 @@ class BatchGenerationWorker(QThread):
         self.default_clip_skip: int = 0
 
     def set_queue(self, queue: list[BatchPrompt]):
-        self._queue = queue
+        # Snapshot the queue so UI mutations during the run cannot corrupt
+        # the iteration indices or skip / duplicate prompts.
+        self._queue = list(queue)
 
     def set_generate_worker(self, worker):
         self._generate_worker = worker
@@ -201,6 +203,7 @@ class BatchGenerationTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._queue: list[BatchPrompt] = []
+        self._running_queue: list[BatchPrompt] | None = None
         self._worker: BatchGenerationWorker | None = None
         self._generate_worker = None  # will be set by MainWindow
         self._output_folder = str(Path.home() / "DataBuilder_batch_outputs")
@@ -572,7 +575,7 @@ class BatchGenerationTab(QWidget):
                             cfg_scale=_safe_float(row_data.get("cfg", row_data.get("cfg_scale", "")), 0.0),
                             width=_safe_int(row_data.get("width", ""), 0),
                             height=_safe_int(row_data.get("height", ""), 0),
-                            count=_safe_int(row_data.get("count", ""), 1),
+                            count=max(1, _safe_int(row_data.get("count", ""), 1)),
                         )
                         self._add_row(prompt)
                         count += 1
@@ -608,7 +611,7 @@ class BatchGenerationTab(QWidget):
                     cfg_scale=_safe_float(item.get("cfg_scale", item.get("cfg", 0)), 0.0),
                     width=_safe_int(item.get("width", 0), 0),
                     height=_safe_int(item.get("height", 0), 0),
-                    count=_safe_int(item.get("count", 1), 1),
+                    count=max(1, _safe_int(item.get("count", 1), 1)),
                 )
                 self._add_row(prompt)
                 count += 1
@@ -683,9 +686,12 @@ class BatchGenerationTab(QWidget):
         # Clean up any previous worker before creating a new one
         self._cleanup_worker()
 
-        # Build worker
+        # Build worker. Snapshot the queue so UI mutations during the run
+        # can't corrupt the worker's iteration OR the _on_image_generated
+        # slot which also uses index-based access.
+        self._running_queue = list(self._queue)
         self._worker = BatchGenerationWorker(self)
-        self._worker.set_queue(self._queue)
+        self._worker.set_queue(self._running_queue)
         self._worker.set_generate_worker(self._generate_worker)
 
         # Apply defaults
@@ -696,6 +702,9 @@ class BatchGenerationTab(QWidget):
         self._worker.default_height = res[1]
         self._worker.default_negative = self._default_neg.text().strip()
         if self._generate_worker is not None:
+            self._worker.default_clip_skip = getattr(
+                self._generate_worker, 'clip_skip', 0
+            ) or 0
             self._worker.default_scheduler = getattr(
                 self._generate_worker, 'scheduler_name', 'euler_a'
             )
@@ -732,9 +741,12 @@ class BatchGenerationTab(QWidget):
         """Save each generated image to disk."""
         output_root = Path(self._output_edit.text().strip() or self._output_folder)
 
-        if self._organize_check.isChecked() and qi < len(self._queue):
+        # Use the snapshot taken at run start, not the live queue, so
+        # mid-run UI mutations don't desync prompt-to-folder mapping.
+        active_queue = getattr(self, "_running_queue", None) or self._queue
+        if self._organize_check.isChecked() and qi < len(active_queue):
             # Create a subfolder from the first few words of the prompt
-            prompt_text = self._queue[qi].positive
+            prompt_text = active_queue[qi].positive
             folder_name = "_".join(prompt_text.split()[:5])
             # Sanitize folder name
             folder_name = "".join(c if c.isalnum() or c in "_- " else "" for c in folder_name)
@@ -803,6 +815,7 @@ class BatchGenerationTab(QWidget):
         show_toast(self, message, variant)
         # Clean up worker thread to avoid memory/VRAM leaks
         self._cleanup_worker()
+        self._running_queue = None
 
     def _cleanup_worker(self):
         """Clean up batch generation worker thread."""

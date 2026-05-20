@@ -175,8 +175,8 @@ def _app_info() -> list[str]:
             MODEL_TYPES, OPTIMIZERS, NETWORK_TYPES,
             VRAM_TIERS, LR_SCHEDULERS, EXTREME_SPEED_OPTS,
         )
-        lines.append(f"  App version       : 3.0.0 (Beta)")
-        lines.append(f"  Target VRAM       : 12 GB")
+        lines.append("  App version       : 3.0.0 (Beta)")
+        lines.append("  Target VRAM       : 12 GB")
         lines.append(f"  VRAM tiers        : {VRAM_TIERS}")
         lines.append(f"  Model types       : {len(MODEL_TYPES)} ({len(MODEL_TYPES) // 2} base x 2 variants)")
         lines.append(f"  Optimizers        : {len(OPTIMIZERS)}")
@@ -201,7 +201,7 @@ def print_startup_log() -> None:
         ("APPLICATION", _app_info()),
     ]
 
-    block = [_SEPARATOR, f"  DATASET SORTER — STARTUP DIAGNOSTICS", _SEPARATOR]
+    block = [_SEPARATOR, "  DATASET SORTER — STARTUP DIAGNOSTICS", _SEPARATOR]
     for title, lines in sections:
         block.append("")
         block.append(f"  [{title}]")

@@ -2642,7 +2642,14 @@ class Trainer:
                 # HiDream: (t5_hidden, pooled, llama_hidden)
                 t5_h = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[0] is not None else None
                 pooled = te_cache[1].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[1] is not None else None
-                llama_h = te_cache[2].to(self.device, dtype=self.dtype, non_blocking=True) if te_cache[2] is not None else None
+                llama_h = te_cache[2]
+                if isinstance(llama_h, torch.Tensor):
+                    llama_h = llama_h.to(self.device, dtype=self.dtype, non_blocking=True)
+                    # Cached Llama states are [batch, num_layers, seq, h] after
+                    # collation. Transformer expects [num_layers, batch, seq, h]
+                    # (indexable by layer index).
+                    if llama_h.dim() == 4:
+                        llama_h = llama_h.permute(1, 0, 2, 3)
                 te_out = (t5_h, pooled, llama_h)
             elif len(te_cache) == 2:
                 encoder_hidden = te_cache[0].to(self.device, dtype=self.dtype, non_blocking=True)
@@ -3011,6 +3018,20 @@ class Trainer:
         }
         if self.grad_scaler is not None:
             state_dict["grad_scaler"] = self.grad_scaler.state_dict()
+        # Curriculum learning state: per-image loss EMA + epoch counters.
+        # Without this, resume restarts curriculum from scratch (uniform
+        # weights, must rebuild EMA over warmup_epochs).
+        if self._curriculum_sampler is not None:
+            try:
+                state_dict["curriculum_sampler"] = self._curriculum_sampler.state_dict()
+            except Exception as e:
+                log.debug(f"Could not save curriculum state: {e}")
+        # Per-timestep EMA state: per-bucket loss EMA and step counter.
+        if self._timestep_ema is not None:
+            try:
+                state_dict["timestep_ema"] = self._timestep_ema.state_dict()
+            except Exception as e:
+                log.debug(f"Could not save timestep_ema state: {e}")
         # Save DataLoader generator state for reproducible shuffle on resume
         if getattr(self, '_dl_generator', None) is not None:
             state_dict["dl_generator"] = self._dl_generator.get_state()
@@ -3580,6 +3601,17 @@ class Trainer:
         self.state.val_loss = float(state.get("val_loss", float("nan")))
         self.state.val_step = int(state.get("val_step", 0))
 
+        # Restore in-memory loss history from on-disk loss_history.json so
+        # the "min loss" / loss curve report reflects the full run, not just
+        # post-resume. The on-disk file already has cross-run accumulation
+        # via save_loss_history; we just hydrate the in-memory mirror.
+        try:
+            history = load_loss_history(self.output_dir)
+            if history:
+                self._loss_history = history[-self._max_history_len:]
+        except Exception as e:
+            log.debug(f"Could not load loss history on resume: {e}")
+
         # Warn on structural config mismatch. These are the fields the
         # optimizer/scheduler/model state depends on — changing any of
         # them mid-run will either fail to load state or silently corrupt
@@ -3650,6 +3682,23 @@ class Trainer:
             except (RuntimeError, ValueError, KeyError) as e:
                 log.warning(f"Could not restore GradScaler state: {e}")
 
+        # Restore curriculum learning state (per-image loss EMA, epoch).
+        if (self._curriculum_sampler is not None
+                and "curriculum_sampler" in state):
+            try:
+                self._curriculum_sampler.load_state_dict(state["curriculum_sampler"])
+                log.info("Restored curriculum learning state from checkpoint")
+            except Exception as e:
+                log.warning(f"Could not restore curriculum state: {e}")
+
+        # Restore per-timestep EMA state (per-bucket loss EMA).
+        if self._timestep_ema is not None and "timestep_ema" in state:
+            try:
+                self._timestep_ema.load_state_dict(state["timestep_ema"])
+                log.info("Restored timestep EMA state from checkpoint")
+            except Exception as e:
+                log.warning(f"Could not restore timestep_ema state: {e}")
+
         # Restore DataLoader generator state for reproducible shuffle on resume
         if "dl_generator" in state:
             self._resume_dl_generator_state = state["dl_generator"]
@@ -3665,6 +3714,19 @@ class Trainer:
         is_lora = self.config.model_type.endswith("_lora")
         if is_lora:
             from peft import PeftModel
+            # LyCORIS adapters save only adapter_model.safetensors (no
+            # adapter_config.json). Detect by adapter_type and load via
+            # LycorisNetwork.load_weights() to avoid silently dropping the
+            # adapter on resume.
+            adapter_file = checkpoint_dir / "adapter_model.safetensors"
+            if (getattr(self.backend, "adapter_type", None) == "lycoris"
+                    and getattr(self.backend, "lycoris_net", None) is not None
+                    and adapter_file.exists()):
+                try:
+                    self.backend.lycoris_net.load_weights(str(adapter_file))
+                    log.info("Restored LyCORIS adapter weights from checkpoint")
+                except Exception as e:
+                    log.warning(f"Could not restore LyCORIS weights: {e}")
             # Check for LoRA adapter files
             adapter_config = checkpoint_dir / "adapter_config.json"
             if adapter_config.exists() and self.backend.unet is not None:
@@ -3746,6 +3808,12 @@ class Trainer:
                     del pipe
                 except Exception as e:
                     log.warning(f"Could not restore full finetune pipeline: {e}")
+
+            # Full finetune with train_text_encoder=True saves TE weights
+            # into text_encoder*/ subdirs via pipeline.save_pretrained.
+            # Restore them here — previously the full-finetune branch only
+            # reloaded the unet/transformer, silently losing TE progress.
+            self._resume_text_encoders(checkpoint_dir)
 
         # Restore EMA state
         ema_path = checkpoint_dir / "ema_weights.pt"
@@ -3849,6 +3917,26 @@ class Trainer:
             elif hasattr(dataset, "close"):
                 dataset.close()
 
+        # Close TensorBoard file handle (only closes in train()'s finally
+        # on the happy path — error/stop paths leak the handle otherwise).
+        tb = getattr(self, "_tb_logger", None)
+        if tb is not None:
+            try:
+                tb.close()
+            except Exception:
+                pass
+            self._tb_logger = None
+
+        # FP8 wrapper holds a reference to the unet (self.model = unet).
+        # MUST be cleared BEFORE backend.cleanup() — otherwise backend.unet
+        # release doesn't free the underlying tensors (pinned by the wrapper).
+        if getattr(self, "_fp8_wrapper", None) is not None:
+            self._fp8_wrapper = None
+
+        # CUDA graph holds static GPU tensors + a captured graph object.
+        if getattr(self, "_cuda_graph", None) is not None:
+            self._cuda_graph = None
+
         backend = getattr(self, "backend", None)
         if backend is not None:
             backend.cleanup()
@@ -3868,5 +3956,11 @@ class Trainer:
         self.ema_model = None
         self.dataset = None
         self.grad_scaler = None
+        # Drop other GPU-anchoring helpers so they don't survive a Trainer
+        # reference cycle and pin VRAM across train/cleanup cycles.
+        self._async_optimizer = None
+        self._snr_weights = None
+        self._val_dataset = None
+        self._val_loader = None
         gc.collect()
         empty_cache()

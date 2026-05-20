@@ -556,7 +556,13 @@ class ModelMergeTab(QWidget):
             if self._worker.isRunning():
                 if hasattr(self._worker, "cancel"):
                     self._worker.cancel()
-                self._worker.wait(5000)
+                if not self._worker.wait(5000):
+                    # Worker is wedged. Detach this reference and let it
+                    # leak rather than calling deleteLater() on a running
+                    # QThread (which can segfault).
+                    log.warning("MergeWorker did not finish within 5s — leaking reference instead of force-deleting")
+                    self._worker = None
+                    return
             self._worker.deleteLater()
             self._worker = None
 

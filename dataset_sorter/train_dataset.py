@@ -617,9 +617,14 @@ class CachedTrainDataset(Dataset):
                         t.cpu() if isinstance(t, torch.Tensor) else t
                         for t in encode_fn([caption])
                     )
-                    # Squeeze batch dim since we encode one caption at a time
+                    # Squeeze batch dim since we encode one caption at a time.
+                    # Most tensors have batch at dim 0 (3D: [1, seq, h]).
+                    # HiDream Llama hidden states are 4D: [layers, 1, seq, h]
+                    # with batch at dim 1 — squeeze(0) misses it, so use
+                    # squeeze() to remove all size-1 dims instead.
                     te_result = tuple(
-                        t.squeeze(0) if isinstance(t, torch.Tensor) and t.dim() > 1 else t
+                        t.squeeze() if isinstance(t, torch.Tensor) and t.dim() > 2
+                        else (t.squeeze(0) if isinstance(t, torch.Tensor) and t.dim() > 1 else t)
                         for t in te_result
                     )
                     token_id_result = ()  # token IDs not available via encode_fn

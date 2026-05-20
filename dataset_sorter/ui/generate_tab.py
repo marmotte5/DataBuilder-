@@ -1303,6 +1303,10 @@ class GenerateTab(QWidget):
             self.status_label.setText("Load a model first.")
             return
 
+        if not self.positive_prompt.toPlainText().strip():
+            self.status_label.setText("Enter a prompt before generating.")
+            return
+
         # Clear gallery
         self._generated_images.clear()
         self._current_gallery_idx = 0
@@ -1337,13 +1341,21 @@ class GenerateTab(QWidget):
         init_path = self.init_image_path.text().strip()
         mask_path = self.mask_image_path.text().strip()
         if init_path and Path(init_path).is_file():
-            with PILImage.open(init_path) as _img:
-                self._worker.init_image = _img.convert("RGB")
+            try:
+                with PILImage.open(init_path) as _img:
+                    self._worker.init_image = _img.convert("RGB")
+            except Exception as e:
+                self.status_label.setText(f"Init image could not be opened: {e}")
+                return
         else:
             self._worker.init_image = None
         if mask_path and Path(mask_path).is_file():
-            with PILImage.open(mask_path) as _img:
-                self._worker.mask_image = _img.convert("L")
+            try:
+                with PILImage.open(mask_path) as _img:
+                    self._worker.mask_image = _img.convert("L")
+            except Exception as e:
+                self.status_label.setText(f"Mask image could not be opened: {e}")
+                return
         else:
             self._worker.mask_image = None
 

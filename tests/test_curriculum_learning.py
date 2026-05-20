@@ -392,3 +392,53 @@ class TestCurriculumIntegration:
         for t in ts:
             buckets_seen.add((t.item() // 20))
         assert len(buckets_seen) == 5  # All buckets should be reachable
+
+
+class TestCurriculumStateDictRoundtrip:
+    """Verify resume-from-checkpoint preserves curriculum state.
+
+    Without state_dict/load_state_dict the sampler restarts from scratch
+    on resume, dropping per-image loss EMA and re-entering warmup —
+    silent quality regression.
+    """
+
+    def test_curriculum_sampler_roundtrip(self):
+        s1 = CurriculumSampler(num_images=20, temperature=1.0, warmup_epochs=2)
+        s1.update_loss([0, 1, 2], [0.5, 0.8, 1.2])
+        s1.on_epoch_start()
+        s1.on_epoch_start()
+        s1.on_epoch_start()
+
+        state = s1.state_dict()
+        s2 = CurriculumSampler(num_images=20, temperature=1.0, warmup_epochs=2)
+        s2.load_state_dict(state)
+
+        assert s2._epoch == s1._epoch
+        assert s2._active == s1._active
+        assert np.allclose(s2._loss_ema, s1._loss_ema)
+        assert np.array_equal(s2._seen_count, s1._seen_count)
+
+    def test_curriculum_sampler_mismatch_tolerated(self):
+        """Different num_images should silently skip restore (no exception)."""
+        s1 = CurriculumSampler(num_images=10, temperature=1.0)
+        s1.update_loss([0, 1], [0.5, 0.6])
+        state = s1.state_dict()
+
+        s2 = CurriculumSampler(num_images=20, temperature=1.0)  # different
+        s2.load_state_dict(state)
+        # Should leave s2 unchanged
+        assert s2._epoch == 0
+        assert not s2._active
+
+    def test_timestep_ema_roundtrip(self):
+        t1 = TimestepEMASampler(num_train_timesteps=1000, num_buckets=20)
+        t1.update(torch.tensor([10, 100, 500]), torch.tensor([0.5, 0.3, 0.8]))
+        t1.update(torch.tensor([200, 700]), torch.tensor([0.4, 0.6]))
+
+        state = t1.state_dict()
+        t2 = TimestepEMASampler(num_train_timesteps=1000, num_buckets=20)
+        t2.load_state_dict(state)
+
+        assert t2._step == t1._step
+        assert torch.allclose(t2._loss_ema, t1._loss_ema)
+        assert torch.equal(t2._seen_count, t1._seen_count)

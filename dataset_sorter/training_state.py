@@ -32,7 +32,7 @@ import shutil
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 import numpy as np
 import torch
@@ -86,10 +86,10 @@ class TrainingState:
     global_step: int = 0
     total_steps: int = 0
     best_loss: float = float('inf')
-    loss_history: List[float] = field(default_factory=list)
+    loss_history: list[float] = field(default_factory=list)
     learning_rate: float = 0.0
     elapsed_time_seconds: float = 0.0
-    training_config: Dict[str, Any] = field(default_factory=dict)
+    training_config: dict[str, Any] = field(default_factory=dict)
     timestamp: str = ""
     resumable: bool = True
     version: int = 1
@@ -124,7 +124,7 @@ class TrainingStateManager:
         epoch: int,
         global_step: int,
         total_steps: int,
-        loss_history: List[float],
+        loss_history: list[float],
         learning_rate: float,
         elapsed_time: float,
         training_config: dict,
@@ -206,7 +206,7 @@ class TrainingStateManager:
 
         return state
 
-    def load_training_state(self, checkpoint_dir: Path) -> Optional[TrainingState]:
+    def load_training_state(self, checkpoint_dir: Path) -> TrainingState | None:
         """Load training state from a checkpoint. Returns None if missing or corrupted."""
         checkpoint_dir = Path(checkpoint_dir)
         state_path = checkpoint_dir / self.STATE_FILENAME
@@ -300,7 +300,7 @@ class TrainingStateManager:
         state = self.load_training_state(checkpoint_dir)
         return state is not None and state.resumable
 
-    def get_latest_resumable_checkpoint(self) -> Optional[Path]:
+    def get_latest_resumable_checkpoint(self) -> Path | None:
         """Find the most recent resumable checkpoint."""
         checkpoints_dir = self.output_dir / "checkpoints"
         if not checkpoints_dir.exists():
