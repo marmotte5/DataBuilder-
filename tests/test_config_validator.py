@@ -228,3 +228,71 @@ def test_trainer_init_accepts_valid_config():
     from dataset_sorter.trainer import Trainer
 
     Trainer(TrainingConfig())  # default config — should construct cleanly
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Recent validator fixes — pin behavior so future refactors can't regress
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestValidatorRegressionFixes:
+    """Pin the validator's coverage of recently-fixed misconfigurations.
+
+    The recommender produces full/dora network_type and grad_accum>1
+    fused_backward_pass configs. The validator previously rejected the
+    former and accepted the latter — both ways round, every user-visible
+    recommendation flow was misclassified.
+    """
+
+    def _all_fields(self, errors):
+        return {e.field for e in errors}
+
+    def test_full_network_type_accepted(self):
+        """The recommender sets network_type='full' for full finetunes —
+        the validator must not reject it."""
+        cfg = TrainingConfig(model_type="sdxl_full", network_type="full")
+        errors = validate_config(cfg)
+        assert "network_type" not in self._all_fields(errors)
+
+    def test_dora_network_type_accepted(self):
+        """DoRA is a documented network_type — must not be rejected."""
+        cfg = TrainingConfig(model_type="sdxl_lora", network_type="dora",
+                              lora_rank=32)
+        errors = validate_config(cfg)
+        assert "network_type" not in self._all_fields(errors)
+
+    def test_ema_decay_caught_without_offload(self):
+        """Previously the EMA decay <= 0 check was gated on ema_cpu_offload,
+        so use_ema=True + ema_decay=0 silently passed without offload."""
+        cfg = TrainingConfig(use_ema=True, ema_cpu_offload=False, ema_decay=0.0)
+        errors = validate_config(cfg)
+        assert "ema_decay" in _err_fields(errors)
+
+    def test_effective_batch_warns_at_batch_size_one(self):
+        """batch_size=1 + grad_accum=128 = effective 128. Old gate
+        (batch_size > 1) made this silently slip through."""
+        cfg = TrainingConfig(batch_size=1, gradient_accumulation=128)
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "effective_batch_size" in fields
+
+    def test_fused_backward_pass_warns_on_grad_accum_gt_1(self):
+        """The real fused_backward incompatibility is grad_accum>1,
+        not the optimizer family (Marmotte supports it just like Adafactor)."""
+        cfg = TrainingConfig(
+            fused_backward_pass=True, gradient_accumulation=2,
+            optimizer="Marmotte",
+        )
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "fused_backward_pass" in fields
+
+    def test_fused_backward_pass_ok_with_grad_accum_1(self):
+        """fused_backward_pass + Marmotte + grad_accum=1 must not warn."""
+        cfg = TrainingConfig(
+            fused_backward_pass=True, gradient_accumulation=1,
+            optimizer="Marmotte",
+        )
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "fused_backward_pass" not in fields

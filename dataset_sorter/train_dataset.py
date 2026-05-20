@@ -27,6 +27,11 @@ from typing import Optional
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
+
+# Hoisted from __getitem__'s hot path — the previous lazy import meant
+# every uncached sample read paid a sys.modules lookup. io_speed has
+# its own internal fallback if libjpeg-turbo / pyvips aren't available.
+from dataset_sorter.io_speed import fast_decode_image as _fast_decode_image
 from PIL import Image
 
 log = logging.getLogger(__name__)
@@ -222,8 +227,7 @@ class CachedTrainDataset(Dataset):
             result["latent"] = latent
         else:
             try:
-                from dataset_sorter.io_speed import fast_decode_image
-                img = fast_decode_image(self.image_paths[idx])
+                img = _fast_decode_image(self.image_paths[idx])
             except Exception as e:
                 log.warning(f"Failed to open {self.image_paths[idx]}: {e}, using blank image")
                 img = Image.new("RGB", (target_w, target_h))

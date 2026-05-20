@@ -153,8 +153,11 @@ def _apply_optimizer_settings(
     elif optimizer == "Marmotte":
         config.weight_decay = 0.01
         config.lr_scheduler = "cosine"
-        if ("sdxl" in model_type or "pony" in model_type or "zimage" in model_type
-                or "flux" in model_type or "chroma" in model_type) and is_lora:
+        # fused_backward_pass is silently disabled by the trainer when
+        # gradient_accumulation > 1, so only enable it when grad_accum=1.
+        if ((("sdxl" in model_type or "pony" in model_type or "zimage" in model_type
+                or "flux" in model_type or "chroma" in model_type) and is_lora)
+                and config.gradient_accumulation == 1):
             config.fused_backward_pass = True
     elif optimizer in ("GaLoreAdamW", "GaLoreAdamW8bit"):
         config.weight_decay = 0.01
@@ -295,13 +298,17 @@ def recommend(
         config.train_text_encoder_2 = False
         config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
     elif is_zimage:
-        config.train_text_encoder = is_lora and vram_gb >= 16
+        # Z-Image uses Qwen3-4B (~8 GB bf16). The 6B DiT is ~12 GB.
+        # Combined 20 GB + optimizer state + activations OOMs on 24 GB.
+        # Require 48 GB before enabling TE training for LoRA, and only
+        # enable for full finetune on 80 GB+ machines.
         config.train_text_encoder_2 = False
-        if not is_lora:
-            config.train_text_encoder = vram_gb >= 24
-            config.text_encoder_lr = config.learning_rate * 0.05 if config.train_text_encoder else 0.0
-        else:
+        if is_lora:
+            config.train_text_encoder = vram_gb >= 48
             config.text_encoder_lr = config.learning_rate * 0.1 if config.train_text_encoder else 0.0
+        else:
+            config.train_text_encoder = vram_gb >= 80
+            config.text_encoder_lr = config.learning_rate * 0.05 if config.train_text_encoder else 0.0
     elif is_chroma:
         config.train_text_encoder = False
         config.train_text_encoder_2 = False
