@@ -296,3 +296,40 @@ class TestValidatorRegressionFixes:
         errors = validate_config(cfg)
         fields = {e.field for e in errors if e.severity == "warning"}
         assert "fused_backward_pass" not in fields
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Recommender end-to-end — every config the recommender produces must
+# pass validation. Previously full/dora configs failed silently.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestRecommenderProducesValidConfigs:
+    """Every config the recommender produces should pass validation.
+
+    This was broken before: `recommend('sdxl_full', ...)` produced
+    `network_type='full'` which the validator rejected. The user only
+    discovered the issue when they tried to start training.
+    """
+
+    @pytest.mark.parametrize("model_type,vram,optimizer", [
+        ("sdxl_full",    24, "Adafactor"),
+        ("sdxl_lora",    24, "Marmotte"),
+        ("flux_lora",    24, "Marmotte"),
+        ("flux_full",    80, "Adafactor"),
+        ("zimage_lora",  48, "Marmotte"),
+        ("sd35_full",    48, "Adafactor"),
+        ("hidream_lora", 48, "Adafactor"),
+        ("chroma_lora",  24, "Marmotte"),
+    ])
+    def test_recommender_output_validates(self, model_type, vram, optimizer):
+        from dataset_sorter.recommender import recommend
+        cfg = recommend(
+            model_type, vram_gb=vram, total_images=100,
+            unique_tags=50, total_tag_occurrences=500,
+            max_bucket_images=20, num_active_buckets=5,
+            optimizer=optimizer,
+        )
+        errors = validate_config(cfg)
+        blocking = [e for e in errors if e.severity == "error"]
+        assert not blocking, f"Recommender output failed validation: {[e.message for e in blocking]}"
