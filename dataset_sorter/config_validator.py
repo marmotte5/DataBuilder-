@@ -200,14 +200,20 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             severity="warning",
         ))
 
-    if config.fused_backward_pass and config.optimizer != "Adafactor":
+    # Fused backward pass is incompatible with gradient accumulation > 1
+    # because the optimizer step would fire on the first microbatch's
+    # gradients only (the fused hook short-circuits the usual zero/step
+    # cycle). Marmotte and Adafactor both support this fast path; the
+    # optimizer family doesn't matter — only grad_accum does.
+    if config.fused_backward_pass and config.gradient_accumulation > 1:
         errors.append(ConfigValidationError(
             "fused_backward_pass",
-            "Fused backward pass currently requires Adafactor optimizer",
+            "fused_backward_pass requires gradient_accumulation=1; "
+            "the trainer will silently disable it otherwise.",
             severity="warning",
         ))
 
-    if config.use_ema and config.ema_cpu_offload and config.ema_decay <= 0:
+    if config.use_ema and config.ema_decay <= 0:
         errors.append(ConfigValidationError(
             "ema_decay", "EMA decay must be > 0 when EMA is enabled",
         ))
@@ -218,7 +224,11 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             f"Min resolution ({config.resolution_min}) > max ({config.resolution_max})",
         ))
 
-    if config.batch_size > 1 and config.gradient_accumulation > 1:
+    # Effective batch size = batch_size * gradient_accumulation. A common
+    # low-VRAM recipe is batch_size=1 with grad_accum=128, which still
+    # has an effective batch of 128 — drop the batch_size>1 gate so this
+    # warning actually fires.
+    if config.batch_size >= 1 and config.gradient_accumulation >= 1:
         eff = config.batch_size * config.gradient_accumulation
         if eff > 64:
             errors.append(ConfigValidationError(

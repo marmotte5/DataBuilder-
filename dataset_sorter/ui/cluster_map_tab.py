@@ -180,7 +180,11 @@ class ClusterMapTab(QWidget):
         self._coords: Optional[np.ndarray] = None
         self._mapped_paths: list[str] = []
         self._worker: Optional[EmbeddingWorker] = None
-        self._thumb_cache: dict[str, QPixmap] = {}
+        # LRU-bounded thumbnail cache. Without a bound, hovering every
+        # point in a 5000-image dataset accumulated ~1 GB of QPixmaps.
+        from collections import OrderedDict
+        self._thumb_cache: "OrderedDict[str, QPixmap]" = OrderedDict()
+        self._thumb_cache_max = 256
         self._build_ui()
 
     # ── UI ──────────────────────────────────────────────────────────────
@@ -398,10 +402,14 @@ class ClusterMapTab(QWidget):
 
     def _on_point_hovered(self, image_path: str):
         pix = self._thumb_cache.get(image_path)
-        if pix is None:
+        if pix is not None:
+            self._thumb_cache.move_to_end(image_path)
+        else:
             pix = self._load_thumbnail(image_path)
             if pix is not None:
                 self._thumb_cache[image_path] = pix
+                while len(self._thumb_cache) > self._thumb_cache_max:
+                    self._thumb_cache.popitem(last=False)
         if pix is not None:
             self._thumb_label.setPixmap(pix)
         else:

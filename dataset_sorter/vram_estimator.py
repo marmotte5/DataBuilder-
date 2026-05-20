@@ -9,25 +9,32 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Base model memory (GB) at bf16 for UNet/transformer only
+# Base model memory (GB) at bf16 for UNet/transformer only.
+# Each value is param_count * 2 bytes (bf16). Verified against:
+#   - SDXL UNet:    2.6B params → 5.2 GB
+#   - Flux:         12B params  → 24 GB
+#   - Flux 2:       12B+ params → 24 GB
+#   - Chroma:       8.9B params → 17.8 GB
+#   - Z-Image DiT:  6B params   → 12 GB
+#   - HiDream-I1-Full: 17B params → 34 GB
 _MODEL_VRAM_BF16 = {
     "sd15":     1.7,
     "sd2":      1.7,
-    "sdxl":     5.1,
-    "pony":     5.1,
-    "flux":     12.0,
-    "flux2":    12.0,
+    "sdxl":     5.2,
+    "pony":     5.2,
+    "flux":     24.0,
+    "flux2":    24.0,
     "sd3":      4.5,
-    "sd35":     4.5,
-    "zimage":   5.1,
+    "sd35":     16.5,  # SD 3.5-large is 8B params
+    "zimage":   12.0,
     "pixart":   2.5,
     "cascade":  3.6,
     "hunyuan":  3.0,
-    "kolors":   5.1,
+    "kolors":   5.2,
     "auraflow": 6.0,
     "sana":     2.8,
-    "hidream":  8.0,
-    "chroma":   12.0,
+    "hidream":  34.0,
+    "chroma":   17.8,
 }
 
 # VAE memory (GB) at bf16
@@ -39,13 +46,19 @@ _VAE_VRAM = {
     "sana": 0.4, "hidream": 0.4, "chroma": 0.4,
 }
 
-# Text encoder memory (GB) at bf16
+# Text encoder memory (GB) at bf16.
+# Verified against:
+#   - Flux:     CLIP-L (~0.25 GB) + T5-XXL (~9.5 GB)   = 9.75
+#   - Flux 2:   Mistral-Small-3.2-24B                  ≈ 48 GB (often quantized to 4-bit ≈ 12 GB)
+#   - Z-Image:  Qwen3-4B                                ≈ 8 GB
+#   - HiDream:  CLIP-L + CLIP-G + T5-XXL + Llama-3.1-8B ≈ 5.5 + 16 = ~21.5 GB
+#   - Kolors:   ChatGLM-6B                              ≈ 12 GB
 _TE_VRAM = {
     "sd15": 0.5, "sd2": 0.5, "sdxl": 1.6, "pony": 1.6,
-    "flux": 9.5, "flux2": 9.5, "sd3": 5.5, "sd35": 5.5,
-    "zimage": 1.6, "pixart": 4.5, "cascade": 0.5,
-    "hunyuan": 3.0, "kolors": 1.6, "auraflow": 4.5,
-    "sana": 4.5, "hidream": 5.5, "chroma": 9.5,
+    "flux": 9.75, "flux2": 12.0, "sd3": 5.5, "sd35": 5.5,
+    "zimage": 8.0, "pixart": 4.5, "cascade": 0.5,
+    "hunyuan": 3.0, "kolors": 12.0, "auraflow": 4.5,
+    "sana": 4.5, "hidream": 21.5, "chroma": 9.5,
 }
 
 

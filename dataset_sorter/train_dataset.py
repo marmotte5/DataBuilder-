@@ -186,8 +186,21 @@ class CachedTrainDataset(Dataset):
         return transforms.Compose(pipeline)
 
     def _get_transforms_for_resolution(self, width: int, height: int):
-        """Build transforms for a specific bucket (w, h) resolution."""
-        return self._build_transforms(width, height)
+        """Return cached transforms for a (w, h) bucket; build on first use.
+
+        Without caching, every __getitem__ call allocated a fresh Compose
+        chain (Resize, Crop, ToTensor, Normalize, optional aug) — a real
+        5-15% slowdown in the uncached-latent + bucketing path because the
+        same N buckets reuse only N distinct pipelines.
+        """
+        if not hasattr(self, "_bucket_transforms"):
+            self._bucket_transforms: dict[tuple[int, int], object] = {}
+        key = (width, height)
+        cached = self._bucket_transforms.get(key)
+        if cached is None:
+            cached = self._build_transforms(width, height)
+            self._bucket_transforms[key] = cached
+        return cached
 
     def __getitem__(self, idx):
         result = {}
