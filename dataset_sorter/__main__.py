@@ -67,6 +67,17 @@ logging.basicConfig(
 # the startup output clean regardless of environment.
 logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)
 
+# PIL emits per-tag DEBUG spam when reading TIFF/JPEG EXIF metadata — hundreds
+# of lines per image. Pin all PIL submodule loggers to WARNING so the root
+# DEBUG level (used by the debug console) doesn't surface this noise.
+for _pil_logger in ("PIL", "PIL.TiffImagePlugin", "PIL.PngImagePlugin",
+                    "PIL.JpegImagePlugin", "PIL.Image"):
+    logging.getLogger(_pil_logger).setLevel(logging.WARNING)
+
+# httpx/httpcore emit a debug line per HTTP byte sent — also noisy.
+for _http_logger in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
+    logging.getLogger(_http_logger).setLevel(logging.INFO)
+
 from dataset_sorter.startup_log import print_startup_log
 from dataset_sorter.ui.main_window import run
 
