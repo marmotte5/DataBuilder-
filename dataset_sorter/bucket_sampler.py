@@ -266,20 +266,29 @@ class BucketBatchSampler:
                 self.bucket_indices[bucket] = []
             self.bucket_indices[bucket].append(idx)
 
-        # Warn about buckets with very few images (they may be dropped if drop_last=True)
-        dropped_images = 0
+        # Undersized buckets (n < batch_size) are padded by repeating their
+        # images to fill one full batch — better than dropping rare aspect
+        # ratios entirely. The unique image is still seen during training
+        # (it just appears multiple times in the same batch step).
+        padded_buckets = 0
         for bucket, indices in self.bucket_indices.items():
-            if drop_last and len(indices) < batch_size:
-                dropped_images += len(indices)
-                log.warning(
-                    f"Bucket {bucket[0]}x{bucket[1]}: only {len(indices)} images "
-                    f"(< batch_size={batch_size}), these images will be EXCLUDED from training"
+            if len(indices) < batch_size:
+                padded_buckets += 1
+                log.info(
+                    f"Bucket {bucket[0]}x{bucket[1]}: only {len(indices)} image(s) "
+                    f"< batch_size={batch_size} — will pad by repeating to keep this aspect ratio."
                 )
 
-        # Pre-compute total batches
+        # Pre-compute total batches. Each undersized bucket contributes exactly
+        # one (padded) batch; normal buckets follow the standard drop_last rule.
         self._total_batches = 0
         for indices in self.bucket_indices.values():
-            n = len(indices) // batch_size if drop_last else math.ceil(len(indices) / batch_size)
+            if len(indices) < batch_size:
+                n = 1
+            elif drop_last:
+                n = len(indices) // batch_size
+            else:
+                n = math.ceil(len(indices) / batch_size)
             self._total_batches += n
 
         total_images = sum(len(v) for v in self.bucket_indices.values())
@@ -288,17 +297,13 @@ class BucketBatchSampler:
             f"{total_images} images, "
             f"{self._total_batches} batches (batch_size={batch_size})"
         )
-        if dropped_images > 0:
-            log.warning(
-                f"Bucket sampler: {dropped_images}/{total_images} images excluded "
-                f"due to drop_last=True. Set drop_last=False to include all images."
+        if padded_buckets > 0:
+            log.info(
+                f"Bucket sampler: {padded_buckets} undersized bucket(s) padded by repeating images."
             )
         if self._total_batches == 0:
             raise ValueError(
-                f"Bucket sampler produces 0 batches: every bucket has fewer than "
-                f"batch_size={batch_size} images and drop_last=True. "
-                f"Reduce batch_size, disable drop_last, or merge buckets to avoid "
-                f"silently training on nothing."
+                f"Bucket sampler produces 0 batches — no images in dataset?"
             )
         for bucket, indices in sorted(self.bucket_indices.items()):
             log.debug(f"  Bucket {bucket[0]}x{bucket[1]}: {len(indices)} images")
@@ -318,6 +323,12 @@ class BucketBatchSampler:
             idx_copy = list(indices)
             if self.shuffle:
                 rng.shuffle(idx_copy)
+
+            # Undersized bucket: pad by repeating to form exactly one batch.
+            if len(idx_copy) < self.batch_size:
+                padded = (idx_copy * ((self.batch_size // len(idx_copy)) + 1))[: self.batch_size]
+                all_batches.append((bucket, padded))
+                continue
 
             for i in range(0, len(idx_copy), self.batch_size):
                 batch = idx_copy[i : i + self.batch_size]

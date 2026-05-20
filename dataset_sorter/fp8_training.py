@@ -199,6 +199,22 @@ class FP8LinearWrapper(nn.Module):
         self.name = name
         self._has_scaled_mm = hasattr(torch, '_scaled_mm')
 
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
+
+    @property
+    def in_features(self) -> int:
+        return self.linear.in_features
+
+    @property
+    def out_features(self) -> int:
+        return self.linear.out_features
+
     def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         if not self._has_scaled_mm or not _FP8_DTYPES_AVAILABLE or not x.is_cuda:
             return self.linear(x, *args, **kwargs)

@@ -1950,15 +1950,18 @@ class TestBucketBatchSampler:
         # Different seeds should produce different orderings (very likely with 20 items)
         assert b1 != b2
 
-    def test_drop_last_too_small_raises_not_silent(self):
-        """A bucket-only dataset smaller than batch_size with drop_last=True
-        should raise ValueError, not silently train on 0 batches."""
-        import pytest
+    def test_undersized_bucket_pads_instead_of_dropping(self):
+        """A bucket with fewer images than batch_size is padded by repeating
+        its images, so the rare aspect ratio still contributes to training."""
         from dataset_sorter.bucket_sampler import BucketBatchSampler
-        # 3 images, batch_size=4, drop_last=True → 0 batches
+        # 3 images, batch_size=4 → padded to one batch of 4 (with repetition)
         assignments = [(512, 512)] * 3
-        with pytest.raises(ValueError, match="0 batches"):
-            BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        sampler = BucketBatchSampler(assignments, batch_size=4, drop_last=True, shuffle=False)
+        batches = list(sampler)
+        assert len(batches) == 1
+        assert len(batches[0]) == 4
+        # All three original indices must appear in the padded batch
+        assert set(batches[0]) == {0, 1, 2}
 
 
 class TestCachedTrainDatasetBucketing:

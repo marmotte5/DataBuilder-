@@ -87,11 +87,18 @@ def _get_fast_decoder():
     Returns a callable: decoder(path) -> PIL.Image.Image
     """
     # First try: turbojpeg — 3-5x faster than PIL for JPEG thanks to
-    # hardware Huffman decoding via libjpeg-turbo.
+    # hardware Huffman decoding via libjpeg-turbo. The native libjpeg-turbo
+    # DLL/so must be installed separately on Windows; if missing, TurboJPEG()
+    # raises a non-ImportError exception ("Unable to locate turbojpeg library"),
+    # which we catch and silently fall through to OpenCV/PIL.
     try:
         from turbojpeg import TurboJPEG
         from PIL import Image
-        _tjpeg = TurboJPEG()
+        try:
+            _tjpeg = TurboJPEG()
+        except Exception as exc:
+            log.info("turbojpeg installed but native libjpeg-turbo not found (%s) — falling back to OpenCV/PIL", exc)
+            raise ImportError(str(exc))
 
         def _decode_turbojpeg(path: Path) -> Image.Image:
             suffix = path.suffix.lower()
