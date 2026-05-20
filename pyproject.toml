@@ -77,8 +77,8 @@ speed = [
     "liger-kernel>=0.4; platform_system == 'Linux'",
     "flash-attn>=2.5; platform_system == 'Linux'",
     "transformer-engine>=1.5; platform_system == 'Linux'",
-    # python-turbojpeg has no macOS wheels:
-    "python-turbojpeg>=1.7; platform_system != 'Darwin'",
+    # PyTurboJPEG has no macOS wheels:
+    "PyTurboJPEG>=1.7; platform_system != 'Darwin'",
     # Triton — Linux/Windows only (separate package on each):
     "triton>=2.2; sys_platform == 'linux'",
     "triton-windows>=3.3; sys_platform == 'win32'",

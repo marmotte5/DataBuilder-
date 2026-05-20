@@ -182,7 +182,7 @@ dependency set:
 
 | Platform | Extra used | Skipped (incompatible) |
 | --- | --- | --- |
-| macOS (Apple Silicon / Intel) | `.[mac]` | bitsandbytes, flash-attn, triton, liger-kernel, transformer-engine, python-turbojpeg |
+| macOS (Apple Silicon / Intel) | `.[mac]` | bitsandbytes, flash-attn, triton, liger-kernel, transformer-engine, PyTurboJPEG |
 | Linux + NVIDIA GPU | `.[cuda]` | — |
 | Linux without NVIDIA / Windows | `.[all]` | (markers skip CUDA-only wheels automatically) |
 
