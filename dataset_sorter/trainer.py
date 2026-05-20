@@ -399,13 +399,20 @@ class Trainer:
             config.sdpa = True
             _auto.append("sdpa")
 
+        # SageAttention: auto-enable when package is available (2-3x faster attention)
+        if not config.sage_attention:
+            try:
+                import sageattention  # noqa: F401
+                config.sage_attention = True
+                _auto.append("sage_attention")
+            except ImportError:
+                pass
+
         # torch.compile: auto-enable with optimal mode for the hardware
         if not config.torch_compile:
             config.torch_compile = True
-            if cc >= (9, 0):
+            if cc >= (8, 0):
                 config.compile_mode = "max-autotune"
-            elif cc >= (8, 0):
-                config.compile_mode = "reduce-overhead"
             else:
                 config.compile_mode = "default"
             _auto.append(f"torch_compile(mode={config.compile_mode})")

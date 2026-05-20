@@ -254,6 +254,7 @@ class GenerateWorker(QThread):
         self.taylorseer_enabled = False  # TaylorSeer inference cache
         self.torch_compile_enabled = False  # torch.compile() the transformer/unet
         self.torch_compile_mode = "default"  # default, reduce-overhead, max-autotune
+        self.sage_attention_enabled = False  # SageAttention INT8 quantized attention
 
         # Nunchaku INT4 / FP4 inference (CUDA only) — swaps the transformer
         # for a quantized version after the pipeline is loaded. Off by
@@ -543,6 +544,14 @@ class GenerateWorker(QThread):
 
             # Apply TaylorSeer cache for DiT models (3-5x inference speedup)
             self._apply_taylorseer(pipe)
+
+            # SageAttention: INT8 quantized attention (2-3x faster than FA2)
+            if self.sage_attention_enabled:
+                try:
+                    from dataset_sorter.speed_optimizations import enable_sage_attention
+                    enable_sage_attention()
+                except Exception as exc:
+                    log.debug("SageAttention not available: %s", exc)
 
             # torch.compile() the transformer/unet for 20-40% faster inference.
             # Try regional compilation first (compile each repeated transformer

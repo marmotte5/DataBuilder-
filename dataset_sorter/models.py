@@ -185,6 +185,7 @@ class _MemoryView(_ConfigView):
         "lmdb_cache",
         # CUDA optimizations
         "xformers", "sdpa", "cudnn_attention", "flash_attention",
+        "sage_attention",
         "torch_compile", "compile_mode", "regional_compile",
         "cudnn_benchmark", "enable_tf32",
         "fp8_base_model", "quantize_text_encoder", "quantize_unet",
@@ -424,6 +425,7 @@ class TrainingConfig:
     cudnn_attention: bool = True    # cuDNN SDPA backend — adds ~10% speed on H100;
                                     # auto-disabled on non-CUDA / old PyTorch / cuDNN <9.0
     flash_attention: bool = False   # Flash Attention 2
+    sage_attention: bool = False    # SageAttention INT8 quantized attention (2-3x faster than FA2)
     torch_compile: bool = False     # torch.compile() JIT
     compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
     regional_compile: bool = False  # Compile individual transformer blocks instead of whole model

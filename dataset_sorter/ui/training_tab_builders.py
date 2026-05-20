@@ -1567,6 +1567,14 @@ class TrainingTabBuildersMixin:
         _compile_row.addWidget(self.compile_mode_combo)
         _compile_row.addStretch()
         g_mem_l.addLayout(_compile_row)
+        self.sage_attention_check = QCheckBox("SageAttention (INT8 attention — 2-3× faster)")
+        self.sage_attention_check.setToolTip(
+            "Replace scaled dot-product attention with SageAttention INT8 quantized attention.\n"
+            "2-3× faster than FlashAttention2, 340 TOPS on RTX 4090.\n"
+            "Falls back to native SDPA when attention masks are needed.\n"
+            "Requires: pip install sageattention (CUDA >= 12.0, Triton >= 3.0)"
+        )
+        g_mem_l.addWidget(self.sage_attention_check)
         self.liger_check = QCheckBox("Liger-Kernel Fused Ops (fused LayerNorm, RMSNorm, etc.)")
         self.liger_check.setToolTip("Apply Triton fused kernels from Liger-Kernel for transformer layers.")
         g_mem_l.addWidget(self.liger_check)
