@@ -94,7 +94,7 @@ def _package_versions() -> list[str]:
         ("flash-attn", "flash_attn"),
         ("xformers", "xformers"),
         ("opencv-python", "cv2"),
-        ("python-turbojpeg", "turbojpeg"),
+        ("PyTurboJPEG", "turbojpeg"),
         ("lmdb", "lmdb"),
         ("lz4", "lz4"),
         ("torchao", "torchao"),
