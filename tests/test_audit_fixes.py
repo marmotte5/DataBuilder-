@@ -102,6 +102,56 @@ class TestPixArtSanaCacheOverride:
         assert "'sana'" in source
 
 
+class TestFusedBackwardGuards:
+    """Fused backward must be gated against fp16 and unsupported optimizers."""
+
+    def _train_source(self):
+        from dataset_sorter.trainer import Trainer
+        return inspect.getsource(Trainer.train)
+
+    def test_fp16_gate_present(self):
+        """fused backward must be skipped when a GradScaler (fp16) is active."""
+        source = self._train_source()
+        assert "elif self.grad_scaler is not None:" in source
+        assert "incompatible with fp16" in source
+
+    def test_valueerror_fallback_present(self):
+        """Unsupported optimizers (Marmotte/Adafactor) must not crash setup."""
+        source = self._train_source()
+        assert "except ValueError" in source
+        assert "Fused backward pass disabled" in source
+
+    def test_vjp_runs_before_clipping(self):
+        """VJP blending changes grad norms — it must run before clip_grad_norm_
+        so the clip bound holds on what the optimizer actually consumes."""
+        source = self._train_source()
+        # In the max_grad_norm > 0 non-triton branch, the VJP call must
+        # appear before the clip call.
+        vjp_pos = source.index("vjp_scaler.approximate_gradients(trainable_params)")
+        clip_pos = source.index("clip_grad_norm_(trainable_params, config.max_grad_norm)")
+        assert vjp_pos < clip_pos, "VJP approximation runs after gradient clipping"
+
+    def test_recommender_never_sets_fused_for_unsupported(self):
+        """FusedBackwardPass only supports Adam/AdamW/SGD — the recommender
+        must not recommend it for Adafactor or Marmotte."""
+        from dataset_sorter.recommender import recommend
+        for model_type, opt in [
+            ("sdxl_lora", "Adafactor"),
+            ("zimage_lora", "Adafactor"),
+            ("sdxl_lora", "Marmotte"),
+            ("zimage_lora", "Marmotte"),
+        ]:
+            cfg = recommend(
+                model_type, vram_gb=24, total_images=100,
+                unique_tags=50, total_tag_occurrences=500,
+                max_bucket_images=20, num_active_buckets=5,
+                optimizer=opt,
+            )
+            assert cfg.fused_backward_pass is False, (
+                f"recommender set fused_backward_pass for {opt} on {model_type}"
+            )
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _get_source(module_path: str, class_name: str, method_name: str) -> str:

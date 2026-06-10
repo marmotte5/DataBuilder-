@@ -117,14 +117,9 @@ def _apply_optimizer_settings(
         config.adafactor_relative_step = False
         config.adafactor_scale_parameter = False
         config.adafactor_warmup_init = False
-        # Fused backward pass: saves ~14 GB VRAM on SDXL. Only valid with
-        # grad_accum=1 — the trainer silently disables it otherwise and the
-        # VRAM budget would assume savings that never materialize.
-        # (grad_accum is already set by the VRAM profile before this runs.)
-        if config.gradient_accumulation == 1 and is_lora and (
-                "sdxl" in model_type or "pony" in model_type
-                or "zimage" in model_type):
-            config.fused_backward_pass = True
+        # NOTE: do NOT recommend fused_backward_pass here. FusedBackwardPass
+        # only supports Adam/AdamW/SGD (it reimplements the update inline) and
+        # raises ValueError for Adafactor — the option would never engage.
     elif optimizer == "Prodigy":
         config.learning_rate = 1.0
         config.text_encoder_lr = 1.0
@@ -255,17 +250,10 @@ def recommend(
     config.cache_latents_to_disk = cld
     config.effective_batch_size = bs * ga
 
-    # Now that grad_accum is finalized, decide fused_backward_pass for
-    # Marmotte. The trainer silently disables it when grad_accum > 1,
-    # so the VRAM budget would otherwise assume savings that never
-    # materialize.
-    if (optimizer == "Marmotte"
-            and ("sdxl" in model_type or "pony" in model_type
-                  or "zimage" in model_type or "flux" in model_type
-                  or "chroma" in model_type)
-            and is_lora
-            and config.gradient_accumulation == 1):
-        config.fused_backward_pass = True
+    # NOTE: fused_backward_pass is intentionally NOT recommended for
+    # Marmotte/Adafactor — FusedBackwardPass reimplements the optimizer
+    # update inline and only supports Adam/AdamW/SGD (raises ValueError
+    # for anything else), so the option would never engage.
 
     # --- Cache text encoder outputs ---
     config.cache_text_encoder = True
