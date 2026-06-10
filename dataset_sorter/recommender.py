@@ -117,10 +117,13 @@ def _apply_optimizer_settings(
         config.adafactor_relative_step = False
         config.adafactor_scale_parameter = False
         config.adafactor_warmup_init = False
-        # Fused backward pass: saves ~14 GB VRAM on SDXL
-        if ("sdxl" in model_type or "pony" in model_type) and is_lora:
-            config.fused_backward_pass = True
-        if "zimage" in model_type and is_lora:
+        # Fused backward pass: saves ~14 GB VRAM on SDXL. Only valid with
+        # grad_accum=1 — the trainer silently disables it otherwise and the
+        # VRAM budget would assume savings that never materialize.
+        # (grad_accum is already set by the VRAM profile before this runs.)
+        if config.gradient_accumulation == 1 and is_lora and (
+                "sdxl" in model_type or "pony" in model_type
+                or "zimage" in model_type):
             config.fused_backward_pass = True
     elif optimizer == "Prodigy":
         config.learning_rate = 1.0

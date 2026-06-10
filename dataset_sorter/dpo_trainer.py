@@ -285,6 +285,12 @@ def compute_image_log_probs(
 
     encoder_hidden = te_out[0]
     pooled = te_out[1] if len(te_out) > 1 else None
+    # Integer tensors at index 1 are attention masks (PixArt/Sana/Z-Image),
+    # not pooled embeddings — never feed them to get_added_cond as pooled.
+    enc_mask = None
+    if isinstance(pooled, torch.Tensor) and not pooled.is_floating_point():
+        enc_mask = pooled
+        pooled = None
     bsz = latents.shape[0]
 
     added_cond = backend.get_added_cond(bsz, pooled=pooled, te_out=te_out)
@@ -292,6 +298,10 @@ def compute_image_log_probs(
     fwd_kwargs = {}
     if added_cond is not None:
         fwd_kwargs["added_cond_kwargs"] = added_cond
+    # PixArt/Sana cross-attention transformers accept encoder_attention_mask
+    # (other architectures like Z-Image strip padding internally instead).
+    if enc_mask is not None and getattr(backend, 'model_name', '') in ('pixart', 'sana'):
+        fwd_kwargs["encoder_attention_mask"] = enc_mask
 
     # Use whichever model the backend has — UNet for epsilon/v-pred models,
     # transformer for flow-matching models (Flux, SD3, PixArt, etc.).

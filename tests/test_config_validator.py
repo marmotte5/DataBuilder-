@@ -313,7 +313,7 @@ class TestCrossFieldIncompatibilities:
         assert "fp8_training" in fields
 
     def test_cuda_graph_plus_mebp_warns(self):
-        cfg = TrainingConfig(cuda_graph_training=True, memory_efficient_bp=True)
+        cfg = TrainingConfig(cuda_graph_training=True, mebp_enabled=True)
         fields = self._warn_fields(validate_config(cfg))
         assert "cuda_graph_training" in fields
 
