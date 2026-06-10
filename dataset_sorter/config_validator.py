@@ -303,6 +303,30 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             severity="warning",
         ))
 
+    if getattr(config, "fp8_training", False) and getattr(config, "torch_compile", False):
+        errors.append(ConfigValidationError(
+            "fp8_training",
+            "FP8 training uses torch._scaled_mm which is not compatible "
+            "with torch.compile. Disable one of them.",
+            severity="warning",
+        ))
+
+    if getattr(config, "cuda_graph_training", False) and getattr(config, "memory_efficient_bp", False):
+        errors.append(ConfigValidationError(
+            "cuda_graph_training",
+            "CUDA graphs cannot be used with memory-efficient backprop "
+            "(MeBP wraps forward() dynamically, breaking graph capture).",
+            severity="warning",
+        ))
+
+    if getattr(config, "cuda_graph_training", False) and getattr(config, "sequence_packing", False):
+        errors.append(ConfigValidationError(
+            "cuda_graph_training",
+            "CUDA graphs are incompatible with sequence packing "
+            "(variable sequence lengths invalidate captured graphs).",
+            severity="warning",
+        ))
+
     return errors
 
 
