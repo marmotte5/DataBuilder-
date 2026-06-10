@@ -360,6 +360,15 @@ class GenerateTab(QWidget):
         self._btn_recent_gen.setToolTip("Reload a recently-used model")
         self._btn_recent_gen.clicked.connect(self._show_recent_models_menu)
         action_row.addWidget(self._btn_recent_gen)
+        # "Library ▾" — pick directly from the Library tab's scanned items
+        # without leaving Generate (the reverse of Library's "Use in
+        # Generate" button).
+        self._btn_library_gen = QPushButton("Library ▾")
+        self._btn_library_gen.setToolTip(
+            "Pick a model or LoRA from the Library tab's scanned items"
+        )
+        self._btn_library_gen.clicked.connect(self._show_library_menu)
+        action_row.addWidget(self._btn_library_gen)
         self._lbl_model_status = QLabel("No model")
         self._lbl_model_status.setStyleSheet(
             f"color: {COLORS['danger']}; font-size: 10px; font-weight: 600; background: transparent;"
@@ -1123,6 +1132,56 @@ class GenerateTab(QWidget):
             self._btn_recent_gen.rect().bottomLeft()
         )
         menu.exec(pos)
+
+    def _show_library_menu(self):
+        """Drop a popup listing the Library tab's scanned items.
+
+        Checkpoints fill the model path; LoRAs are appended to the LoRA
+        stack. The library only holds its currently selected category, so
+        the menu mirrors whatever the user last scanned there.
+        """
+        from PyQt6.QtWidgets import QMenu
+
+        lib = getattr(self.window(), "library_tab", None)
+        items = list(getattr(lib, "_items", None) or []) if lib is not None else []
+        category = getattr(lib, "_current_category", "models") if lib else "models"
+
+        menu = QMenu(self)
+        if not items:
+            placeholder = menu.addAction("(library is empty — scan it first)")
+            placeholder.setEnabled(False)
+        else:
+            header = menu.addAction(f"Library — {category}")
+            header.setEnabled(False)
+            menu.addSeparator()
+            for item in items[:25]:
+                label = item.name if len(item.name) <= 60 else "…" + item.name[-58:]
+                act = menu.addAction(label)
+                act.setToolTip(item.path)
+                if category == "loras":
+                    act.triggered.connect(
+                        lambda checked=False, p=item.path: self._add_library_lora(p)
+                    )
+                else:
+                    act.triggered.connect(
+                        lambda checked=False, p=item.path: self.model_path_edit.setText(p)
+                    )
+        menu.addSeparator()
+        open_lib = menu.addAction("Open Library tab")
+        open_lib.triggered.connect(
+            lambda: getattr(self.window(), "_switch_nav", lambda _x: None)("library")
+        )
+
+        pos = self._btn_library_gen.mapToGlobal(
+            self._btn_library_gen.rect().bottomLeft()
+        )
+        menu.exec(pos)
+
+    def _add_library_lora(self, path: str):
+        """Append a library LoRA to the adapter stack and persist it."""
+        self._add_lora_row(path, 1.0)
+        self._schedule_lora_stack_save()
+        show_toast(self, "LoRA added to the stack", "success")
 
     def _clear_recent_models(self):
         """Wipe the persisted recent_models list."""

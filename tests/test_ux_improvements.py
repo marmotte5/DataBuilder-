@@ -141,3 +141,86 @@ class TestLibraryScanningEmptyState:
         assert "Scanning" in tab._empty_scanning_html
         assert "No items" in tab._empty_default_html
         assert tab._empty_scanning_html != tab._empty_default_html
+
+
+class TestTrainToGenerateJourney:
+    """Training-finished toast offers a one-click jump to Generate."""
+
+    def test_find_final_artifact_prefers_adapter_file(self, training_tab, tmp_path):
+        training_tab.output_dir_input.setText(str(tmp_path))
+        training_tab.output_name_input.setText("my_lora")
+        assert training_tab._find_final_artifact() is None
+
+        final = tmp_path / "models" / "my_lora"
+        final.mkdir(parents=True)
+        assert training_tab._find_final_artifact() == final
+
+        adapter = final / "adapter_model.safetensors"
+        adapter.write_bytes(b"x")
+        assert training_tab._find_final_artifact() == adapter
+
+    def test_find_final_artifact_default_name(self, training_tab, tmp_path):
+        training_tab.output_dir_input.setText(str(tmp_path))
+        training_tab.output_name_input.setText("")
+        final = tmp_path / "models" / "final"
+        final.mkdir(parents=True)
+        assert training_tab._find_final_artifact() == final
+
+
+class TestGenerateLibraryMenu:
+    def test_library_button_and_helpers_exist(self, qapp):
+        from dataset_sorter.ui.generate_tab import GenerateTab
+        tab = GenerateTab()
+        assert tab._btn_library_gen.text() == "Library ▾"
+        assert callable(tab._show_library_menu)
+
+    def test_add_library_lora_appends_to_stack(self, qapp):
+        from dataset_sorter.ui.generate_tab import GenerateTab
+        tab = GenerateTab()
+        tab._add_library_lora("/models/lib_lora.safetensors")
+        paths = [a["path"] for a in tab._get_lora_adapters()]
+        assert "/models/lib_lora.safetensors" in paths
+
+
+class TestCrossTabModelHints:
+    """Batch/Compare must show the Generate prerequisite BEFORE failure."""
+
+    def test_batch_hint_lifecycle(self, qapp):
+        from dataset_sorter.ui.batch_generation_tab import BatchGenerationTab
+        tab = BatchGenerationTab()
+        assert "No model loaded" in tab._status_label.text()
+
+        class FakeWorker:
+            is_loaded = True
+        tab.set_generate_worker(FakeWorker())
+        assert "Model ready" in tab._status_label.text()
+
+    def test_comparison_hint_lifecycle(self, qapp):
+        from dataset_sorter.ui.comparison_tab import ComparisonTab
+        tab = ComparisonTab()
+        assert "Load a model" in tab._status.text()
+
+        class FakeWorker:
+            is_loaded = True
+        tab.set_generate_worker(FakeWorker())
+        assert "Model ready" in tab._status.text()
+
+
+class TestLibraryUseInMerge:
+    def test_signal_and_button_exist(self, qapp):
+        from dataset_sorter.ui.library_tab import LibraryTab
+        tab = LibraryTab()
+        assert hasattr(tab, "use_in_merge")
+        assert tab._btn_use_merge.text() == "Use in Merge"
+
+    def test_emit_uses_selected_item_path(self, qapp):
+        from dataset_sorter.ui.library_tab import LibraryTab
+        tab = LibraryTab()
+        emitted: list[str] = []
+        tab.use_in_merge.connect(emitted.append)
+
+        class FakeItem:
+            path = "/models/x.safetensors"
+        tab._selected_item = FakeItem()
+        tab._emit_use_merge()
+        assert emitted == ["/models/x.safetensors"]

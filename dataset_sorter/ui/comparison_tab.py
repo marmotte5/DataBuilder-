@@ -268,6 +268,9 @@ class ComparisonTab(QWidget):
     def set_generate_worker(self, worker):
         """Called by MainWindow to provide the GenerateWorker reference."""
         self._generate_worker = worker
+        # Clear the "no model" hint once a model is actually available.
+        if worker is not None and getattr(worker, "is_loaded", False):
+            self._status.setText("Model ready — configure A/B and click Compare.")
 
     # ── UI Construction ──────────────────────────────────────────────
 

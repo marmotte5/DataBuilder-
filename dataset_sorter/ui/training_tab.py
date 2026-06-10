@@ -2298,7 +2298,18 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"Training {'completed' if success else 'failed'}: {message}")
         self._log(f"{'=' * 40}")
         if success:
-            show_toast(self, "Training completed", "success", 4000)
+            # "I just trained → test it" journey: offer a one-click jump to
+            # the Generate tab with the fresh artifact pre-filled.
+            final_artifact = self._find_final_artifact()
+            if final_artifact is not None:
+                self._log(f"Final model: {final_artifact}")
+                show_toast(
+                    self, "Training completed", "success", 8000,
+                    action_text="Test in Generate",
+                    action_callback=lambda p=final_artifact: self._send_to_generate(p),
+                )
+            else:
+                show_toast(self, "Training completed", "success", 4000)
             # Clean up interrupted-session file on success
             output_dir = self.output_dir_input.text().strip()
             if output_dir:
@@ -2321,6 +2332,48 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             log.debug("VRAM stats unavailable: %s", e)
         self._disconnect_training_worker()
         self._training_worker = None
+
+    def _find_final_artifact(self) -> "Path | None":
+        """Locate the freshly trained model under <output_dir>/models/<name>.
+
+        For LoRA runs, prefer the adapter .safetensors inside the folder
+        (what the Generate tab's LoRA rows expect); otherwise return the
+        folder itself. Returns None when nothing was produced.
+        """
+        output_dir = self.output_dir_input.text().strip()
+        if not output_dir:
+            return None
+        name = self.output_name_input.text().strip() or "final"
+        final_dir = Path(output_dir) / "models" / name
+        if not final_dir.exists():
+            return None
+        adapter = final_dir / "adapter_model.safetensors"
+        if adapter.exists():
+            return adapter
+        return final_dir
+
+    def _send_to_generate(self, artifact: Path):
+        """Pre-fill the Generate tab with the trained artifact and switch to it.
+
+        LoRA runs land in the LoRA stack (base model still chosen by the
+        user); full finetunes land in the base-model path field.
+        """
+        win = self.window()
+        gen = getattr(win, "generate_tab", None)
+        if gen is None:
+            return
+        model_type = self.train_model_combo.currentData() or ""
+        if model_type.endswith("_lora") and hasattr(gen, "_add_lora_row"):
+            gen._add_lora_row(str(artifact), 1.0)
+            gen._schedule_lora_stack_save()
+            msg = "LoRA added to the stack — load a base model and generate"
+        else:
+            gen.model_path_edit.setText(str(artifact))
+            msg = "Model path set — click Load Model"
+        switch = getattr(win, "_switch_nav", None)
+        if callable(switch):
+            switch("generate")
+        show_toast(gen, msg, "success", 5000)
 
     def _disconnect_training_worker(self):
         """Disconnect all signals from the training worker to prevent stale callbacks."""
