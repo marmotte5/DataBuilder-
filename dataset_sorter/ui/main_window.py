@@ -918,8 +918,9 @@ class MainWindow(QMainWindow):
         self.btn_simple_mode.setCheckable(True)
         self.btn_simple_mode.setChecked(True)
         self.btn_simple_mode.setToolTip(
-            "Simple mode: Model + Optimizer + Dataset tabs only.\n"
-            "Best for quick LoRA training with sensible defaults."
+            "Simple mode: one single section — model, dataset, essentials\n"
+            "and preset. Everything else uses sensible defaults.\n"
+            "Best for quick LoRA training."
         )
         self.btn_simple_mode.clicked.connect(lambda: self._set_simple_mode(True))
         header_layout.addWidget(self.btn_simple_mode)

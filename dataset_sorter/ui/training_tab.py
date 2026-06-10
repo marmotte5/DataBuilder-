@@ -593,15 +593,39 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         main_layout.addLayout(preset_row)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
 
-        # ── Essentials bar — the three numbers every run needs, always
-        # visible instead of buried in Core → Optimizer → "Batch & Epochs".
+        # ── Essentials bar — everything a basic run needs, always visible.
+        # In Simple mode this bar + the paths grid + presets ARE the whole
+        # config; the tab block below is hidden entirely.
         # These are THE widgets (not copies): builders/config IO reference
-        # self.epochs_spin / self.batch_spin / self.lr_spin as before.
+        # the same attribute names as before.
+        from dataset_sorter.constants import (
+            MODEL_TYPE_KEYS, MODEL_TYPE_LABELS, VRAM_TIERS,
+        )
         essentials_row = QHBoxLayout()
         essentials_row.setSpacing(8)
         _ess_lbl = QLabel("Essentials:")
         _ess_lbl.setStyleSheet(MUTED_LABEL_STYLE)
         essentials_row.addWidget(_ess_lbl)
+
+        self.train_model_combo = QComboBox()
+        # Store the model-type KEY as item data — currentData() is used by
+        # the trust_remote_code security check and the LoRA/full dispatch.
+        for _key, _label in zip(MODEL_TYPE_KEYS, MODEL_TYPE_LABELS):
+            self.train_model_combo.addItem(_label, _key)
+        self.train_model_combo.setCurrentIndex(2)
+        self.train_model_combo.setToolTip(
+            "Base model architecture and training mode (LoRA or full fine-tune)"
+        )
+        essentials_row.addWidget(self.train_model_combo, 2)
+
+        essentials_row.addWidget(QLabel("VRAM"))
+        self.train_vram_combo = QComboBox()
+        self.train_vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
+        self.train_vram_combo.setCurrentIndex(3)
+        self.train_vram_combo.setToolTip(
+            "GPU VRAM in GB. Used to optimize batch size and memory settings."
+        )
+        essentials_row.addWidget(self.train_vram_combo)
 
         essentials_row.addWidget(QLabel("Epochs"))
         self.epochs_spin = QSpinBox()
@@ -692,7 +716,30 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         config_tabs.setTabToolTip(3, "ControlNet, DPO, and RLHF configuration")
 
         self._config_tabs = config_tabs  # stored for Simple/Advanced mode toggling
-        splitter.addWidget(config_tabs)
+
+        # Left pane container: in Simple mode the whole tab block is hidden
+        # and replaced by a short hint — the paths grid, Essentials bar and
+        # presets above are the entire configuration surface.
+        left_pane = QWidget()
+        left_pane_layout = QVBoxLayout(left_pane)
+        left_pane_layout.setContentsMargins(0, 0, 0, 0)
+        left_pane_layout.setSpacing(6)
+        self._simple_hint = QLabel(
+            "Simple mode — the fields above (model, dataset, essentials, "
+            "preset) are all you need.\nSane defaults handle the rest. "
+            "Switch to Advanced (top right) for full control."
+        )
+        self._simple_hint.setWordWrap(True)
+        self._simple_hint.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            f"background: {COLORS['surface']}; border: 1px dashed {COLORS['border']}; "
+            f"border-radius: 8px; padding: 16px;"
+        )
+        self._simple_hint.setVisible(False)
+        left_pane_layout.addWidget(self._simple_hint)
+        left_pane_layout.addWidget(config_tabs, 1)
+        left_pane_layout.addStretch(0)
+        splitter.addWidget(left_pane)
 
         # Right: Training output
         right_widget = QWidget()
@@ -1160,17 +1207,18 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         show_toast(self, f"Preset applied: {TRAINING_PRESETS[key]['label']}", "success")
 
     def set_simple_mode(self, simple: bool):
-        """Show/hide Advanced and Extensions config tabs based on Simple/Advanced mode."""
+        """Toggle the single-section Simple mode.
+
+        Simple: the whole config-tab block is hidden — the always-visible
+        paths grid, Essentials bar (model type, VRAM, epochs, batch, LR)
+        and presets are the entire configuration surface; everything else
+        uses defaults. Advanced: all four tab groups are shown.
+        """
         if not hasattr(self, '_config_tabs'):
             return
-        tabs = self._config_tabs
-        # Tab indices: 0=Core, 1=Dataset, 2=Advanced, 3=Extensions
-        for idx in (2, 3):
-            if idx < tabs.count():
-                tabs.setTabVisible(idx, not simple)
-        # In Simple mode, ensure we're on a visible tab
-        if simple and tabs.currentIndex() >= 2:
-            tabs.setCurrentIndex(0)
+        self._config_tabs.setVisible(not simple)
+        if hasattr(self, '_simple_hint'):
+            self._simple_hint.setVisible(simple)
 
     def _group(self, title: str) -> QGroupBox:
         """Create a QGroupBox with the given title for use in config sections.

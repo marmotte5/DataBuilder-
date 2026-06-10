@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 
 from dataset_sorter.ui.theme import COLORS
 from dataset_sorter.constants import (
-    MODEL_TYPE_LABELS, MODEL_TYPE_KEYS, VRAM_TIERS,
+    MODEL_TYPE_KEYS, VRAM_TIERS,
     NETWORK_TYPES, OPTIMIZERS, LR_SCHEDULERS,
     ATTENTION_MODES, SAMPLE_SAMPLERS, SAVE_PRECISIONS,
     TIMESTEP_SAMPLING, PREDICTION_TYPES,
@@ -73,38 +73,25 @@ class TrainingTabBuildersMixin:
         layout = QVBoxLayout(w)
         layout.setSpacing(10)
 
-        # Model type
-        g1 = self._group("Model & Resolution")
+        # Resolution & CLIP. Model Type and VRAM live in the always-visible
+        # Essentials bar (training_tab._build_ui).
+        g1 = self._group("Resolution")
         g1l = QGridLayout()
-        g1l.addWidget(QLabel("Model Type"), 0, 0)
-        self.train_model_combo = QComboBox()
-        self.train_model_combo.addItems(MODEL_TYPE_LABELS)
-        self.train_model_combo.setCurrentIndex(2)
-        self.train_model_combo.setToolTip("Base model architecture and training mode (LoRA or full fine-tune)")
-        g1l.addWidget(self.train_model_combo, 0, 1)
-
-        g1l.addWidget(QLabel("VRAM"), 1, 0)
-        self.train_vram_combo = QComboBox()
-        self.train_vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
-        self.train_vram_combo.setCurrentIndex(3)
-        self.train_vram_combo.setToolTip("GPU VRAM in GB. Used to optimize batch size and memory settings.")
-        g1l.addWidget(self.train_vram_combo, 1, 1)
-
-        g1l.addWidget(QLabel("Resolution"), 2, 0)
+        g1l.addWidget(QLabel("Resolution"), 0, 0)
         self.resolution_spin = QSpinBox()
         self.resolution_spin.setRange(256, 2048)
         self.resolution_spin.setValue(1024)
         self.resolution_spin.setSingleStep(64)
         self.resolution_spin.setToolTip("Training resolution in pixels. Must match the model's native resolution (e.g. 1024 for SDXL).")
-        g1l.addWidget(self.resolution_spin, 2, 1)
+        g1l.addWidget(self.resolution_spin, 0, 1)
 
-        g1l.addWidget(QLabel("Clip Skip"), 3, 0)
+        g1l.addWidget(QLabel("Clip Skip"), 1, 0)
         self.clip_skip_spin = QSpinBox()
         self.clip_skip_spin.setRange(0, 12)
         self.clip_skip_spin.setValue(0)
         self.clip_skip_spin.setSpecialValueText("Auto")
         self.clip_skip_spin.setToolTip("Number of CLIP text encoder layers to skip. 0=auto, 2=common for anime styles.")
-        g1l.addWidget(self.clip_skip_spin, 3, 1)
+        g1l.addWidget(self.clip_skip_spin, 1, 1)
 
         g1.setLayout(g1l)
         layout.addWidget(g1)

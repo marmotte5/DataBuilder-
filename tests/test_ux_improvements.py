@@ -206,6 +206,48 @@ class TestCrossTabModelHints:
         assert "Model ready" in tab._status.text()
 
 
+class TestSingleSectionSimpleMode:
+    """Simple mode hides the entire config-tab block, leaving only the
+    always-visible paths grid + Essentials bar + presets."""
+
+    def test_simple_hides_tabs_shows_hint(self, training_tab):
+        training_tab.set_simple_mode(True)
+        assert not training_tab._config_tabs.isVisibleTo(training_tab)
+        assert training_tab._simple_hint.isVisibleTo(training_tab)
+
+    def test_advanced_restores_tabs(self, training_tab):
+        training_tab.set_simple_mode(True)
+        training_tab.set_simple_mode(False)
+        assert training_tab._config_tabs.isVisibleTo(training_tab)
+        assert not training_tab._simple_hint.isVisibleTo(training_tab)
+
+    def test_essentials_has_model_type_and_vram(self, training_tab):
+        assert training_tab.train_model_combo.count() > 0
+        assert "GB" in training_tab.train_vram_combo.currentText()
+
+
+class TestModelTypeComboData:
+    """currentData() must return the model-type KEY at every index.
+
+    Regression: the combo was populated with addItems() (no userData), so
+    currentData() returned None everywhere — the trust_remote_code security
+    confirmation never fired from the Train tab, and LoRA/full dispatch in
+    _send_to_generate always took the full-finetune branch.
+    """
+
+    def test_every_index_carries_its_key(self, training_tab):
+        from dataset_sorter.constants import MODEL_TYPE_KEYS
+        combo = training_tab.train_model_combo
+        assert combo.count() == len(MODEL_TYPE_KEYS)
+        for i, key in enumerate(MODEL_TYPE_KEYS):
+            combo.setCurrentIndex(i)
+            assert combo.currentData() == key
+
+    def test_data_matches_build_config(self, training_tab):
+        cfg = training_tab.build_config()
+        assert cfg.model_type == training_tab.train_model_combo.currentData()
+
+
 class TestLibraryUseInMerge:
     def test_signal_and_button_exist(self, qapp):
         from dataset_sorter.ui.library_tab import LibraryTab
