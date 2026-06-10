@@ -2313,6 +2313,8 @@ class MainWindow(QMainWindow):
     def _on_library_use_merge(self, path: str):
         """Load a model from library into the merge tab's Model A slot."""
         self.merge_tab.load_model_path(path)
+        self._switch_nav("merge")
+        self._toast("Model A set in Merge tab", "success")
 
     def _on_config_modified(self, modified: bool):
         """Update the Train stepper button to show unsaved changes indicator."""
