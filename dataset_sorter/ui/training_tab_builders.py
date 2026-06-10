@@ -1508,14 +1508,30 @@ class TrainingTabBuildersMixin:
         g_mem = self._group("Advanced Optimizations (2025-2026)")
         g_mem_l = QVBoxLayout()
         self.mebp_check = QCheckBox("MeBP — Memory-Efficient Backprop (Apple 2025, selective checkpointing)")
+        self.mebp_check.setToolTip(
+            "Re-computes some activations during backward instead of storing them.\n"
+            "Enable when: you hit out-of-memory and gradient checkpointing alone isn't enough.\n"
+            "Skip when: VRAM is fine — it trades ~10-20% speed for memory."
+        )
         g_mem_l.addWidget(self.mebp_check)
         self.vjp_check = QCheckBox("Approx VJP — Unbiased gradient approximation (Feb 2026, faster backward)")
+        self.vjp_check.setToolTip(
+            "Replaces part of the exact gradient with a noisy low-rank estimate "
+            "(correct on average, higher variance).\n"
+            "Enable when: you accept slightly noisier training for a faster backward pass.\n"
+            "Skip when: quality matters more than speed — this is experimental."
+        )
         g_mem_l.addWidget(self.vjp_check)
         self.async_data_check = QCheckBox("Async GPU Prefetch (overlap data transfer with compute)")
         self.async_data_check.setChecked(True)
         g_mem_l.addWidget(self.async_data_check)
         self.cuda_graph_check = QCheckBox("CUDA Graph Training (capture training step, ~15-20% speedup on small batches)")
-        self.cuda_graph_check.setToolTip("Captures the training step into a CUDA graph after warmup steps. Requires static tensor shapes.")
+        self.cuda_graph_check.setToolTip(
+            "Records the whole training step once and replays it, removing CPU launch overhead.\n"
+            "Enable when: small batches + small models where the CPU is the bottleneck.\n"
+            "Skip when: using gradient checkpointing, MeBP or sequence packing "
+            "(shapes must never change)."
+        )
         g_mem_l.addWidget(self.cuda_graph_check)
         self.async_opt_check = QCheckBox("Async Optimizer Step (overlap optimizer.step() with next forward)")
         self.async_opt_check.setToolTip("Launches optimizer.step() on a separate CUDA stream, hiding optimizer latency behind compute.")
@@ -1565,7 +1581,11 @@ class TrainingTabBuildersMixin:
         self.triton_flow_check.setToolTip("Custom Triton kernel for flow matching interpolation (Flux, SD3, etc.).")
         g_speed_l.addWidget(self.triton_flow_check)
         self.fp8_training_check = QCheckBox("FP8 Training (2x TFLOPS on Ada/Hopper GPUs)")
-        self.fp8_training_check.setToolTip("Enable FP8 forward/backward pass. Requires RTX 4090, H100, or newer.")
+        self.fp8_training_check.setToolTip(
+            "Runs the big matrix multiplies in 8-bit floating point (2x TFLOPS).\n"
+            "Enable when: RTX 4090 / H100 or newer and you want maximum speed.\n"
+            "Skip when: using torch.compile (incompatible) or if you see quality loss."
+        )
         g_speed_l.addWidget(self.fp8_training_check)
         self.parallel_caching_check = QCheckBox("Parallel Caching (multi-threaded image loading during VAE encode)")
         self.parallel_caching_check.setToolTip(
@@ -1574,13 +1594,27 @@ class TrainingTabBuildersMixin:
         )
         g_speed_l.addWidget(self.parallel_caching_check)
         self.zero_bottleneck_check = QCheckBox("Zero-Bottleneck DataLoader (mmap + pinned DMA)")
-        self.zero_bottleneck_check.setToolTip("Replace standard DataLoader with mmap+pinned+DMA pipeline. Requires cached latents and TE.")
+        self.zero_bottleneck_check.setToolTip(
+            "Streams cached data straight from disk to GPU, bypassing Python's data loader.\n"
+            "Enable when: large datasets (1000+ images) where data loading limits GPU usage.\n"
+            "Requires: Cache Latents + Cache Text Encoder both enabled."
+        )
         g_speed_l.addWidget(self.zero_bottleneck_check)
         self.mmap_dataset_check = QCheckBox("Memory-Mapped Dataset (zero-copy data loading)")
-        self.mmap_dataset_check.setToolTip("Build mmap cache after latent encoding for zero-copy I/O. Requires cached latents and TE.")
+        self.mmap_dataset_check.setToolTip(
+            "Stores all cached latents in one memory-mapped file the OS pages in on demand.\n"
+            "Enable when: very large datasets (10k+ images) — avoids per-file open overhead.\n"
+            "Requires: Cache Latents + Cache Text Encoder both enabled."
+        )
         g_speed_l.addWidget(self.mmap_dataset_check)
         self.sequence_packing_check = QCheckBox("Sequence Packing (eliminate padding waste for DiT models)")
-        self.sequence_packing_check.setToolTip("Pack variable-length latent sequences to eliminate zero-padding. Requires flash_attn >= 2.5.")
+        self.sequence_packing_check.setToolTip(
+            "Concatenates variable-size images into one sequence instead of padding "
+            "them to the largest.\n"
+            "Enable when: DiT models (Flux, SD3, ...) with aspect-ratio bucketing and "
+            "mixed resolutions.\n"
+            "Requires: flash_attn >= 2.5. Skip for UNet models (SD1.5/SDXL)."
+        )
         g_speed_l.addWidget(self.sequence_packing_check)
         g_speed.setLayout(g_speed_l)
         layout.addWidget(g_speed)
