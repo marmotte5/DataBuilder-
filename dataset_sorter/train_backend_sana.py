@@ -109,19 +109,21 @@ class SanaBackend(TrainBackendBase):
     def encode_text_batch(self, captions: list[str]) -> tuple:
         """Tokenize and encode captions through the Gemma-2B text encoder.
 
-        Returns a 1-tuple of encoder hidden states (no pooled output for Sana).
+        Returns (encoder_hidden, attention_mask) so training_step can pass
+        the mask to the transformer for proper padding exclusion.
         """
         tokens = self.tokenizer(
             captions, padding="max_length",
             max_length=300,
             truncation=True, return_tensors="pt",
         ).to(self.device)
+        attention_mask = tokens["attention_mask"]
 
         with self._te_no_grad():
             out = self.text_encoder(**tokens)
             encoder_hidden = out.last_hidden_state
 
-        return (encoder_hidden,)
+        return (encoder_hidden, attention_mask)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
@@ -140,6 +142,9 @@ class SanaBackend(TrainBackendBase):
 
         Uses raw integer timesteps (no normalization) as expected by Sana.
         """
+        enc_mask = te_out[1] if len(te_out) > 1 else None
+        te_hidden = (te_out[0],)
         return self.flow_training_step(
-            latents, te_out, batch_size, normalize_timestep=False,
+            latents, te_hidden, batch_size, normalize_timestep=False,
+            encoder_attention_mask=enc_mask,
         )

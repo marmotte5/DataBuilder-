@@ -104,7 +104,7 @@ class PixArtBackend(TrainBackendBase):
             out = self.text_encoder(input_ids, attention_mask=attention_mask)
             encoder_hidden = out.last_hidden_state
 
-        return (encoder_hidden,)
+        return (encoder_hidden, attention_mask)
 
     def get_added_cond(self, batch_size: int, pooled=None, te_out: tuple = (),
                         image_hw: tuple[int, int] | None = None) -> Optional[dict]:
@@ -123,7 +123,9 @@ class PixArtBackend(TrainBackendBase):
     def training_step(
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
     ) -> torch.Tensor:
-        # PixArt passes raw integer timesteps and uses added_cond_kwargs dict
+        enc_mask = te_out[1] if len(te_out) > 1 else None
+        te_hidden = (te_out[0],)
         return self.flow_training_step(
-            latents, te_out, batch_size, normalize_timestep=False,
+            latents, te_hidden, batch_size, normalize_timestep=False,
+            encoder_attention_mask=enc_mask,
         )

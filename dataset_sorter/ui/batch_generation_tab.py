@@ -292,50 +292,50 @@ class BatchGenerationTab(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
 
-        btn_add = QPushButton("+ Add Prompt")
-        btn_add.setStyleSheet(ACCENT_BUTTON_STYLE)
-        btn_add.setToolTip("Add a blank prompt row to the queue")
-        btn_add.clicked.connect(self._add_empty_row)
-        btn_row.addWidget(btn_add)
+        self._btn_add = QPushButton("+ Add Prompt")
+        self._btn_add.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self._btn_add.setToolTip("Add a blank prompt row to the queue")
+        self._btn_add.clicked.connect(self._add_empty_row)
+        btn_row.addWidget(self._btn_add)
 
-        btn_duplicate = QPushButton("Duplicate")
-        btn_duplicate.setToolTip("Duplicate the selected rows")
-        btn_duplicate.clicked.connect(self._duplicate_selected)
-        btn_row.addWidget(btn_duplicate)
+        self._btn_duplicate = QPushButton("Duplicate")
+        self._btn_duplicate.setToolTip("Duplicate the selected rows")
+        self._btn_duplicate.clicked.connect(self._duplicate_selected)
+        btn_row.addWidget(self._btn_duplicate)
 
-        btn_remove = QPushButton("Remove Selected")
-        btn_remove.setStyleSheet(DANGER_BUTTON_STYLE)
-        btn_remove.setToolTip("Remove selected rows from the queue")
-        btn_remove.clicked.connect(self._remove_selected)
-        btn_row.addWidget(btn_remove)
+        self._btn_remove = QPushButton("Remove Selected")
+        self._btn_remove.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._btn_remove.setToolTip("Remove selected rows from the queue")
+        self._btn_remove.clicked.connect(self._remove_selected)
+        btn_row.addWidget(self._btn_remove)
 
         btn_row.addStretch()
 
-        btn_import_csv = QPushButton("Import CSV")
-        btn_import_csv.setToolTip("Import prompts from a CSV file (columns: positive, negative, seed, steps, cfg, width, height, count)")
-        btn_import_csv.clicked.connect(self._import_csv)
-        btn_row.addWidget(btn_import_csv)
+        self._btn_import_csv = QPushButton("Import CSV")
+        self._btn_import_csv.setToolTip("Import prompts from a CSV file (columns: positive, negative, seed, steps, cfg, width, height, count)")
+        self._btn_import_csv.clicked.connect(self._import_csv)
+        btn_row.addWidget(self._btn_import_csv)
 
-        btn_import_json = QPushButton("Import JSON")
-        btn_import_json.setToolTip("Import prompts from a JSON file (array of prompt objects)")
-        btn_import_json.clicked.connect(self._import_json)
-        btn_row.addWidget(btn_import_json)
+        self._btn_import_json = QPushButton("Import JSON")
+        self._btn_import_json.setToolTip("Import prompts from a JSON file (array of prompt objects)")
+        self._btn_import_json.clicked.connect(self._import_json)
+        btn_row.addWidget(self._btn_import_json)
 
-        btn_import_txt = QPushButton("Import TXT")
-        btn_import_txt.setToolTip("Import prompts from a text file (one prompt per line)")
-        btn_import_txt.clicked.connect(self._import_txt)
-        btn_row.addWidget(btn_import_txt)
+        self._btn_import_txt = QPushButton("Import TXT")
+        self._btn_import_txt.setToolTip("Import prompts from a text file (one prompt per line)")
+        self._btn_import_txt.clicked.connect(self._import_txt)
+        btn_row.addWidget(self._btn_import_txt)
 
-        btn_export = QPushButton("Export Queue")
-        btn_export.setToolTip("Export the current queue to a JSON file")
-        btn_export.clicked.connect(self._export_queue)
-        btn_row.addWidget(btn_export)
+        self._btn_export = QPushButton("Export Queue")
+        self._btn_export.setToolTip("Export the current queue to a JSON file")
+        self._btn_export.clicked.connect(self._export_queue)
+        btn_row.addWidget(self._btn_export)
 
-        btn_clear = QPushButton("Clear All")
-        btn_clear.setToolTip("Remove all prompts from the queue")
-        btn_clear.setStyleSheet(DANGER_BUTTON_STYLE)
-        btn_clear.clicked.connect(self._clear_queue)
-        btn_row.addWidget(btn_clear)
+        self._btn_clear = QPushButton("Clear All")
+        self._btn_clear.setToolTip("Remove all prompts from the queue")
+        self._btn_clear.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._btn_clear.clicked.connect(self._clear_queue)
+        btn_row.addWidget(self._btn_clear)
 
         top_layout.addLayout(btn_row)
         splitter.addWidget(top)
@@ -717,6 +717,7 @@ class BatchGenerationTab(QWidget):
 
         self._btn_run.setEnabled(False)
         self._btn_stop.setEnabled(True)
+        self._set_queue_buttons_enabled(False)
         self._progress_bar.setVisible(True)
         self._progress_bar.setMaximum(len(self._queue))
         self._progress_bar.setValue(0)
@@ -809,6 +810,7 @@ class BatchGenerationTab(QWidget):
         self._status_label.setText(message)
         self._btn_run.setEnabled(True)
         self._btn_stop.setEnabled(False)
+        self._set_queue_buttons_enabled(True)
         self._progress_bar.setVisible(False)
         self._eta_label.setText("")
         variant = "success" if success else "warning"
@@ -816,6 +818,16 @@ class BatchGenerationTab(QWidget):
         # Clean up worker thread to avoid memory/VRAM leaks
         self._cleanup_worker()
         self._running_queue = None
+
+    def _set_queue_buttons_enabled(self, enabled: bool):
+        for btn in (self._btn_add, self._btn_duplicate, self._btn_remove,
+                    self._btn_import_csv, self._btn_import_json,
+                    self._btn_import_txt, self._btn_export, self._btn_clear):
+            btn.setEnabled(enabled)
+        self._table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed
+            if enabled else QAbstractItemView.EditTrigger.NoEditTriggers
+        )
 
     def _cleanup_worker(self):
         """Clean up batch generation worker thread."""
@@ -836,12 +848,16 @@ class BatchGenerationTab(QWidget):
         """Re-apply all inline styles after a theme change."""
         from dataset_sorter.ui.theme import (
             COLORS, MUTED_LABEL_STYLE, SUCCESS_BUTTON_STYLE, DANGER_BUTTON_STYLE,
+            ACCENT_BUTTON_STYLE,
         )
         self._queue_count_label.setStyleSheet(MUTED_LABEL_STYLE)
         self._eta_label.setStyleSheet(MUTED_LABEL_STYLE)
         self._status_label.setStyleSheet(MUTED_LABEL_STYLE)
         self._btn_run.setStyleSheet(SUCCESS_BUTTON_STYLE)
         self._btn_stop.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._btn_add.setStyleSheet(ACCENT_BUTTON_STYLE)
+        self._btn_remove.setStyleSheet(DANGER_BUTTON_STYLE)
+        self._btn_clear.setStyleSheet(DANGER_BUTTON_STYLE)
         self._table.setStyleSheet(
             f"QTableWidget {{ gridline-color: {COLORS['border']}; "
             f"background-color: {COLORS['surface']}; "

@@ -299,6 +299,36 @@ class TestValidatorRegressionFixes:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Cross-field incompatibility warnings
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestCrossFieldIncompatibilities:
+    def _warn_fields(self, errors):
+        return {e.field for e in errors if e.severity == "warning"}
+
+    def test_fp8_plus_compile_warns(self):
+        cfg = TrainingConfig(fp8_training=True, torch_compile=True)
+        fields = self._warn_fields(validate_config(cfg))
+        assert "fp8_training" in fields
+
+    def test_cuda_graph_plus_mebp_warns(self):
+        cfg = TrainingConfig(cuda_graph_training=True, memory_efficient_bp=True)
+        fields = self._warn_fields(validate_config(cfg))
+        assert "cuda_graph_training" in fields
+
+    def test_cuda_graph_plus_sequence_packing_warns(self):
+        cfg = TrainingConfig(cuda_graph_training=True, sequence_packing=True)
+        fields = self._warn_fields(validate_config(cfg))
+        assert "cuda_graph_training" in fields
+
+    def test_no_false_positives(self):
+        cfg = TrainingConfig(fp8_training=True, torch_compile=False)
+        fields = self._warn_fields(validate_config(cfg))
+        assert "fp8_training" not in fields
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Recommender end-to-end — every config the recommender produces must
 # pass validation. Previously full/dora configs failed silently.
 # ─────────────────────────────────────────────────────────────────────────

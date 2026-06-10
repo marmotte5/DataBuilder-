@@ -837,7 +837,7 @@ class Trainer:
             # that can't be reproduced by the generic per-encoder caching path.
             _encode_fn = None
             _model_name = getattr(self.backend, 'model_name', '')
-            if _model_name in ('flux2', 'hidream'):
+            if _model_name in ('flux2', 'hidream', 'pixart', 'sana'):
                 _encode_fn = self.backend.encode_text_batch
                 # HiDream: ensure all 4 encoders are on device for caching
                 if _model_name == 'hidream':
@@ -2062,7 +2062,8 @@ class Trainer:
                     # If NaN skips reduced the count, rescale to get the
                     # correct mean rather than a biased-low value.
                     # Single .item() per optimizer step (vs per-microbatch).
-                    if _valid_microbatches > 0:
+                    _had_valid = _valid_microbatches > 0
+                    if _had_valid:
                         if _valid_microbatches < _current_accum:
                             self.state.loss = (running_loss * _current_accum / _valid_microbatches).item()
                         else:
@@ -2074,8 +2075,9 @@ class Trainer:
                     _valid_microbatches = 0
 
                     # Track per-epoch loss stats for debug console
-                    _epoch_loss_sum += self.state.loss
-                    _epoch_loss_count += 1
+                    if _had_valid:
+                        _epoch_loss_sum += self.state.loss
+                        _epoch_loss_count += 1
 
                     # ── TensorBoard logging ──
                     if self._tb_logger is not None and self._tb_logger.available:
