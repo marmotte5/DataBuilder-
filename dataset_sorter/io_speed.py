@@ -364,6 +364,10 @@ def get_tmpfs_cache_dir(size_hint_gb: float = 2.0) -> Optional[Path]:
 
     Returns None if no tmpfs is available or it lacks capacity.
     """
+    import sys
+    if sys.platform == "win32":
+        return None
+
     shm_path = Path(TMPFS_CACHE_ROOT)
     if shm_path.exists() and shm_path.is_dir():
         try:
@@ -375,7 +379,7 @@ def get_tmpfs_cache_dir(size_hint_gb: float = 2.0) -> Optional[Path]:
                     f"(need {size_hint_gb:.1f} GB), skipping tmpfs cache"
                 )
                 return None
-        except OSError:
+        except (OSError, AttributeError):
             return None
         cache_dir = shm_path / TMPFS_CACHE_SUBDIR
         cache_dir.mkdir(exist_ok=True)
@@ -397,7 +401,7 @@ def get_tmpfs_cache_dir(size_hint_gb: float = 2.0) -> Optional[Path]:
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 _tmpfs_cache_dirs.append(cache_dir)
                 return cache_dir
-        except OSError:
+        except (OSError, AttributeError):
             pass
 
     return None

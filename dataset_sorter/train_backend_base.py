@@ -1147,6 +1147,7 @@ class TrainBackendBase(ABC):
         self, latents: torch.Tensor, te_out: tuple, batch_size: int,
         *, timestep_scale: float = 1000.0, normalize_timestep: bool = True,
         use_added_cond_as_kwargs: bool = False,
+        encoder_attention_mask: "torch.Tensor | None" = None,
     ) -> torch.Tensor:
         """Shared flow matching training step for transformer-based models.
 
@@ -1204,6 +1205,8 @@ class TrainBackendBase(ABC):
                 fwd_kwargs.update(added_cond)
             else:
                 fwd_kwargs["added_cond_kwargs"] = added_cond
+        if encoder_attention_mask is not None:
+            fwd_kwargs["encoder_attention_mask"] = encoder_attention_mask
 
         ts_input = timesteps / timestep_scale if normalize_timestep else timesteps
 
