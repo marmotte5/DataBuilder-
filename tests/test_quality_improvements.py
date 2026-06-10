@@ -115,6 +115,40 @@ class TestEMAPrecision:
         effective = min(0.999, (1 + 100) / (10 + 100))
         assert effective == pytest.approx(101 / 110)
 
+    def test_load_state_dict_restores_constructor_device(self):
+        """Resume bug: checkpoints load with map_location='cpu' — the shadow
+        params must come back on the device the constructor chose, or the
+        first update() after resume crashes with a CPU/CUDA lerp_ mismatch."""
+        from dataset_sorter.ema import EMAModel
+        model = torch.nn.Linear(4, 4)
+        ema = EMAModel(model.parameters(), decay=0.999)
+        constructor_devices = [sp.device for sp in ema.shadow_params]
+
+        # Simulate save → torch.load(map_location="cpu") → load
+        state = ema.state_dict()
+        state["shadow_params"] = [p.cpu() for p in state["shadow_params"]]
+        ema.load_state_dict(state)
+
+        for sp, dev in zip(ema.shadow_params, constructor_devices):
+            assert sp.device == dev
+        # update() must work right after resume
+        ema.update(model.parameters())
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+    def test_load_state_dict_moves_back_to_gpu(self):
+        """Same as above but with a real CPU→CUDA round-trip."""
+        from dataset_sorter.ema import EMAModel
+        model = torch.nn.Linear(4, 4).cuda()
+        ema = EMAModel(model.parameters(), decay=0.999)
+        assert all(sp.is_cuda for sp in ema.shadow_params)
+
+        state = ema.state_dict()
+        state["shadow_params"] = [p.cpu() for p in state["shadow_params"]]
+        ema.load_state_dict(state)
+
+        assert all(sp.is_cuda for sp in ema.shadow_params)
+        ema.update(model.parameters())
+
 
 # ── SOAP FP32 moments tests ──────────────────────────────────────────────
 

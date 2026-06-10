@@ -525,6 +525,13 @@ class _RexScheduler:
         self.optimizer = optimizer
         self.warmup_steps = warmup_steps
         self.total_steps = max(total_steps, 1)
+        if warmup_steps >= self.total_steps:
+            log.warning(
+                "REX scheduler: warmup_steps (%d) >= total_steps (%d) — "
+                "the LR will stay in the warmup ramp for the whole run. "
+                "Reduce warmup_steps (small dataset?).",
+                warmup_steps, self.total_steps,
+            )
         self.base_lrs = [pg["lr"] for pg in optimizer.param_groups]
         self._step_count = 0
 
@@ -586,8 +593,18 @@ class _CosineWithTerminalAnnealScheduler:
         self.base_lrs = [pg["lr"] for pg in optimizer.param_groups]
         self._step_count = 0
 
+        if self.warmup_steps >= self.total_steps:
+            log.warning(
+                "Cosine+anneal scheduler: warmup_steps (%d) >= total_steps (%d) — "
+                "the LR will stay in the warmup ramp for the whole run. "
+                "Reduce warmup_steps (small dataset?).",
+                self.warmup_steps, self.total_steps,
+            )
+
         # Pre-compute the boundary between cosine decay and the tail.
-        decay_steps = self.total_steps - self.warmup_steps
+        # Clamp to >= 0 so a warmup longer than the run can't produce a
+        # negative tail boundary / garbage tail multiplier.
+        decay_steps = max(self.total_steps - self.warmup_steps, 0)
         self.tail_start_step = self.warmup_steps + int(
             decay_steps * (1.0 - self.tail_fraction)
         )
