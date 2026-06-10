@@ -3927,6 +3927,16 @@ class Trainer:
         """Free all resources (safe even if setup() failed)."""
         self.state.phase = "idle"
 
+        # Restore the globally monkey-patched SDPA if this run enabled
+        # SageAttention (explicitly or via auto speed opts). Without this,
+        # the patch leaks into subsequent runs that disabled the option.
+        if getattr(getattr(self, "config", None), "sage_attention", False):
+            try:
+                from dataset_sorter.speed_optimizations import disable_sage_attention
+                disable_sage_attention()
+            except Exception:
+                pass
+
         # Detach attention debugger
         if self._attention_debugger is not None:
             self._attention_debugger.detach()

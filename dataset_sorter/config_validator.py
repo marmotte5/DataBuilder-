@@ -311,7 +311,7 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
             severity="warning",
         ))
 
-    if getattr(config, "cuda_graph_training", False) and getattr(config, "memory_efficient_bp", False):
+    if getattr(config, "cuda_graph_training", False) and getattr(config, "mebp_enabled", False):
         errors.append(ConfigValidationError(
             "cuda_graph_training",
             "CUDA graphs cannot be used with memory-efficient backprop "
