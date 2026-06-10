@@ -277,25 +277,59 @@ class TestValidatorRegressionFixes:
         assert "effective_batch_size" in fields
 
     def test_fused_backward_pass_warns_on_grad_accum_gt_1(self):
-        """The real fused_backward incompatibility is grad_accum>1,
-        not the optimizer family (Marmotte supports it just like Adafactor)."""
         cfg = TrainingConfig(
             fused_backward_pass=True, gradient_accumulation=2,
-            optimizer="Marmotte",
+            optimizer="AdamW",
         )
         errors = validate_config(cfg)
         fields = {e.field for e in errors if e.severity == "warning"}
         assert "fused_backward_pass" in fields
 
-    def test_fused_backward_pass_ok_with_grad_accum_1(self):
-        """fused_backward_pass + Marmotte + grad_accum=1 must not warn."""
+    def test_fused_backward_pass_ok_with_adamw_grad_accum_1(self):
+        """fused_backward_pass + AdamW + grad_accum=1 + bf16 must not warn."""
         cfg = TrainingConfig(
             fused_backward_pass=True, gradient_accumulation=1,
-            optimizer="Marmotte",
+            optimizer="AdamW", mixed_precision="bf16",
         )
         errors = validate_config(cfg)
         fields = {e.field for e in errors if e.severity == "warning"}
         assert "fused_backward_pass" not in fields
+
+    def test_fused_backward_pass_warns_on_unsupported_optimizer(self):
+        """FusedBackwardPass raises ValueError for Marmotte/Adafactor —
+        the validator must warn so the user knows the option won't engage."""
+        for opt in ("Marmotte", "Adafactor"):
+            cfg = TrainingConfig(
+                fused_backward_pass=True, gradient_accumulation=1,
+                optimizer=opt, mixed_precision="bf16",
+            )
+            errors = validate_config(cfg)
+            fields = {e.field for e in errors if e.severity == "warning"}
+            assert "fused_backward_pass" in fields, f"no warning for {opt}"
+
+    def test_fused_backward_pass_warns_on_fp16(self):
+        """fp16 GradScaler scales gradients; fused hooks would step on them."""
+        cfg = TrainingConfig(
+            fused_backward_pass=True, gradient_accumulation=1,
+            optimizer="AdamW", mixed_precision="fp16",
+        )
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "fused_backward_pass" in fields
+
+    def test_timestep_ema_plus_bias_warns(self):
+        cfg = TrainingConfig(
+            timestep_ema_sampling=True, timestep_bias_strategy="earlier",
+        )
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "timestep_ema_sampling" in fields
+
+    def test_timestep_ema_alone_does_not_warn(self):
+        cfg = TrainingConfig(timestep_ema_sampling=True)
+        errors = validate_config(cfg)
+        fields = {e.field for e in errors if e.severity == "warning"}
+        assert "timestep_ema_sampling" not in fields
 
 
 # ─────────────────────────────────────────────────────────────────────────

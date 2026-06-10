@@ -203,13 +203,49 @@ def validate_config(config: TrainingConfig) -> list[ConfigValidationError]:
     # Fused backward pass is incompatible with gradient accumulation > 1
     # because the optimizer step would fire on the first microbatch's
     # gradients only (the fused hook short-circuits the usual zero/step
-    # cycle). Marmotte and Adafactor both support this fast path; the
-    # optimizer family doesn't matter — only grad_accum does.
+    # cycle).
     if config.fused_backward_pass and config.gradient_accumulation > 1:
         errors.append(ConfigValidationError(
             "fused_backward_pass",
             "fused_backward_pass requires gradient_accumulation=1; "
             "the trainer will silently disable it otherwise.",
+            severity="warning",
+        ))
+
+    # FusedBackwardPass reimplements the optimizer update inline and only
+    # supports the Adam/AdamW/SGD families — anything else is rejected at
+    # setup and the trainer falls back to the normal step path.
+    _FUSED_BACKWARD_OPTIMIZERS = {"AdamW", "SGD"}
+    if config.fused_backward_pass and config.optimizer not in _FUSED_BACKWARD_OPTIMIZERS:
+        errors.append(ConfigValidationError(
+            "fused_backward_pass",
+            f"fused_backward_pass only supports {sorted(_FUSED_BACKWARD_OPTIMIZERS)} "
+            f"optimizers (got '{config.optimizer}'); the trainer will disable it.",
+            severity="warning",
+        ))
+
+    # fp16 GradScaler scales gradients before backward; the fused hooks would
+    # step on scaled gradients and bypass the inf/NaN skip → divergence.
+    if config.fused_backward_pass and config.mixed_precision == "fp16":
+        errors.append(ConfigValidationError(
+            "fused_backward_pass",
+            "fused_backward_pass is incompatible with fp16 mixed precision "
+            "(hooks fire on GradScaler-scaled gradients). Use bf16 instead; "
+            "the trainer will disable it.",
+            severity="warning",
+        ))
+
+    # Timestep EMA sampling and timestep bias both reshape the timestep
+    # distribution; enabling both applies the bias on top of the EMA-sampled
+    # timesteps, compounding the two distortions.
+    if (getattr(config, "timestep_ema_sampling", False)
+            and getattr(config, "timestep_bias_strategy", "none") not in ("", "none")):
+        errors.append(ConfigValidationError(
+            "timestep_ema_sampling",
+            "timestep_ema_sampling and timestep_bias_strategy are both "
+            "enabled — the bias is applied on top of EMA-sampled timesteps, "
+            "compounding the two distribution distortions. Consider using "
+            "only one.",
             severity="warning",
         ))
 

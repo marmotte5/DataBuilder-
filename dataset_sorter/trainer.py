@@ -1749,14 +1749,29 @@ class Trainer:
                     "fire on every backward() call, stepping per micro-batch instead of "
                     "per accumulation window. Disabling fused backward pass."
                 )
+            elif self.grad_scaler is not None:
+                log.warning(
+                    "Fused backward pass is incompatible with fp16 mixed precision: "
+                    "the per-parameter hooks fire on GradScaler-scaled gradients "
+                    "(effective LR multiplied by the scale factor) and bypass the "
+                    "inf/NaN skip — instant divergence. Use bf16 or disable "
+                    "fused_backward_pass. Disabling fused backward pass."
+                )
             else:
                 from dataset_sorter.speed_optimizations import FusedBackwardPass
-                fused_backward = FusedBackwardPass(
-                    self.optimizer, self.scheduler, self.grad_scaler,
-                    max_grad_norm=config.max_grad_norm,
-                )
-                fused_backward.install_hooks(self.backend.trainable_adapter_module().parameters())
-                log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
+                try:
+                    fused_backward = FusedBackwardPass(
+                        self.optimizer, self.scheduler, self.grad_scaler,
+                        max_grad_norm=config.max_grad_norm,
+                    )
+                except ValueError as exc:
+                    # Optimizer family not supported by the inline update math
+                    # (e.g. Adafactor, Marmotte, Prodigy). Fall back to the
+                    # standard step path instead of crashing setup.
+                    log.warning("Fused backward pass disabled: %s", exc)
+                else:
+                    fused_backward.install_hooks(self.backend.trainable_adapter_module().parameters())
+                    log.info("Fused backward pass enabled (per-parameter optimizer step during backward)")
 
         # ── Stochastic Rounding for BF16 ──
         sr_hook = None
@@ -1991,16 +2006,19 @@ class Trainer:
                             else:
                                 if self.grad_scaler is not None:
                                     self.grad_scaler.unscale_(self.optimizer)
+
+                                # VJP approximation BEFORE clipping — the blend
+                                # changes gradient norms, so running it after
+                                # clip_grad_norm_ would break the clip bound.
+                                if vjp_scaler is not None:
+                                    vjp_scaler.approximate_gradients(trainable_params)
+
                                 grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, config.max_grad_norm)
                                 if (self._tb_logger is not None and self._tb_logger.available
                                         and self.state.global_step % 10 == 0):
                                     self._tb_logger.log_scalar(
                                         "train/grad_norm", grad_norm.item(), self.state.global_step,
                                     )
-
-                                # VJP approximation: reduce gradient compute (Feb 2026)
-                                if vjp_scaler is not None:
-                                    vjp_scaler.approximate_gradients(trainable_params)
 
                                 if self._async_optimizer is not None:
                                     # Async: launch optimizer.step() on separate stream
