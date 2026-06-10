@@ -150,6 +150,7 @@ class LoRAEntry(QWidget):
     """Single LoRA adapter row with path, weight slider, and remove button."""
 
     removed = pyqtSignal(object)  # self
+    changed = pyqtSignal()        # path or weight edited
 
     def __init__(self, parent=None):
         """Initialize a LoRA entry row with path field, weight slider, and remove button."""
@@ -160,6 +161,7 @@ class LoRAEntry(QWidget):
 
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("LoRA / DoRA path (.safetensors, folder)...")
+        self.path_edit.textChanged.connect(lambda _t: self.changed.emit())
         layout.addWidget(self.path_edit, 3)
 
         btn_browse = QToolButton()
@@ -176,6 +178,7 @@ class LoRAEntry(QWidget):
         self.weight_spin.setSingleStep(0.05)
         self.weight_spin.setValue(1.0)
         self.weight_spin.setMaximumWidth(75)
+        self.weight_spin.valueChanged.connect(lambda _v: self.changed.emit())
         layout.addWidget(self.weight_spin)
 
         btn_remove = QToolButton()
@@ -221,6 +224,12 @@ class GenerateTab(QWidget):
         self._scan_worker_gen: QThread | None = None
         self._build_ui()
         self._connect_signals()
+        # Debounced LoRA-stack persistence (textChanged fires per keystroke)
+        self._lora_save_timer = QTimer(self)
+        self._lora_save_timer.setSingleShot(True)
+        self._lora_save_timer.setInterval(1000)
+        self._lora_save_timer.timeout.connect(self._save_lora_stack)
+        self._restore_lora_stack()
         QTimer.singleShot(2000, self._start_model_scan)
 
     # ── UI Construction ─────────────────────────────────────────────────
@@ -941,14 +950,54 @@ class GenerateTab(QWidget):
 
     def _add_lora_entry(self):
         """Create and append a new LoRA adapter row to the adapter list."""
+        self._add_lora_row()
+
+    def _add_lora_row(self, path: str = "", weight: float = 1.0) -> LoRAEntry:
+        """Create a LoRA row, optionally pre-filled (session restore)."""
         entry = LoRAEntry()
         entry.removed.connect(self._remove_lora_entry)
+        entry.changed.connect(self._schedule_lora_stack_save)
+        if path:
+            entry.path_edit.setText(path)
+            entry.weight_spin.setValue(weight)
         self.lora_container.addWidget(entry)
+        return entry
 
     def _remove_lora_entry(self, entry: LoRAEntry):
         """Remove a LoRA adapter row from the list and destroy its widget."""
         self.lora_container.removeWidget(entry)
         entry.deleteLater()
+        self._schedule_lora_stack_save()
+
+    def _schedule_lora_stack_save(self):
+        """Debounced persist of the LoRA stack (textChanged fires per keystroke)."""
+        self._lora_save_timer.start()
+
+    def _save_lora_stack(self):
+        """Persist the current LoRA rows so they survive an app restart."""
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            settings = AppSettings.load()
+            settings.lora_stack = [
+                {"path": a["path"], "weight": a["weight"]}
+                for a in self._get_lora_adapters()
+            ]
+            settings.save()
+        except Exception as exc:
+            log.debug("Could not save LoRA stack: %s", exc)
+
+    def _restore_lora_stack(self):
+        """Re-create the LoRA rows saved in the previous session."""
+        try:
+            from dataset_sorter.app_settings import AppSettings
+            stack = AppSettings.load().lora_stack
+        except Exception as exc:
+            log.debug("Could not restore LoRA stack: %s", exc)
+            return
+        for item in stack:
+            path = str(item.get("path", "")).strip()
+            if path:
+                self._add_lora_row(path, float(item.get("weight", 1.0)))
 
     def _get_lora_adapters(self) -> list[dict]:
         """Collect all non-empty LoRA adapter entries as a list of dicts."""

@@ -680,7 +680,12 @@ class BatchGenerationTab(QWidget):
             return
 
         if self._generate_worker is None or not self._generate_worker.is_loaded:
-            show_toast(self, "Load a model in the Generate tab first", "warning")
+            show_toast(
+                self, "Load a model in the Generate tab first", "warning",
+                duration_ms=5000, action_text="Go to Generate",
+                action_callback=lambda: getattr(
+                    self.window(), "_switch_nav", lambda _x: None)("generate"),
+            )
             return
 
         # Clean up any previous worker before creating a new one

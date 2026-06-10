@@ -940,24 +940,8 @@ class TrainingTabBuildersMixin:
         self.train_optimizer_combo.setToolTip("Optimizer algorithm. Adafactor is memory-efficient; AdamW8bit for speed; Prodigy for auto-LR.")
         g1l.addWidget(self.train_optimizer_combo, 0, 1)
 
-        _lr_row = QHBoxLayout()
-        _lr_row.addWidget(_param_label("Learning Rate", "Too high = unstable, too low = slow"))
-        _lr_row.addWidget(_help_icon(
-            "Learning rate controls how fast the model learns.\n\n"
-            "LoRA: 1e-4 (0.0001) is a safe starting point\n"
-            "Full finetune: 1e-6 (0.000001) typical\n"
-            "Prodigy/D-Adaptation: set to 1.0 (auto-tunes)\n"
-            "Too high → garbled images. Too low → no learning."
-        ))
-        _lr_row.addStretch()
-        g1l.addLayout(_lr_row, 1, 0)
-        self.lr_spin = QDoubleSpinBox()
-        self.lr_spin.setRange(1e-8, 10.0)
-        self.lr_spin.setDecimals(8)
-        self.lr_spin.setValue(1e-4)
-        self.lr_spin.setSingleStep(1e-5)
-        self.lr_spin.setToolTip("UNet/LoRA learning rate. 1e-4 for LoRA, 1e-6 for full finetune. Use 1.0 for Prodigy.")
-        g1l.addWidget(self.lr_spin, 1, 1)
+        # NOTE: the UNet learning rate (self.lr_spin) lives in the
+        # always-visible Essentials bar (training_tab._build_ui), not here.
 
         g1l.addWidget(_param_label("TE Learning Rate", "0 = freeze text encoder"), 2, 0)
         self.te_lr_spin = QDoubleSpinBox()
@@ -1016,37 +1000,24 @@ class TrainingTabBuildersMixin:
         g2.setLayout(g2l)
         layout.addWidget(g2)
 
-        # Batch & Epochs
-        g3 = self._group("Batch & Epochs")
+        # Steps & accumulation. Batch size and epochs live in the
+        # always-visible Essentials bar (training_tab._build_ui).
+        g3 = self._group("Steps & Accumulation")
         g3l = QGridLayout()
-        g3l.addWidget(_param_label("Batch Size", "Higher = faster but more VRAM"), 0, 0)
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 64)
-        self.batch_spin.setValue(2)
-        self.batch_spin.setToolTip("Images per GPU per step. Higher = faster but uses more VRAM. 1-4 for LoRA.")
-        g3l.addWidget(self.batch_spin, 0, 1)
-
-        g3l.addWidget(QLabel("Grad Accumulation"), 1, 0)
+        g3l.addWidget(QLabel("Grad Accumulation"), 0, 0)
         self.grad_accum_spin = QSpinBox()
         self.grad_accum_spin.setRange(1, 128)
         self.grad_accum_spin.setValue(2)
         self.grad_accum_spin.setToolTip("Accumulate gradients over N steps before updating. Effective batch = batch_size x this.")
-        g3l.addWidget(self.grad_accum_spin, 1, 1)
+        g3l.addWidget(self.grad_accum_spin, 0, 1)
 
-        g3l.addWidget(_param_label("Epochs", "Full passes through dataset"), 2, 0)
-        self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(1, 1000)
-        self.epochs_spin.setValue(10)
-        self.epochs_spin.setToolTip("Number of full passes through the dataset. 10-30 for LoRA, 3-10 for full finetune.")
-        g3l.addWidget(self.epochs_spin, 2, 1)
-
-        g3l.addWidget(QLabel("Max Steps (0=off)"), 3, 0)
+        g3l.addWidget(QLabel("Max Steps (0=off)"), 1, 0)
         self.max_steps_spin = QSpinBox()
         self.max_steps_spin.setRange(0, 1000000)
         self.max_steps_spin.setValue(0)
         self.max_steps_spin.setSpecialValueText("Unlimited")
         self.max_steps_spin.setToolTip("Hard limit on training steps. 0=use epochs instead. Useful for large datasets.")
-        g3l.addWidget(self.max_steps_spin, 3, 1)
+        g3l.addWidget(self.max_steps_spin, 1, 1)
 
         g3.setLayout(g3l)
         layout.addWidget(g3)

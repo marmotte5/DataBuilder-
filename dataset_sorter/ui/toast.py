@@ -50,10 +50,17 @@ class ToastNotification(QLabel):
         parent: QWidget,
         variant: str = "success",
         duration_ms: int = 2500,
+        action_text: str = "",
+        action_callback=None,
     ):
         super().__init__(parent)
+        self._action_callback = action_callback
         icon = _ICONS.get(variant, "")
-        self.setText(f"  {icon}  {text}")
+        if action_text and action_callback is not None:
+            self.setText(f"  {icon}  {text}   → {action_text}")
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.setText(f"  {icon}  {text}")
         self.setStyleSheet(_toast_style(variant))
         self.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.setWordWrap(True)
@@ -102,7 +109,12 @@ class ToastNotification(QLabel):
         self._fade_anim.start()
 
     def mousePressEvent(self, event):
-        """Dismiss on click."""
+        """Run the action (if any), then dismiss."""
+        if self._action_callback is not None:
+            try:
+                self._action_callback()
+            except Exception:  # noqa: BLE001 — toast actions must never crash the UI
+                pass
         self._fade_timer.stop()
         self._fade_out()
 
@@ -151,7 +163,25 @@ class _ToastResizeFilter(QObject):
         return False  # never consume the event
 
 
-_resize_filter = _ToastResizeFilter()
+_resize_filter: _ToastResizeFilter | None = None
+
+
+def _get_resize_filter() -> _ToastResizeFilter:
+    """Return the shared resize filter, recreating it if the C++ side died.
+
+    The filter is an unparented QObject; PyQt can delete the underlying
+    C++ object across QApplication teardowns (seen in test suites), after
+    which any use raises RuntimeError.
+    """
+    global _resize_filter
+    if _resize_filter is not None:
+        try:
+            _resize_filter.objectName()  # probe C++ validity
+            return _resize_filter
+        except RuntimeError:
+            _resize_filtered_parents.clear()
+    _resize_filter = _ToastResizeFilter()
+    return _resize_filter
 
 
 def show_toast(
@@ -159,6 +189,8 @@ def show_toast(
     text: str,
     variant: str = "success",
     duration_ms: int = 2500,
+    action_text: str = "",
+    action_callback=None,
 ) -> ToastNotification:
     """Show a toast notification on the parent widget.
 
@@ -172,16 +204,24 @@ def show_toast(
         One of 'success', 'info', 'warning', 'error'.
     duration_ms : int
         How long the toast stays visible before fading out.
+    action_text : str
+        Optional call-to-action label appended to the message. When set
+        (with action_callback), clicking the toast runs the callback
+        instead of just dismissing.
+    action_callback : callable | None
+        Invoked on click when action_text is provided.
     """
     _cleanup_dead_toasts()
 
     # Install the resize filter once per parent so toasts re-anchor to the
     # right edge when the parent window is resized after they appeared.
     if parent is not None and id(parent) not in _resize_filtered_parents:
-        parent.installEventFilter(_resize_filter)
+        parent.installEventFilter(_get_resize_filter())
         _resize_filtered_parents.add(id(parent))
 
-    toast = ToastNotification(text, parent, variant, duration_ms)
+    toast = ToastNotification(text, parent, variant, duration_ms,
+                              action_text=action_text,
+                              action_callback=action_callback)
 
     # Offset vertically so stacked toasts don't overlap
     y_offset = 16

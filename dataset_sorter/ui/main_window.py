@@ -1698,15 +1698,6 @@ class MainWindow(QMainWindow):
             "train": "train",
             "generate": "generate",
         }
-        # Check availability for stepper steps (but not More pages)
-        _stepper_nav_ids = {"dataset", "train", "generate"}
-        if nav_id in _stepper_nav_ids and not self._is_step_available(nav_id):
-            if nav_id == "train":
-                self._toast("Scan a dataset first (Step 1)", "warning")
-            elif nav_id == "generate":
-                pass  # generate is always available
-            return
-
         page = nav_to_page.get(nav_id, 0)
         self._content_stack.setCurrentIndex(page)
         self._current_nav = nav_id
@@ -1998,8 +1989,10 @@ class MainWindow(QMainWindow):
         if step_id in ("dataset", "generate"):
             return True
         if step_id == "train":
-            # Configure: requires a scanned dataset
-            return len(self.entries) > 0
+            # Always reachable: the Train tab has its own Dataset Folder
+            # picker, so users can train on a prepared folder (or just edit
+            # the config / resume a run) without scanning a dataset first.
+            return True
         if step_id == "_train3":
             # Train: requires a model to be selected
             return (
@@ -3653,7 +3646,14 @@ class MainWindow(QMainWindow):
         if self.entries:
             self.training_tab.start_training_with_data(self.entries, self.deleted_tags)
         else:
-            self.statusBar().showMessage("No dataset loaded. Scan first.")
+            self.statusBar().showMessage(
+                "No dataset loaded. Scan one (Step 1) or set a Dataset Folder "
+                "in the Train tab."
+            )
+            self._toast(
+                "No dataset — scan one (Step 1) or set a Dataset Folder above",
+                "warning",
+            )
 
     def _on_bundle_data_request(self):
         """Provide dataset to training tab for remote bundle building."""

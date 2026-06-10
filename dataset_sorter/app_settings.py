@@ -94,6 +94,11 @@ class AppSettings:
     # _MAX_PROMPT_HISTORY entries.
     prompt_history: list[str] = field(default_factory=list)
 
+    # ── LoRA stack ─────────────────────────────────────────────────────
+    # The Generate tab's adapter rows ({"path": str, "weight": float}),
+    # restored on startup so users don't re-add their LoRAs every session.
+    lora_stack: list[dict] = field(default_factory=list)
+
     # ── UI preferences ─────────────────────────────────────────────────
     ui_preferences: dict[str, Any] = field(default_factory=dict)
 
@@ -221,4 +226,11 @@ class AppSettings:
             settings.model_scan_dirs = [str(p) for p in d["model_scan_dirs"]]
         if "lora_scan_dirs" in d and isinstance(d["lora_scan_dirs"], list):
             settings.lora_scan_dirs = [str(p) for p in d["lora_scan_dirs"]]
+        if "lora_stack" in d and isinstance(d["lora_stack"], list):
+            settings.lora_stack = [
+                {"path": str(item.get("path", "")),
+                 "weight": float(item.get("weight", 1.0))}
+                for item in d["lora_stack"]
+                if isinstance(item, dict) and item.get("path")
+            ]
         return settings

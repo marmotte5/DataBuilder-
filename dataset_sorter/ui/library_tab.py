@@ -684,7 +684,7 @@ class LibraryTab(QWidget):
         self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # Empty state — large icon + headline + hint, friendlier than plain text
-        self._empty_label = QLabel(
+        self._empty_default_html = (
             "<div style='font-size: 38px; line-height: 1.0;'>📂</div>"
             "<div style='font-size: 16px; font-weight: 600; "
             f"color: {COLORS['text']}; margin-top: 14px;'>"
@@ -696,6 +696,20 @@ class LibraryTab(QWidget):
             "<br/>models, LoRAs, or embeddings."
             "</div>"
         )
+        # Shown instead while a scan is running — without it, the first
+        # load displays "No items yet" and users click Refresh repeatedly.
+        self._empty_scanning_html = (
+            "<div style='font-size: 38px; line-height: 1.0;'>🔍</div>"
+            "<div style='font-size: 16px; font-weight: 600; "
+            f"color: {COLORS['text']}; margin-top: 14px;'>"
+            "Scanning your library…"
+            "</div>"
+            "<div style='font-size: 12px; line-height: 1.5; "
+            f"color: {COLORS['text_muted']}; margin-top: 6px;'>"
+            "Looking for models, LoRAs, and embeddings in your folders."
+            "</div>"
+        )
+        self._empty_label = QLabel(self._empty_default_html)
         self._empty_label.setTextFormat(Qt.TextFormat.RichText)
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(
@@ -1028,6 +1042,12 @@ class LibraryTab(QWidget):
         self._progress_bar.setValue(0)
         self._progress_bar.setVisible(True)
 
+        # While scanning an empty view, the empty state must not claim the
+        # library is empty (first load looked broken, users re-clicked Refresh).
+        if not self._items:
+            self._empty_label.setText(self._empty_scanning_html)
+            self._empty_label.setVisible(True)
+
         self._worker = LibraryScanWorker(folders, self._current_category, self)
         self._worker.finished.connect(self._on_scan_finished)
         self._worker.progress.connect(self._on_scan_progress)
@@ -1117,6 +1137,7 @@ class LibraryTab(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
+        self._empty_label.setText(self._empty_default_html)
         self._empty_label.setVisible(len(items) == 0)
 
         for idx, item in enumerate(items):
