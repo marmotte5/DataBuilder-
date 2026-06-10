@@ -130,7 +130,13 @@ class EMAModel:
             )
         for i in range(min(len(saved), len(self.shadow_params))):
             if saved[i].shape == self.shadow_params[i].shape:
-                self.shadow_params[i] = saved[i].clone().float()
+                # Checkpoints are loaded with map_location="cpu" — restore to
+                # the device the constructor chose (GPU unless cpu_offload),
+                # otherwise the first update() after resume crashes with a
+                # CPU/CUDA mismatch in lerp_().
+                self.shadow_params[i] = (
+                    saved[i].clone().float().to(self.shadow_params[i].device)
+                )
             else:
                 log.warning(
                     f"EMA param {i}: shape mismatch {saved[i].shape} vs "
