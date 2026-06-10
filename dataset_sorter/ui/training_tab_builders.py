@@ -1878,6 +1878,8 @@ class TrainingTabBuildersMixin:
         - FP8 Training → torch.compile: FP8 causes graph breaks on every linear
         - Async Optimizer ↔ Fused Backward: both replace the optimizer step
         - Fused Backward + grad_accum > 1: hooks fire per microbatch, not per window
+        - Fused Backward requires AdamW/SGD (inline update math) and is
+          incompatible with fp16 (hooks would step on GradScaler-scaled grads)
 
         Three-way / conditional rules:
         - Zero-Bottleneck DataLoader requires cache_latents AND cache_text_encoder
@@ -1916,11 +1918,19 @@ class TrainingTabBuildersMixin:
             # Compile mode combo tracks torch.compile checkbox
             self.compile_mode_combo.setEnabled(not fp8 and compile_)
 
-            # Async Optimizer ↔ Fused Backward: both replace optimizer.step()
-            self.fused_backward_check.setEnabled(not async_opt)
-            self.async_opt_check.setEnabled(not fused_bwd)
-            if async_opt and fused_bwd:
+            # Fused Backward hard requirements:
+            # - not async optimizer (both replace optimizer.step())
+            # - not fp16 (hooks would step on GradScaler-scaled gradients)
+            # - AdamW or SGD only (FusedBackwardPass reimplements the update
+            #   inline and raises ValueError for other optimizer families)
+            opt = self.train_optimizer_combo.currentData() or ""
+            prec = self.precision_combo.currentData() or ""
+            fused_opt_ok = opt.lower() in ("adamw", "sgd", "")
+            fused_ok = (not async_opt) and prec != "fp16" and fused_opt_ok
+            self.fused_backward_check.setEnabled(fused_ok)
+            if not fused_ok and fused_bwd:
                 self.fused_backward_check.setChecked(False)
+            self.async_opt_check.setEnabled(not fused_bwd)
 
             # Fused Backward + grad_accum > 1: hooks fire per micro-batch
             if fused_bwd and grad_accum > 1:
@@ -1930,9 +1940,12 @@ class TrainingTabBuildersMixin:
                 )
                 self.fused_backward_check.setStyleSheet("color: orange;")
             else:
-                self.fused_backward_check.setToolTip(
-                    "Fuse optimizer step into backward pass. Massive VRAM savings with Adafactor on SDXL/Flux."
-                )
+                _fused_tip = "Fuse optimizer step into backward pass for large per-layer VRAM savings."
+                if not fused_opt_ok:
+                    _fused_tip += " (only available with AdamW / SGD)"
+                elif prec == "fp16":
+                    _fused_tip += " (incompatible with fp16 — hooks would step on scaled gradients)"
+                self.fused_backward_check.setToolTip(_fused_tip)
                 self.fused_backward_check.setStyleSheet("")
 
             # Zero-Bottleneck + Mmap require both cache_latents AND cache_text_encoder
@@ -1959,7 +1972,6 @@ class TrainingTabBuildersMixin:
 
             # Triton Fused AdamW overrides the optimizer — incompatible with
             # non-AdamW optimizers
-            opt = self.train_optimizer_combo.currentData() or ""
             adamw_family = opt.lower() in ("adamw", "adamw8bit", "")
             self.triton_adamw_check.setEnabled(adamw_family)
             if not adamw_family and self.triton_adamw_check.isChecked():
@@ -1981,6 +1993,7 @@ class TrainingTabBuildersMixin:
         self.train_te_check.stateChanged.connect(lambda _: _update())
         self.grad_accum_spin.valueChanged.connect(lambda _: _update())
         self.train_optimizer_combo.currentIndexChanged.connect(lambda _: _update())
+        self.precision_combo.currentIndexChanged.connect(lambda _: _update())
 
         _update()
 
