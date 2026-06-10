@@ -507,6 +507,7 @@ class LibraryTab(QWidget):
 
     use_in_generate = pyqtSignal(str)
     use_in_train = pyqtSignal(str)
+    use_in_merge = pyqtSignal(str)
 
     _SETTINGS_KEY_PREFIX = "library/"
     _CATEGORIES = ("models", "loras", "embeddings")
@@ -684,7 +685,7 @@ class LibraryTab(QWidget):
         self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # Empty state — large icon + headline + hint, friendlier than plain text
-        self._empty_label = QLabel(
+        self._empty_default_html = (
             "<div style='font-size: 38px; line-height: 1.0;'>📂</div>"
             "<div style='font-size: 16px; font-weight: 600; "
             f"color: {COLORS['text']}; margin-top: 14px;'>"
@@ -696,6 +697,20 @@ class LibraryTab(QWidget):
             "<br/>models, LoRAs, or embeddings."
             "</div>"
         )
+        # Shown instead while a scan is running — without it, the first
+        # load displays "No items yet" and users click Refresh repeatedly.
+        self._empty_scanning_html = (
+            "<div style='font-size: 38px; line-height: 1.0;'>🔍</div>"
+            "<div style='font-size: 16px; font-weight: 600; "
+            f"color: {COLORS['text']}; margin-top: 14px;'>"
+            "Scanning your library…"
+            "</div>"
+            "<div style='font-size: 12px; line-height: 1.5; "
+            f"color: {COLORS['text_muted']}; margin-top: 6px;'>"
+            "Looking for models, LoRAs, and embeddings in your folders."
+            "</div>"
+        )
+        self._empty_label = QLabel(self._empty_default_html)
         self._empty_label.setTextFormat(Qt.TextFormat.RichText)
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(
@@ -838,6 +853,12 @@ class LibraryTab(QWidget):
         self._btn_use_train.setToolTip("Send this model to the Training tab as base model")
         self._btn_use_train.clicked.connect(self._emit_use_train)
 
+        self._btn_use_merge = QPushButton("Use in Merge")
+        self._btn_use_merge.setMinimumHeight(36)
+        self._btn_use_merge.setStyleSheet(nav_button_style())
+        self._btn_use_merge.setToolTip("Send this model to the Merge tab as Model A")
+        self._btn_use_merge.clicked.connect(self._emit_use_merge)
+
         self._btn_export_gguf = QPushButton("Export GGUF")
         self._btn_export_gguf.setMinimumHeight(36)
         self._btn_export_gguf.setStyleSheet(nav_button_style())
@@ -857,7 +878,7 @@ class LibraryTab(QWidget):
 
         for btn in (self._btn_copy_path, self._btn_open_folder,
                      self._btn_use_generate, self._btn_use_train,
-                     self._btn_export_gguf):
+                     self._btn_use_merge, self._btn_export_gguf):
             btn.setEnabled(False)
             btn_row.addWidget(btn)
 
@@ -1028,6 +1049,12 @@ class LibraryTab(QWidget):
         self._progress_bar.setValue(0)
         self._progress_bar.setVisible(True)
 
+        # While scanning an empty view, the empty state must not claim the
+        # library is empty (first load looked broken, users re-clicked Refresh).
+        if not self._items:
+            self._empty_label.setText(self._empty_scanning_html)
+            self._empty_label.setVisible(True)
+
         self._worker = LibraryScanWorker(folders, self._current_category, self)
         self._worker.finished.connect(self._on_scan_finished)
         self._worker.progress.connect(self._on_scan_progress)
@@ -1117,6 +1144,7 @@ class LibraryTab(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
+        self._empty_label.setText(self._empty_default_html)
         self._empty_label.setVisible(len(items) == 0)
 
         for idx, item in enumerate(items):
@@ -1151,7 +1179,8 @@ class LibraryTab(QWidget):
 
         for btn in (self._btn_copy_path, self._btn_open_folder,
                      self._btn_use_generate, self._btn_use_train,
-                     self._btn_export_gguf, self._btn_delete):
+                     self._btn_use_merge, self._btn_export_gguf,
+                     self._btn_delete):
             btn.setEnabled(has_selection)
         # GGUF export only makes sense for single-file safetensors checkpoints
         # — diffusers directories would need a different path (multi-file).
@@ -1242,6 +1271,12 @@ class LibraryTab(QWidget):
         if self._selected_item is not None:
             self.use_in_train.emit(self._selected_item.path)
             log.info("Sent to train: %s", self._selected_item.path)
+
+    def _emit_use_merge(self):
+        """Emit the selected item's path for the Merge tab (Model A slot)."""
+        if self._selected_item is not None:
+            self.use_in_merge.emit(self._selected_item.path)
+            log.info("Sent to merge: %s", self._selected_item.path)
 
     def _export_gguf(self):
         """Open the GGUF export dialog for the selected single-file safetensors model.
@@ -1539,6 +1574,7 @@ class LibraryTab(QWidget):
         self._btn_open_folder.setStyleSheet(nav_button_style())
         self._btn_use_generate.setStyleSheet(accent_button_style())
         self._btn_use_train.setStyleSheet(accent_button_style())
+        self._btn_use_merge.setStyleSheet(nav_button_style())
         self._btn_export_gguf.setStyleSheet(nav_button_style())
         self._btn_delete.setStyleSheet(danger_button_style())
         # Toolbar widgets

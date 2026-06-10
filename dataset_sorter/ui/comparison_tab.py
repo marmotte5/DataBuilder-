@@ -123,7 +123,11 @@ class _SideConfig(QGroupBox):
         self.seed_spin.setRange(-2, 2147483647)
         self.seed_spin.setValue(-2)
         self.seed_spin.setSpecialValueText("Shared")
-        self.seed_spin.setToolTip("-2 = use shared seed, -1 = random")
+        self.seed_spin.setToolTip(
+            "-2 = use shared seed, -1 = random.\n"
+            "A fixed value is a STARTING seed: pair i uses seed+i so each\n"
+            "A/B pair gets a different image while staying reproducible."
+        )
         layout.addWidget(self.seed_spin, 1, 1)
 
         # Negative prompt override
@@ -264,6 +268,9 @@ class ComparisonTab(QWidget):
     def set_generate_worker(self, worker):
         """Called by MainWindow to provide the GenerateWorker reference."""
         self._generate_worker = worker
+        # Clear the "no model" hint once a model is actually available.
+        if worker is not None and getattr(worker, "is_loaded", False):
+            self._status.setText("Model ready — configure A/B and click Compare.")
 
     # ── UI Construction ──────────────────────────────────────────────
 
@@ -491,7 +498,12 @@ class ComparisonTab(QWidget):
     def _run_comparison(self):
         gw = self._generate_worker
         if gw is None or not gw.is_loaded:
-            show_toast(self, "Load a model in the Generate tab first", "warning")
+            show_toast(
+                self, "Load a model in the Generate tab first", "warning",
+                duration_ms=5000, action_text="Go to Generate",
+                action_callback=lambda: getattr(
+                    self.window(), "_switch_nav", lambda _x: None)("generate"),
+            )
             return
 
         self._results_a.clear()

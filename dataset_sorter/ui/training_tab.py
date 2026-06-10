@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QFileDialog, QGroupBox, QTabWidget,
     QProgressBar, QSplitter, QMessageBox, QTextEdit, QLineEdit,
-    QFrame, QCompleter,
+    QFrame, QCompleter, QSpinBox, QDoubleSpinBox,
 )
 from PyQt6.QtCore import QStringListModel
 
@@ -476,16 +476,43 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         )
         paths_grid.addWidget(self.output_name_input, 2, 1, 1, 2)
 
+        # Dataset folder row — train directly on a prepared folder without
+        # going through the Dataset step. Empty = use the scanned dataset.
+        paths_grid.addWidget(self._muted("Dataset Folder"), 3, 0)
+        self.dataset_dir_input = QLineEdit()
+        self.dataset_dir_input.setPlaceholderText(
+            "(optional) folder of images + .txt captions — overrides the scanned dataset"
+        )
+        self.dataset_dir_input.setToolTip(
+            "Train directly on a prepared folder (images with matching .txt caption\n"
+            "files, subfolders included). Leave empty to use the dataset scanned in\n"
+            "the Dataset step."
+        )
+        paths_grid.addWidget(self.dataset_dir_input, 3, 1)
+        _ds_btn_widget = QWidget()
+        _ds_btn_layout = QHBoxLayout(_ds_btn_widget)
+        _ds_btn_layout.setContentsMargins(0, 0, 0, 0)
+        _ds_btn_layout.setSpacing(4)
+        btn_ds_browse = QPushButton("Browse")
+        btn_ds_browse.setToolTip("Browse for a dataset folder (images + .txt captions)")
+        btn_ds_browse.clicked.connect(self._browse_dataset_folder)
+        _ds_btn_layout.addWidget(btn_ds_browse)
+        btn_ds_clear = QPushButton("Clear")
+        btn_ds_clear.setToolTip("Clear — use the dataset scanned in the Dataset step instead")
+        btn_ds_clear.clicked.connect(self.dataset_dir_input.clear)
+        _ds_btn_layout.addWidget(btn_ds_clear)
+        paths_grid.addWidget(_ds_btn_widget, 3, 2)
+
         # Resume from checkpoint row
         self._resume_lbl = self._muted("Resume From")
-        paths_grid.addWidget(self._resume_lbl, 3, 0)
+        paths_grid.addWidget(self._resume_lbl, 4, 0)
         self.resume_from_input = QLineEdit()
         self.resume_from_input.setPlaceholderText("(auto-detected) checkpoint directory to resume from...")
         self.resume_from_input.setToolTip(
             "Path to a checkpoint directory to resume training from. "
             "Auto-filled when a resumable checkpoint is found in the output directory."
         )
-        paths_grid.addWidget(self.resume_from_input, 3, 1)
+        paths_grid.addWidget(self.resume_from_input, 4, 1)
         _resume_btn_row_widget = QWidget()
         _resume_btn_row_layout = QHBoxLayout(_resume_btn_row_widget)
         _resume_btn_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -498,7 +525,7 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         btn_resume_clear.setToolTip("Clear the resume-from path (start fresh)")
         btn_resume_clear.clicked.connect(self.resume_from_input.clear)
         _resume_btn_row_layout.addWidget(btn_resume_clear)
-        paths_grid.addWidget(_resume_btn_row_widget, 3, 2)
+        paths_grid.addWidget(_resume_btn_row_widget, 4, 2)
 
         # Auto-detect resume checkpoint when output dir changes
         self.output_dir_input.textChanged.connect(self._auto_detect_resume_checkpoint)
@@ -566,6 +593,75 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         main_layout.addLayout(preset_row)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
 
+        # ── Essentials bar — everything a basic run needs, always visible.
+        # In Simple mode this bar + the paths grid + presets ARE the whole
+        # config; the tab block below is hidden entirely.
+        # These are THE widgets (not copies): builders/config IO reference
+        # the same attribute names as before.
+        from dataset_sorter.constants import (
+            MODEL_TYPE_KEYS, MODEL_TYPE_LABELS, VRAM_TIERS,
+        )
+        essentials_row = QHBoxLayout()
+        essentials_row.setSpacing(8)
+        _ess_lbl = QLabel("Essentials:")
+        _ess_lbl.setStyleSheet(MUTED_LABEL_STYLE)
+        essentials_row.addWidget(_ess_lbl)
+
+        self.train_model_combo = QComboBox()
+        # Store the model-type KEY as item data — currentData() is used by
+        # the trust_remote_code security check and the LoRA/full dispatch.
+        for _key, _label in zip(MODEL_TYPE_KEYS, MODEL_TYPE_LABELS):
+            self.train_model_combo.addItem(_label, _key)
+        self.train_model_combo.setCurrentIndex(2)
+        self.train_model_combo.setToolTip(
+            "Base model architecture and training mode (LoRA or full fine-tune)"
+        )
+        essentials_row.addWidget(self.train_model_combo, 2)
+
+        essentials_row.addWidget(QLabel("VRAM"))
+        self.train_vram_combo = QComboBox()
+        self.train_vram_combo.addItems([f"{v} GB" for v in VRAM_TIERS])
+        self.train_vram_combo.setCurrentIndex(3)
+        self.train_vram_combo.setToolTip(
+            "GPU VRAM in GB. Used to optimize batch size and memory settings."
+        )
+        essentials_row.addWidget(self.train_vram_combo)
+
+        essentials_row.addWidget(QLabel("Epochs"))
+        self.epochs_spin = QSpinBox()
+        self.epochs_spin.setRange(1, 1000)
+        self.epochs_spin.setValue(10)
+        self.epochs_spin.setToolTip(
+            "Number of full passes through the dataset. 10-30 for LoRA, "
+            "3-10 for full finetune."
+        )
+        essentials_row.addWidget(self.epochs_spin)
+
+        essentials_row.addWidget(QLabel("Batch Size"))
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(1, 64)
+        self.batch_spin.setValue(2)
+        self.batch_spin.setToolTip(
+            "Images per GPU per step. Higher = faster but uses more VRAM. "
+            "1-4 for LoRA."
+        )
+        essentials_row.addWidget(self.batch_spin)
+
+        essentials_row.addWidget(QLabel("Learning Rate"))
+        self.lr_spin = QDoubleSpinBox()
+        self.lr_spin.setRange(1e-8, 10.0)
+        self.lr_spin.setDecimals(8)
+        self.lr_spin.setValue(1e-4)
+        self.lr_spin.setSingleStep(1e-5)
+        self.lr_spin.setToolTip(
+            "UNet/LoRA learning rate. 1e-4 for LoRA, 1e-6 for full finetune. "
+            "Use 1.0 for Prodigy."
+        )
+        essentials_row.addWidget(self.lr_spin)
+
+        essentials_row.addStretch()
+        main_layout.addLayout(essentials_row)
+
         # Splitter: config (left) | logs+samples (right)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         # Forbid drag-to-zero (clips content silently), bump the handle
@@ -620,7 +716,30 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         config_tabs.setTabToolTip(3, "ControlNet, DPO, and RLHF configuration")
 
         self._config_tabs = config_tabs  # stored for Simple/Advanced mode toggling
-        splitter.addWidget(config_tabs)
+
+        # Left pane container: in Simple mode the whole tab block is hidden
+        # and replaced by a short hint — the paths grid, Essentials bar and
+        # presets above are the entire configuration surface.
+        left_pane = QWidget()
+        left_pane_layout = QVBoxLayout(left_pane)
+        left_pane_layout.setContentsMargins(0, 0, 0, 0)
+        left_pane_layout.setSpacing(6)
+        self._simple_hint = QLabel(
+            "Simple mode — the fields above (model, dataset, essentials, "
+            "preset) are all you need.\nSane defaults handle the rest. "
+            "Switch to Advanced (top right) for full control."
+        )
+        self._simple_hint.setWordWrap(True)
+        self._simple_hint.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            f"background: {COLORS['surface']}; border: 1px dashed {COLORS['border']}; "
+            f"border-radius: 8px; padding: 16px;"
+        )
+        self._simple_hint.setVisible(False)
+        left_pane_layout.addWidget(self._simple_hint)
+        left_pane_layout.addWidget(config_tabs, 1)
+        left_pane_layout.addStretch(0)
+        splitter.addWidget(left_pane)
 
         # Right: Training output
         right_widget = QWidget()
@@ -1088,17 +1207,18 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         show_toast(self, f"Preset applied: {TRAINING_PRESETS[key]['label']}", "success")
 
     def set_simple_mode(self, simple: bool):
-        """Show/hide Advanced and Extensions config tabs based on Simple/Advanced mode."""
+        """Toggle the single-section Simple mode.
+
+        Simple: the whole config-tab block is hidden — the always-visible
+        paths grid, Essentials bar (model type, VRAM, epochs, batch, LR)
+        and presets are the entire configuration surface; everything else
+        uses defaults. Advanced: all four tab groups are shown.
+        """
         if not hasattr(self, '_config_tabs'):
             return
-        tabs = self._config_tabs
-        # Tab indices: 0=Core, 1=Dataset, 2=Advanced, 3=Extensions
-        for idx in (2, 3):
-            if idx < tabs.count():
-                tabs.setTabVisible(idx, not simple)
-        # In Simple mode, ensure we're on a visible tab
-        if simple and tabs.currentIndex() >= 2:
-            tabs.setCurrentIndex(0)
+        self._config_tabs.setVisible(not simple)
+        if hasattr(self, '_simple_hint'):
+            self._simple_hint.setVisible(simple)
 
     def _group(self, title: str) -> QGroupBox:
         """Create a QGroupBox with the given title for use in config sections.
@@ -1178,6 +1298,61 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if path:
             self.output_dir_input.setText(path)
+
+    def _browse_dataset_folder(self):
+        """Open a directory picker for the direct-training dataset folder."""
+        path = QFileDialog.getExistingDirectory(self, "Select Dataset Folder")
+        if path:
+            self.dataset_dir_input.setText(path)
+
+    def _scan_dataset_folder(self, folder: str) -> "list[ImageEntry] | None":
+        """Build ImageEntry list from a prepared folder (images + .txt captions).
+
+        Returns None (after logging + toast) when the folder is invalid or
+        contains no captioned images. Subfolders are included, matching the
+        kohya-style layout produced by Export Project.
+        """
+        from dataset_sorter.constants import IMAGE_EXTENSIONS
+
+        root = Path(folder)
+        if not root.is_dir():
+            self._log(f"ERROR: Dataset folder does not exist: {folder}")
+            show_toast(self, "Dataset folder does not exist", "error")
+            return None
+
+        entries: list[ImageEntry] = []
+        skipped_no_caption = 0
+        for img in sorted(root.rglob("*")):
+            if not img.is_file() or img.suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+            txt = img.with_suffix(".txt")
+            if not txt.exists():
+                skipped_no_caption += 1
+                continue
+            try:
+                raw = txt.read_text(encoding="utf-8")
+            except OSError as exc:
+                log.warning("Could not read caption %s: %s", txt, exc)
+                continue
+            tags = [t.strip() for t in raw.split(",") if t.strip()]
+            entries.append(ImageEntry(image_path=img, txt_path=txt, tags=tags))
+
+        if not entries:
+            self._log(
+                f"ERROR: No captioned images found in {folder} "
+                f"({skipped_no_caption} image(s) without a matching .txt)."
+            )
+            show_toast(self, "No images with .txt captions in this folder", "error")
+            return None
+
+        if skipped_no_caption:
+            self._log(
+                f"Dataset folder: {len(entries)} captioned images "
+                f"({skipped_no_caption} skipped — no .txt caption)."
+            )
+        else:
+            self._log(f"Dataset folder: {len(entries)} captioned images.")
+        return entries
 
     def _browse_resume_checkpoint(self):
         """Open a directory picker to select a specific checkpoint to resume from."""
@@ -1419,9 +1594,11 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
 
         if not model_path:
             self._log("ERROR: No base model path specified.")
+            show_toast(self, "Set a base model path first", "error")
             return
         if not output_dir:
             self._log("ERROR: No output directory specified.")
+            show_toast(self, "Set an output directory first", "error")
             return
 
         # Push to recent_models list — the same one the Generate tab
@@ -1446,6 +1623,16 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             if not confirm_trust_remote_code(self, arch, model_path):
                 self._log("Training cancelled — trust required for this architecture.")
                 return
+
+        # Direct folder training: when a dataset folder is set, scan it here
+        # and skip the main-window dataset entirely.
+        dataset_dir = self.dataset_dir_input.text().strip()
+        if dataset_dir:
+            entries = self._scan_dataset_folder(dataset_dir)
+            if entries is None:
+                return
+            self.start_training_with_data(entries, set())
+            return
 
         # Request dataset from main window
         self.request_training_data.emit()
@@ -1486,7 +1673,10 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
     def start_training_with_data(self, entries: list[ImageEntry], deleted_tags: set[str]):
         """Called by main window with dataset entries."""
         if not entries:
-            self._log("ERROR: No dataset loaded. Scan a dataset first.")
+            self._log(
+                "ERROR: No dataset loaded. Scan a dataset (Step 1) or set "
+                "a Dataset Folder above."
+            )
             return
 
         model_path = self.model_path_input.text().strip()
@@ -2156,7 +2346,18 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
         self._log(f"Training {'completed' if success else 'failed'}: {message}")
         self._log(f"{'=' * 40}")
         if success:
-            show_toast(self, "Training completed", "success", 4000)
+            # "I just trained → test it" journey: offer a one-click jump to
+            # the Generate tab with the fresh artifact pre-filled.
+            final_artifact = self._find_final_artifact()
+            if final_artifact is not None:
+                self._log(f"Final model: {final_artifact}")
+                show_toast(
+                    self, "Training completed", "success", 8000,
+                    action_text="Test in Generate",
+                    action_callback=lambda p=final_artifact: self._send_to_generate(p),
+                )
+            else:
+                show_toast(self, "Training completed", "success", 4000)
             # Clean up interrupted-session file on success
             output_dir = self.output_dir_input.text().strip()
             if output_dir:
@@ -2179,6 +2380,48 @@ class TrainingTab(TrainingTabBuildersMixin, TrainingConfigIOMixin, QWidget):
             log.debug("VRAM stats unavailable: %s", e)
         self._disconnect_training_worker()
         self._training_worker = None
+
+    def _find_final_artifact(self) -> "Path | None":
+        """Locate the freshly trained model under <output_dir>/models/<name>.
+
+        For LoRA runs, prefer the adapter .safetensors inside the folder
+        (what the Generate tab's LoRA rows expect); otherwise return the
+        folder itself. Returns None when nothing was produced.
+        """
+        output_dir = self.output_dir_input.text().strip()
+        if not output_dir:
+            return None
+        name = self.output_name_input.text().strip() or "final"
+        final_dir = Path(output_dir) / "models" / name
+        if not final_dir.exists():
+            return None
+        adapter = final_dir / "adapter_model.safetensors"
+        if adapter.exists():
+            return adapter
+        return final_dir
+
+    def _send_to_generate(self, artifact: Path):
+        """Pre-fill the Generate tab with the trained artifact and switch to it.
+
+        LoRA runs land in the LoRA stack (base model still chosen by the
+        user); full finetunes land in the base-model path field.
+        """
+        win = self.window()
+        gen = getattr(win, "generate_tab", None)
+        if gen is None:
+            return
+        model_type = self.train_model_combo.currentData() or ""
+        if model_type.endswith("_lora") and hasattr(gen, "_add_lora_row"):
+            gen._add_lora_row(str(artifact), 1.0)
+            gen._schedule_lora_stack_save()
+            msg = "LoRA added to the stack — load a base model and generate"
+        else:
+            gen.model_path_edit.setText(str(artifact))
+            msg = "Model path set — click Load Model"
+        switch = getattr(win, "_switch_nav", None)
+        if callable(switch):
+            switch("generate")
+        show_toast(gen, msg, "success", 5000)
 
     def _disconnect_training_worker(self):
         """Disconnect all signals from the training worker to prevent stale callbacks."""

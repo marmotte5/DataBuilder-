@@ -415,7 +415,10 @@ class BatchGenerationTab(QWidget):
         bottom_layout.addLayout(progress_row)
 
         # Status
-        self._status_label = QLabel("Add prompts to the queue, then click Run Batch.")
+        self._status_label = QLabel(
+            "⚠ No model loaded — load one in the Generate tab (Ctrl+3), "
+            "then add prompts and click Run Batch."
+        )
         self._status_label.setStyleSheet(MUTED_LABEL_STYLE)
         self._status_label.setWordWrap(True)
         bottom_layout.addWidget(self._status_label)
@@ -672,6 +675,11 @@ class BatchGenerationTab(QWidget):
     def set_generate_worker(self, worker):
         """Called by MainWindow to provide the GenerateWorker reference."""
         self._generate_worker = worker
+        # Clear the "no model" hint once a model is actually available.
+        if worker is not None and getattr(worker, "is_loaded", False):
+            self._status_label.setText(
+                "Model ready — add prompts to the queue, then click Run Batch."
+            )
 
     def _run_batch(self):
         self._sync_queue_from_table()
@@ -680,7 +688,12 @@ class BatchGenerationTab(QWidget):
             return
 
         if self._generate_worker is None or not self._generate_worker.is_loaded:
-            show_toast(self, "Load a model in the Generate tab first", "warning")
+            show_toast(
+                self, "Load a model in the Generate tab first", "warning",
+                duration_ms=5000, action_text="Go to Generate",
+                action_callback=lambda: getattr(
+                    self.window(), "_switch_nav", lambda _x: None)("generate"),
+            )
             return
 
         # Clean up any previous worker before creating a new one
