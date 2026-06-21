@@ -174,6 +174,85 @@ class TestTinyVAE:
         assert pipe.vae == "ORIGINAL_VAE"
 
 
+# ── Text-encoder offload (makes SDXL fit on 8 GB) ────────────────────────────
+
+class _FakeTE:
+    def __init__(self, device="gpu"):
+        self._device = device
+        self.to_calls = []
+
+    def to(self, device):
+        self._device = device
+        self.to_calls.append(str(device))
+        return self
+
+    def parameters(self):
+        yield type("P", (), {"device": self._device})()
+
+
+class _FakePromptPipe:
+    def __init__(self):
+        self.text_encoder = _FakeTE()
+        self.text_encoder_2 = _FakeTE()
+        self.calls = 0
+
+    def encode_prompt(self, prompt, **k):
+        self.calls += 1
+        return ("pe", "ne", "pooled", "neg_pooled")  # SDXL-shape
+
+
+class TestTextEncoderOffload:
+    def _engine(self, model_type, mode):
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+        eng = LeanRealtimeEngine(
+            _FakePromptPipe(), model_type, "gpu", None, StreamPrompt("neon"),
+            RealtimeParams(offload_text_encoders=mode),
+        )
+        return eng
+
+    def test_auto_active_for_sdxl_only(self):
+        sdxl = self._engine("sdxl", "auto")
+        sd15 = self._engine("sd15", "auto")
+        assert sdxl._te_offload_active(sdxl.src_pipe) is True
+        assert sd15._te_offload_active(sd15.src_pipe) is False
+
+    def test_off_disables_even_for_sdxl(self):
+        eng = self._engine("sdxl", "off")
+        assert eng._te_offload_active(eng.src_pipe) is False
+
+    def test_skips_when_cpu_offload_hooks_present(self):
+        eng = self._engine("sdxl", "on")
+        eng.src_pipe.text_encoder._hf_hook = object()  # simulate model_cpu_offload
+        assert eng._te_offload_active(eng.src_pipe) is False
+
+    def test_encode_offloads_then_teardown_restores(self):
+        eng = self._engine("sdxl", "on")
+        eng._pipe = eng.src_pipe
+        te = eng.src_pipe.text_encoder
+
+        enc = eng._encode_managed(eng.src_pipe)
+        assert enc.prompt_embeds == "pe"
+        # After a real encode the TE was pulled to gpu then pushed to cpu.
+        assert te.to_calls[-1] == "cpu"
+        assert eng._te_offloaded is True
+
+        eng.teardown()
+        assert te.to_calls[-1] == "gpu"   # original device restored
+        assert eng._te_offloaded is False
+
+    def test_cached_prompt_does_not_move_encoders(self):
+        eng = self._engine("sdxl", "on")
+        eng._pipe = eng.src_pipe
+        eng._encode_managed(eng.src_pipe)          # first: encodes + offloads
+        eng.src_pipe.text_encoder.to_calls.clear()
+        eng._encode_managed(eng.src_pipe)          # cached: no TE movement
+        assert eng.src_pipe.text_encoder.to_calls == []
+        assert eng.src_pipe.calls == 1             # encode_prompt fired once
+
+
 # ── Worker: configuration + similarity filter (no Qt loop needed) ────────────
 
 class TestRealtimeWorkerLogic:

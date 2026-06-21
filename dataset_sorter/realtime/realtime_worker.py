@@ -113,6 +113,12 @@ class RealtimeWorker(QThread):
         self.started_stream.emit()
         self.status.emit("Streaming…")
         self._loop()
+        # Restore any offloaded text encoders so the Generate tab still works.
+        try:
+            if self._engine is not None and hasattr(self._engine, "teardown"):
+                self._engine.teardown()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Engine teardown failed: %s", exc)
         self._release_camera()
         self.stopped_stream.emit()
 

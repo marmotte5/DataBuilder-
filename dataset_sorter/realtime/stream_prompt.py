@@ -77,6 +77,20 @@ class StreamPrompt:
 
     # ── encoding (worker thread) ─────────────────────────────────────────
 
+    def signature(self, do_cfg: bool) -> tuple:
+        """Cache key for the current prompt — lets a caller cheaply tell whether
+        the next :meth:`encode` would actually recompute (e.g. to decide whether
+        to bring offloaded text encoders back to the GPU first)."""
+        with self._lock:
+            return (self._positive, self._negative, self._clip_skip, bool(do_cfg))
+
+    def is_cached(self, do_cfg: bool) -> bool:
+        """True if :meth:`encode` would return the cache (no text-encoder pass)."""
+        with self._lock:
+            return self._cache is not None and self._cache_key == (
+                self._positive, self._negative, self._clip_skip, bool(do_cfg)
+            )
+
     def encode(self, pipe, device, dtype, *, do_cfg: bool) -> EncodedPrompt:
         """Return embeddings for the current prompt, encoding only on change.
 

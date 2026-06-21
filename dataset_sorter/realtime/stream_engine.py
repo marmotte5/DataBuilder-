@@ -68,6 +68,11 @@ class RealtimeParams:
     compile_unet: bool = False      # torch.compile the UNet (one-time cost, +20-30%)
     tiny_vae: bool = True           # swap in TAESD — near-free VAE, big real-time win
     channels_last: bool = True      # channels_last UNet/VAE memory layout (~10-20%)
+    # Offload the text encoders to CPU between prompt changes. They aren't
+    # needed per-frame (embeddings are cached), so this frees ~2 GB — the
+    # difference between SDXL fitting or OOMing on an 8 GB card. "auto" enables
+    # it only for SDXL/Pony, where it matters. Restored on stop.
+    offload_text_encoders: str = "auto"   # "auto" | "on" | "off"
 
 
 def build_engine(
@@ -99,6 +104,9 @@ def build_engine(
 class _BaseEngine:
     """Shared setup: LCM scheduler swap + prompt handle."""
 
+    # Text-encoder attribute names across architectures (SDXL has two).
+    _TE_ATTRS = ("text_encoder", "text_encoder_2", "text_encoder_3")
+
     def __init__(self, pipe, model_type, device, dtype, prompt, params):
         self.src_pipe = pipe
         self.model_type = model_type
@@ -107,6 +115,78 @@ class _BaseEngine:
         self.prompt = prompt
         self.params = params
         self._do_cfg = params.guidance_scale > 1.0
+        self._te_orig_devices: dict = {}     # for restore-on-stop
+        self._te_offloaded = False
+
+    # ── text-encoder offload (frees ~2 GB on SDXL/8 GB) ──────────────────
+
+    def _te_offload_active(self, pipe) -> bool:
+        """Whether to manage text-encoder placement for this run."""
+        mode = getattr(self.params, "offload_text_encoders", "auto")
+        if mode == "off":
+            return False
+        if mode == "auto" and self.model_type not in ("sdxl", "pony"):
+            return False
+        # Don't fight diffusers' own model_cpu_offload hooks if they're active.
+        for name in self._TE_ATTRS:
+            te = getattr(pipe, name, None)
+            if te is not None and hasattr(te, "_hf_hook"):
+                log.info("Text-encoder offload skipped: pipeline cpu_offload is active.")
+                return False
+        return True
+
+    def _set_te_device(self, pipe, device) -> None:
+        for name in self._TE_ATTRS:
+            te = getattr(pipe, name, None)
+            if te is not None and hasattr(te, "to"):
+                te.to(device)
+
+    def _encode_managed(self, pipe):
+        """Encode the prompt, bringing text encoders on-GPU only when a real
+        (re)encode is needed, then offloading them again."""
+        if not self._te_offload_active(pipe):
+            return self.prompt.encode(pipe, self.device, self.dtype, do_cfg=self._do_cfg)
+
+        if self.prompt.is_cached(self._do_cfg):
+            return self.prompt.encode(pipe, self.device, self.dtype, do_cfg=self._do_cfg)
+
+        # Stale → record original placement once, run the encode on-device,
+        # then push the encoders back to CPU.
+        if not self._te_orig_devices:
+            import torch
+            for name in self._TE_ATTRS:
+                te = getattr(pipe, name, None)
+                if te is not None:
+                    try:
+                        self._te_orig_devices[name] = next(te.parameters()).device
+                    except StopIteration:
+                        pass
+        self._set_te_device(pipe, self.device)
+        enc = self.prompt.encode(pipe, self.device, self.dtype, do_cfg=self._do_cfg)
+        self._set_te_device(pipe, "cpu")
+        self._te_offloaded = True
+        try:
+            import torch
+            if self.device is not None and str(self.device).startswith("cuda"):
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        return enc
+
+    def teardown(self) -> None:
+        """Restore text encoders to their original device so the Generate tab
+        keeps working after a live session. Safe to call multiple times."""
+        if not self._te_offloaded:
+            return
+        pipe = getattr(self, "_pipe", None) or self.src_pipe
+        for name, dev in self._te_orig_devices.items():
+            te = getattr(pipe, name, None)
+            if te is not None and hasattr(te, "to"):
+                try:
+                    te.to(dev)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Could not restore %s to %s: %s", name, dev, exc)
+        self._te_offloaded = False
 
     def _maybe_swap_to_lcm(self, pipe) -> None:
         """Swap in LCMScheduler when requested (few-step denoising needs it)."""
@@ -224,7 +304,7 @@ class LeanRealtimeEngine(_BaseEngine):
         import torch
 
         p = self.params
-        enc = self.prompt.encode(self._pipe, self.device, self.dtype, do_cfg=self._do_cfg)
+        enc = self._encode_managed(self._pipe)
         frame = frame.convert("RGB").resize((p.width, p.height))
 
         gen = None
@@ -267,6 +347,9 @@ class StreamBatchEngine(_BaseEngine):
 
     def __init__(self, pipe, model_type, device, dtype, prompt, params):
         super().__init__(pipe, model_type, device, dtype, prompt, params)
+        # Stream Batch runs a single UNet forward (no CFG branch), so the
+        # prompt is always encoded without negatives.
+        self._do_cfg = False
         self._pipe = pipe
         self._timesteps = None       # the img2img sub-schedule (tensor)
         self._buffer = None          # queued latents at successive noise levels
@@ -340,7 +423,7 @@ class StreamBatchEngine(_BaseEngine):
 
         z0 = self._encode_frame(frame)                        # (1,C,H,W)
         k = len(self._timesteps)
-        enc = self.prompt.encode(self._pipe, self.device, self.dtype, do_cfg=False)
+        enc = self._encode_managed(self._pipe)
 
         # Noise the fresh frame to the first (noisiest) queued timestep.
         noise0 = torch.randn_like(z0)
