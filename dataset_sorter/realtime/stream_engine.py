@@ -40,6 +40,19 @@ _IMG2IMG_PIPELINE = {
 # Stream Batch is validated-by-design only for the SD1.5/SD2 UNet shape.
 _STREAM_BATCH_OK = {"sd15", "sd2"}
 
+# Tiny AutoEncoder (TAESD) repos — a ~10 MB VAE that encodes/decodes almost
+# for free, which is the single biggest per-frame win for real-time (the full
+# VAE is a large slice of few-step latency). This is what StreamDiffusion uses.
+_TINY_VAE_REPO = {
+    "sd15": "madebyollin/taesd",
+    "sd2": "madebyollin/taesd",
+    "sdxl": "madebyollin/taesdxl",
+    "pony": "madebyollin/taesdxl",
+}
+# Cache loaded tiny VAEs by (repo, dtype-str) so pressing Start repeatedly
+# doesn't re-download / re-instantiate them.
+_tiny_vae_cache: dict = {}
+
 
 @dataclass
 class RealtimeParams:
@@ -53,6 +66,8 @@ class RealtimeParams:
     seed: int = -1                  # -1 = fresh noise each frame (temporal jitter)
     use_lcm_scheduler: bool = True  # force LCMScheduler for few-step denoising
     compile_unet: bool = False      # torch.compile the UNet (one-time cost, +20-30%)
+    tiny_vae: bool = True           # swap in TAESD — near-free VAE, big real-time win
+    channels_last: bool = True      # channels_last UNet/VAE memory layout (~10-20%)
 
 
 def build_engine(
@@ -103,6 +118,48 @@ class _BaseEngine:
                 pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not set LCMScheduler (keeping current): %s", exc)
+
+    def _maybe_use_tiny_vae(self, pipe) -> None:
+        """Swap the pipeline's VAE for TAESD — the key real-time speedup.
+
+        TAESD is a tiny distilled autoencoder: its encode+decode cost is
+        negligible next to the full VAE, which otherwise dominates few-step
+        latency. Cached across Start presses. Any failure (offline, unknown
+        architecture) silently keeps the full VAE so the filter still runs.
+        """
+        if not getattr(self.params, "tiny_vae", True):
+            return
+        repo = _TINY_VAE_REPO.get(self.model_type)
+        if repo is None:
+            return
+        try:
+            import torch
+            from diffusers import AutoencoderTiny
+
+            key = (repo, str(self.dtype))
+            tiny = _tiny_vae_cache.get(key)
+            if tiny is None:
+                tiny = AutoencoderTiny.from_pretrained(repo, torch_dtype=self.dtype)
+                tiny = tiny.to(self.device)
+                _tiny_vae_cache[key] = tiny
+            pipe.vae = tiny
+            log.info("Real-time: using TAESD tiny VAE (%s)", repo)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("TAESD tiny VAE unavailable (keeping full VAE): %s", exc)
+
+    def _maybe_channels_last(self, pipe) -> None:
+        """Put the UNet/VAE in channels_last layout (~10-20% on conv-heavy nets)."""
+        if not getattr(self.params, "channels_last", True):
+            return
+        try:
+            import torch
+
+            for name in ("unet", "vae"):
+                mod = getattr(pipe, name, None)
+                if mod is not None and hasattr(mod, "to"):
+                    mod.to(memory_format=torch.channels_last)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("channels_last not applied: %s", exc)
 
     def _maybe_compile_unet(self, pipe) -> None:
         """torch.compile the UNet for a steady-state speedup (LivePortrait-style).
@@ -157,6 +214,8 @@ class LeanRealtimeEngine(_BaseEngine):
                 log.warning("img2img pipeline build failed (%s) — using base", exc)
                 target = self.src_pipe
         self._maybe_swap_to_lcm(target)
+        self._maybe_use_tiny_vae(target)
+        self._maybe_channels_last(target)
         self._maybe_compile_unet(target)
         self._pipe = target
 
@@ -220,6 +279,8 @@ class StreamBatchEngine(_BaseEngine):
         import torch
 
         self._maybe_swap_to_lcm(self._pipe)
+        self._maybe_use_tiny_vae(self._pipe)
+        self._maybe_channels_last(self._pipe)
         self._maybe_compile_unet(self._pipe)
         sched = self._pipe.scheduler
         n = max(1, self.params.steps)
@@ -246,6 +307,14 @@ class StreamBatchEngine(_BaseEngine):
         self._c_out = (scaled * sigma_data / denom.sqrt()).view(-1, 1, 1, 1)
         self._buffer = None
 
+    def _is_tiny_vae(self) -> bool:
+        return type(self._pipe.vae).__name__ == "AutoencoderTiny"
+
+    def _vae_scale(self) -> float:
+        # TAESD operates in unit scale (scaling_factor == 1.0); the full VAE
+        # uses its configured scaling_factor.
+        return float(getattr(self._pipe.vae.config, "scaling_factor", 1.0))
+
     def _encode_frame(self, frame):
         import torch
 
@@ -253,16 +322,16 @@ class StreamBatchEngine(_BaseEngine):
         frame = frame.convert("RGB").resize((p.width, p.height))
         img = self._pipe.image_processor.preprocess(frame).to(self.device, self.dtype)
         with torch.inference_mode():
-            latent = self._pipe.vae.encode(img).latent_dist.sample()
-        return latent * self._pipe.vae.config.scaling_factor
+            enc = self._pipe.vae.encode(img)
+            # AutoencoderTiny returns .latents; the full VAE returns .latent_dist.
+            latent = enc.latents if self._is_tiny_vae() else enc.latent_dist.sample()
+        return latent * self._vae_scale()
 
     def _decode_latent(self, latent):
         import torch
 
         with torch.inference_mode():
-            img = self._pipe.vae.decode(
-                latent / self._pipe.vae.config.scaling_factor
-            ).sample
+            img = self._pipe.vae.decode(latent / self._vae_scale()).sample
         img = (img / 2 + 0.5).clamp(0, 1)
         return self._pipe.image_processor.postprocess(img, output_type="pil")[0]
 

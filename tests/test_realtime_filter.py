@@ -125,6 +125,53 @@ class TestRealtimeParams:
         assert p.steps <= 2          # few-step by default
         assert p.guidance_scale == 1.0  # no CFG → single forward
         assert p.compile_unet is False
+        # Real-time speedups on by default (the whole point of the feature).
+        assert p.tiny_vae is True
+        assert p.channels_last is True
+
+
+class TestTinyVAE:
+    def test_repo_mapping(self):
+        from dataset_sorter.realtime.stream_engine import _TINY_VAE_REPO
+        assert _TINY_VAE_REPO["sd15"] == "madebyollin/taesd"
+        assert _TINY_VAE_REPO["sd2"] == "madebyollin/taesd"
+        assert _TINY_VAE_REPO["sdxl"] == "madebyollin/taesdxl"
+        assert _TINY_VAE_REPO["pony"] == "madebyollin/taesdxl"
+
+    def test_tiny_vae_disabled_is_noop(self):
+        """tiny_vae=False must not touch the pipeline VAE."""
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakePipe:
+            vae = "ORIGINAL_VAE"
+
+        eng = LeanRealtimeEngine(
+            FakePipe(), "sd15", "cpu", None, StreamPrompt(),
+            RealtimeParams(tiny_vae=False),
+        )
+        pipe = FakePipe()
+        eng._maybe_use_tiny_vae(pipe)  # disabled → no change, no import
+        assert pipe.vae == "ORIGINAL_VAE"
+
+    def test_unknown_arch_skips_tiny_vae(self):
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakePipe:
+            vae = "ORIGINAL_VAE"
+
+        eng = LeanRealtimeEngine(
+            FakePipe(), "flux", "cpu", None, StreamPrompt(),
+            RealtimeParams(tiny_vae=True),
+        )
+        pipe = FakePipe()
+        eng._maybe_use_tiny_vae(pipe)  # no TAESD repo for flux → unchanged
+        assert pipe.vae == "ORIGINAL_VAE"
 
 
 # ── Worker: configuration + similarity filter (no Qt loop needed) ────────────
@@ -218,3 +265,9 @@ class TestLiveFilterTab:
         p = tab._current_params()
         assert abs(p.strength - 0.6) < 1e-9
         assert p.steps == 4
+
+    def test_tiny_vae_on_by_default(self, qapp):
+        from dataset_sorter.ui.live_filter_tab import LiveFilterTab
+        tab = LiveFilterTab()
+        assert tab._tiny_vae_check.isChecked() is True
+        assert tab._current_params().tiny_vae is True

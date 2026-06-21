@@ -118,9 +118,21 @@ class RealtimeWorker(QThread):
 
     def _open_camera(self) -> None:
         with self._lock:
-            idx, p = self._camera_index, self._params
-        self._camera = CameraSource(idx, p.width, p.height)
+            idx = self._camera_index
+        # Capture at the device's NATIVE resolution (pass 0,0): EOS Webcam
+        # Utility and many capture cards deliver a fixed stream and choke when
+        # asked for an arbitrary size. The engine resizes each frame to the
+        # processing resolution anyway, so forcing capture size only risks a
+        # failed open or a black frame.
+        self._camera = CameraSource(idx, 0, 0)
         self._camera.open()
+        # Warm-up: the Canon virtual cam emits a few empty/auto-exposing frames
+        # on start. Drain them so the first displayed frame isn't black.
+        for _ in range(5):
+            if self._stop.is_set():
+                break
+            self._camera.read()
+            self._stop.wait(0.03)
 
     def _build_engine(self) -> None:
         with self._lock:

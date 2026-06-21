@@ -132,12 +132,21 @@ class LiveFilterTab(QWidget):
         )
         cg.addWidget(self._ssf_spin, 3, 1)
 
+        self._tiny_vae_check = QCheckBox("Tiny VAE / TAESD (much faster — recommended)")
+        self._tiny_vae_check.setChecked(True)
+        self._tiny_vae_check.setToolTip(
+            "Swap in a ~10 MB distilled VAE for near-free encode/decode — the\n"
+            "biggest real-time speedup. Slightly softer detail than the full VAE.\n"
+            "Downloaded once from Hugging Face (madebyollin/taesd)."
+        )
+        cg.addWidget(self._tiny_vae_check, 4, 0, 1, 3)
+
         self._compile_check = QCheckBox("Compile UNet (torch.compile — +20-30% after warmup)")
         self._compile_check.setToolTip(
             "One-time compile cost (first frames slow), then steadily faster — "
             "worth it for a long live session at a fixed resolution."
         )
-        cg.addWidget(self._compile_check, 4, 0, 1, 3)
+        cg.addWidget(self._compile_check, 5, 0, 1, 3)
         root.addWidget(ctrl)
 
         # ── Prompt (the separate 'what to render' control) ──
@@ -255,6 +264,8 @@ class LiveFilterTab(QWidget):
             seed=-1,
             use_lcm_scheduler=True,
             compile_unet=self._compile_check.isChecked(),
+            tiny_vae=self._tiny_vae_check.isChecked(),
+            channels_last=True,
         )
 
     # ── run control ──────────────────────────────────────────────────────
