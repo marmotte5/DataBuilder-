@@ -5,8 +5,9 @@ capture card, etc.) and runs your loaded diffusion model on every frame with a
 live, separately-edited prompt. Reuses the pipeline already loaded in the
 Generate tab — no second model load.
 
-Honest scope on an 8 GB card: real-time means an SD1.5-class model with the
-few-step LCM engine at 512px. SDXL is too heavy for live use on 8 GB.
+Honest scope on an 8 GB card: real-time at 512px works great with SD1.5, and
+SDXL fits with Tiny VAE + TE offload. Distilled models (SSD-1B, SDXL Turbo/
+Lightning, Hyper-SD) hit the sweet spot for quality-per-fps on limited VRAM.
 """
 
 from __future__ import annotations
@@ -60,7 +61,9 @@ class LiveFilterTab(QWidget):
         self._model_hint.setText(
             "Model ready — pick a camera and press Start."
             if loaded else
-            "⚠ No model loaded — load an SD1.5 model in the Generate tab (Ctrl+3)."
+            "⚠ No model loaded — load a model in the Generate tab (Ctrl+3). "
+            "SD1.5, SDXL, SD3, or Flux all work — distilled variants "
+            "(SSD-1B, Turbo, Lightning, Hyper-SD) are ideal for 8 GB."
         )
 
     # ── UI ───────────────────────────────────────────────────────────────
@@ -78,7 +81,9 @@ class LiveFilterTab(QWidget):
         root.addWidget(title)
 
         self._model_hint = QLabel(
-            "⚠ No model loaded — load an SD1.5 model in the Generate tab (Ctrl+3)."
+            "⚠ No model loaded — load a model in the Generate tab (Ctrl+3). "
+            "SD1.5, SDXL, SD3, or Flux all work — distilled variants "
+            "(SSD-1B, Turbo, Lightning, Hyper-SD) are ideal for 8 GB."
         )
         self._model_hint.setStyleSheet(MUTED_LABEL_STYLE)
         self._model_hint.setWordWrap(True)
@@ -107,7 +112,10 @@ class LiveFilterTab(QWidget):
         for r in (384, 512, 640, 768):
             self._res_combo.addItem(f"{r}×{r}", r)
         self._res_combo.setCurrentIndex(1)  # 512
-        self._res_combo.setToolTip("Square processing size. 512 is the SD1.5 sweet spot for real-time on 8 GB.")
+        self._res_combo.setToolTip(
+            "Square processing size. 512 is ideal for SD1.5/SDXL real-time on 8 GB.\n"
+            "384 for maximum fps, 768 only on 12+ GB or SD1.5 with Tiny VAE."
+        )
         cg.addWidget(self._res_combo, 1, 1)
 
         cg.addWidget(QLabel("Engine"), 2, 0)

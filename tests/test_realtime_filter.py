@@ -112,9 +112,25 @@ class TestEngineFactory:
         # SDXL UNet conditioning isn't supported by the batch path → lean.
         assert isinstance(self._make("sdxl", True), LeanRealtimeEngine)
 
-    def test_unknown_arch_falls_back_to_lean(self):
+    def test_stream_batch_falls_back_for_flux(self):
         from dataset_sorter.realtime.stream_engine import LeanRealtimeEngine
         assert isinstance(self._make("flux", True), LeanRealtimeEngine)
+
+    def test_sd3_gets_lean_engine(self):
+        from dataset_sorter.realtime.stream_engine import LeanRealtimeEngine
+        assert isinstance(self._make("sd3", False), LeanRealtimeEngine)
+
+    def test_sd35_gets_lean_engine(self):
+        from dataset_sorter.realtime.stream_engine import LeanRealtimeEngine
+        assert isinstance(self._make("sd35", False), LeanRealtimeEngine)
+
+    def test_img2img_pipeline_mapping(self):
+        from dataset_sorter.realtime.stream_engine import _IMG2IMG_PIPELINE
+        assert "sd3" in _IMG2IMG_PIPELINE
+        assert "sd35" in _IMG2IMG_PIPELINE
+        assert "flux" in _IMG2IMG_PIPELINE
+        assert "Diffusion3" in _IMG2IMG_PIPELINE["sd3"]
+        assert "Flux" in _IMG2IMG_PIPELINE["flux"]  # class name contains Flux
 
 
 class TestRealtimeParams:
@@ -137,6 +153,11 @@ class TestTinyVAE:
         assert _TINY_VAE_REPO["sd2"] == "madebyollin/taesd"
         assert _TINY_VAE_REPO["sdxl"] == "madebyollin/taesdxl"
         assert _TINY_VAE_REPO["pony"] == "madebyollin/taesdxl"
+        assert _TINY_VAE_REPO["sd3"] == "madebyollin/taesd3"
+        assert _TINY_VAE_REPO["sd35"] == "madebyollin/taesd3"
+        assert _TINY_VAE_REPO["flux"] == "madebyollin/taef1"
+        assert _TINY_VAE_REPO["flux2"] == "madebyollin/taef2"
+        assert _TINY_VAE_REPO["sana"] == "madebyollin/taesana"
 
     def test_tiny_vae_disabled_is_noop(self):
         """tiny_vae=False must not touch the pipeline VAE."""
@@ -166,11 +187,11 @@ class TestTinyVAE:
             vae = "ORIGINAL_VAE"
 
         eng = LeanRealtimeEngine(
-            FakePipe(), "flux", "cpu", None, StreamPrompt(),
+            FakePipe(), "kolors", "cpu", None, StreamPrompt(),
             RealtimeParams(tiny_vae=True),
         )
         pipe = FakePipe()
-        eng._maybe_use_tiny_vae(pipe)  # no TAESD repo for flux → unchanged
+        eng._maybe_use_tiny_vae(pipe)  # no TAESD repo for kolors → unchanged
         assert pipe.vae == "ORIGINAL_VAE"
 
 

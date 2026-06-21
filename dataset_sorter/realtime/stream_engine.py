@@ -36,6 +36,9 @@ _IMG2IMG_PIPELINE = {
     "sd2": "StableDiffusionImg2ImgPipeline",
     "sdxl": "StableDiffusionXLImg2ImgPipeline",
     "pony": "StableDiffusionXLImg2ImgPipeline",
+    "sd3": "StableDiffusion3Img2ImgPipeline",
+    "sd35": "StableDiffusion3Img2ImgPipeline",
+    "flux": "FluxImg2ImgPipeline",
 }
 # Stream Batch is validated-by-design only for the SD1.5/SD2 UNet shape.
 _STREAM_BATCH_OK = {"sd15", "sd2"}
@@ -48,6 +51,11 @@ _TINY_VAE_REPO = {
     "sd2": "madebyollin/taesd",
     "sdxl": "madebyollin/taesdxl",
     "pony": "madebyollin/taesdxl",
+    "sd3": "madebyollin/taesd3",
+    "sd35": "madebyollin/taesd3",
+    "flux": "madebyollin/taef1",
+    "flux2": "madebyollin/taef2",
+    "sana": "madebyollin/taesana",
 }
 # Cache loaded tiny VAEs by (repo, dtype-str) so pressing Start repeatedly
 # doesn't re-download / re-instantiate them.
