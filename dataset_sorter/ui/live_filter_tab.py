@@ -6,8 +6,9 @@ live, separately-edited prompt. Reuses the pipeline already loaded in the
 Generate tab — no second model load.
 
 Honest scope on an 8 GB card: real-time at 512px works great with SD1.5, and
-SDXL fits with Tiny VAE + TE offload. Distilled models (SSD-1B, SDXL Turbo/
-Lightning, Hyper-SD) hit the sweet spot for quality-per-fps on limited VRAM.
+SDXL/SSD-1B fit with Tiny VAE + TE offload. SD3/SD3.5 run too (native
+flow-matching scheduler, no LCM). For genuine real-time the sweet spot is a
+few-step model: SSD-1B, SDXL Turbo/Lightning, or a Hyper-SD LoRA on SD1.5.
 """
 
 from __future__ import annotations
@@ -62,8 +63,8 @@ class LiveFilterTab(QWidget):
             "Model ready — pick a camera and press Start."
             if loaded else
             "⚠ No model loaded — load a model in the Generate tab (Ctrl+3). "
-            "SD1.5, SDXL, SD3, or Flux all work — distilled variants "
-            "(SSD-1B, Turbo, Lightning, Hyper-SD) are ideal for 8 GB."
+            "SD1.5, SDXL/SSD-1B, or SD3/SD3.5 work. For real-time on 8 GB use a "
+            "few-step variant (SSD-1B, SDXL Turbo/Lightning, Hyper-SD LoRA)."
         )
 
     # ── UI ───────────────────────────────────────────────────────────────
@@ -82,8 +83,8 @@ class LiveFilterTab(QWidget):
 
         self._model_hint = QLabel(
             "⚠ No model loaded — load a model in the Generate tab (Ctrl+3). "
-            "SD1.5, SDXL, SD3, or Flux all work — distilled variants "
-            "(SSD-1B, Turbo, Lightning, Hyper-SD) are ideal for 8 GB."
+            "SD1.5, SDXL/SSD-1B, or SD3/SD3.5 work. For real-time on 8 GB use a "
+            "few-step variant (SSD-1B, SDXL Turbo/Lightning, Hyper-SD LoRA)."
         )
         self._model_hint.setStyleSheet(MUTED_LABEL_STYLE)
         self._model_hint.setWordWrap(True)

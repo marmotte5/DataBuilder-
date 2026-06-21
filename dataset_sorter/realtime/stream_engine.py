@@ -31,6 +31,10 @@ from dataset_sorter.realtime.stream_prompt import StreamPrompt
 log = logging.getLogger(__name__)
 
 # Architectures the lean engine knows how to build an img2img pipeline for.
+# Flux/Flux2 are deliberately absent: their encode_prompt returns
+# (prompt_embeds, pooled, text_ids) with no do_classifier_free_guidance arg, so
+# the shared prompt path can't drive them, and at 12B they aren't real-time on
+# 8 GB. SD3/SD3.5 share SDXL's 4-tuple encode_prompt, so they slot straight in.
 _IMG2IMG_PIPELINE = {
     "sd15": "StableDiffusionImg2ImgPipeline",
     "sd2": "StableDiffusionImg2ImgPipeline",
@@ -38,14 +42,22 @@ _IMG2IMG_PIPELINE = {
     "pony": "StableDiffusionXLImg2ImgPipeline",
     "sd3": "StableDiffusion3Img2ImgPipeline",
     "sd35": "StableDiffusion3Img2ImgPipeline",
-    "flux": "FluxImg2ImgPipeline",
 }
+
+# Flow-matching models keep their native FlowMatchEulerDiscrete scheduler —
+# LCMScheduler lacks the mu/shift params the flow schedule needs (mirrors the
+# FLOW_MATCHING_MODELS guard in generate_worker._load_scheduler). Forcing LCM on
+# these produces garbage, so the few-step LCM swap must skip them.
+_FLOW_MATCHING = {"sd3", "sd35", "flux", "flux2", "sana", "pixart",
+                  "auraflow", "chroma", "hidream", "zimage"}
 # Stream Batch is validated-by-design only for the SD1.5/SD2 UNet shape.
 _STREAM_BATCH_OK = {"sd15", "sd2"}
 
 # Tiny AutoEncoder (TAESD) repos — a ~10 MB VAE that encodes/decodes almost
 # for free, which is the single biggest per-frame win for real-time (the full
 # VAE is a large slice of few-step latency). This is what StreamDiffusion uses.
+# Only listed for architectures the lean engine can actually drive (see
+# _IMG2IMG_PIPELINE). taesd3 covers both SD3 and SD3.5 (shared latent space).
 _TINY_VAE_REPO = {
     "sd15": "madebyollin/taesd",
     "sd2": "madebyollin/taesd",
@@ -53,9 +65,6 @@ _TINY_VAE_REPO = {
     "pony": "madebyollin/taesdxl",
     "sd3": "madebyollin/taesd3",
     "sd35": "madebyollin/taesd3",
-    "flux": "madebyollin/taef1",
-    "flux2": "madebyollin/taef2",
-    "sana": "madebyollin/taesana",
 }
 # Cache loaded tiny VAEs by (repo, dtype-str) so pressing Start repeatedly
 # doesn't re-download / re-instantiate them.
@@ -197,8 +206,17 @@ class _BaseEngine:
         self._te_offloaded = False
 
     def _maybe_swap_to_lcm(self, pipe) -> None:
-        """Swap in LCMScheduler when requested (few-step denoising needs it)."""
+        """Swap in LCMScheduler when requested (few-step denoising needs it).
+
+        Flow-matching models (SD3/SD3.5/Flux/...) keep their native scheduler:
+        LCMScheduler lacks the mu/shift params their timestep schedule needs, so
+        swapping it in produces garbage. Their few-step img2img runs on the
+        native FlowMatchEuler scheduler instead.
+        """
         if not self.params.use_lcm_scheduler:
+            return
+        if self.model_type in _FLOW_MATCHING:
+            log.info("Keeping native scheduler for flow-matching model '%s'", self.model_type)
             return
         try:
             from diffusers import LCMScheduler

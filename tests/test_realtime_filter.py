@@ -128,9 +128,11 @@ class TestEngineFactory:
         from dataset_sorter.realtime.stream_engine import _IMG2IMG_PIPELINE
         assert "sd3" in _IMG2IMG_PIPELINE
         assert "sd35" in _IMG2IMG_PIPELINE
-        assert "flux" in _IMG2IMG_PIPELINE
         assert "Diffusion3" in _IMG2IMG_PIPELINE["sd3"]
-        assert "Flux" in _IMG2IMG_PIPELINE["flux"]  # class name contains Flux
+        # Flux is intentionally NOT supported: its encode_prompt is incompatible
+        # with the shared prompt path and it's too heavy for 8 GB real-time.
+        assert "flux" not in _IMG2IMG_PIPELINE
+        assert "flux2" not in _IMG2IMG_PIPELINE
 
 
 class TestRealtimeParams:
@@ -148,16 +150,18 @@ class TestRealtimeParams:
 
 class TestTinyVAE:
     def test_repo_mapping(self):
-        from dataset_sorter.realtime.stream_engine import _TINY_VAE_REPO
+        from dataset_sorter.realtime.stream_engine import (
+            _TINY_VAE_REPO, _IMG2IMG_PIPELINE,
+        )
         assert _TINY_VAE_REPO["sd15"] == "madebyollin/taesd"
         assert _TINY_VAE_REPO["sd2"] == "madebyollin/taesd"
         assert _TINY_VAE_REPO["sdxl"] == "madebyollin/taesdxl"
         assert _TINY_VAE_REPO["pony"] == "madebyollin/taesdxl"
         assert _TINY_VAE_REPO["sd3"] == "madebyollin/taesd3"
         assert _TINY_VAE_REPO["sd35"] == "madebyollin/taesd3"
-        assert _TINY_VAE_REPO["flux"] == "madebyollin/taef1"
-        assert _TINY_VAE_REPO["flux2"] == "madebyollin/taef2"
-        assert _TINY_VAE_REPO["sana"] == "madebyollin/taesana"
+        # Every TAESD entry must correspond to a drivable img2img architecture —
+        # no tiny VAE for a model the engine can't actually run.
+        assert set(_TINY_VAE_REPO).issubset(set(_IMG2IMG_PIPELINE))
 
     def test_tiny_vae_disabled_is_noop(self):
         """tiny_vae=False must not touch the pipeline VAE."""
@@ -176,6 +180,41 @@ class TestTinyVAE:
         pipe = FakePipe()
         eng._maybe_use_tiny_vae(pipe)  # disabled → no change, no import
         assert pipe.vae == "ORIGINAL_VAE"
+
+    def test_lcm_swap_skipped_for_flow_matching(self):
+        """SD3/SD3.5 must keep their native FlowMatchEuler scheduler — forcing
+        LCMScheduler (the default request) would corrupt flow-matching output."""
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakeSched:
+            config = {}
+
+        class FakePipe:
+            scheduler = FakeSched()
+
+        for mt in ("sd3", "sd35"):
+            eng = LeanRealtimeEngine(
+                FakePipe(), mt, "cpu", None, StreamPrompt(),
+                RealtimeParams(use_lcm_scheduler=True),
+            )
+            pipe = FakePipe()
+            orig = pipe.scheduler
+            eng._maybe_swap_to_lcm(pipe)
+            assert pipe.scheduler is orig, f"{mt} scheduler was swapped"
+
+    def test_flow_matching_set_matches_generate_worker(self):
+        """The engine's flow-matching guard must not drift from the generate
+        worker's authoritative set (the reason the scheduler bug existed)."""
+        from dataset_sorter.realtime.stream_engine import _FLOW_MATCHING
+        from dataset_sorter.generate_worker import FLOW_MATCHING_MODELS
+        # Every model generate_worker treats as flow-matching must also be
+        # guarded here; epsilon models (sdxl/sd15) must be in neither.
+        assert FLOW_MATCHING_MODELS.issubset(_FLOW_MATCHING)
+        assert "sdxl" not in _FLOW_MATCHING
+        assert "sd15" not in _FLOW_MATCHING
 
     def test_unknown_arch_skips_tiny_vae(self):
         from dataset_sorter.realtime.stream_engine import (
