@@ -41,7 +41,13 @@ training = [
     "torch>=2.6",
     "torchvision>=0.21",
     "diffusers>=0.32",
-    "transformers>=4.48",
+    # Cap transformers below 5.0: transformers 5.x removed the
+    # CLIPTextModel.text_model wrapper, which diffusers' single-file loader
+    # (from_single_file) still relies on. Without this cap, loading any
+    # single-file .safetensors SDXL/SD1.5 checkpoint crashes with
+    # "'CLIPTextModel' object has no attribute 'text_model'". Lift once the
+    # installed diffusers gains transformers-5 support.
+    "transformers>=4.48,<5",
     "accelerate>=0.34",
     "safetensors>=0.4.5",
     "peft>=0.13",
