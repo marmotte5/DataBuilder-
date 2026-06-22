@@ -278,7 +278,7 @@ class _BaseEngine:
                 tiny = AutoencoderTiny.from_pretrained(repo, torch_dtype=self.dtype)
                 _tiny_vae_cache[key] = tiny
             pipe.vae = tiny
-            if not self._has_cpu_offload(pipe):
+            if not self._has_cpu_offload(pipe) and not self._has_cpu_offload(self.src_pipe):
                 tiny.to(self.device)
             log.info("Real-time: using TAESD tiny VAE (%s)", repo)
         except Exception as exc:  # noqa: BLE001
@@ -296,8 +296,11 @@ class _BaseEngine:
         diffusers never moves it to GPU and the forward call crashes. Calling
         enable_model_cpu_offload again re-registers hooks for all components
         including the new VAE.
+
+        We check the SOURCE pipeline for hooks, not the target — the img2img
+        pipeline built via cls(**src.components) doesn't inherit _all_hooks.
         """
-        if not self._has_cpu_offload(pipe):
+        if not self._has_cpu_offload(pipe) and not self._has_cpu_offload(self.src_pipe):
             return
         try:
             pipe.enable_model_cpu_offload()
