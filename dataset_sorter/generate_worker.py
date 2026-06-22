@@ -48,6 +48,22 @@ from dataset_sorter.model_detection import detect_distillation_from_filename
 log = logging.getLogger(__name__)
 
 
+def _hf_cache_dir() -> str | None:
+    """Return the user-configured HuggingFace cache directory, or None for the default.
+
+    Reads from AppSettings so a mid-session change (Settings → Download folder…)
+    takes effect without restarting.
+    """
+    try:
+        from dataset_sorter.app_settings import AppSettings
+        p = AppSettings.load().huggingface_cache
+        if p:
+            return str(p)
+    except Exception:  # noqa: BLE001
+        pass
+    return os.environ.get("HF_HOME")
+
+
 # ============================================================
 # SECTION: Model and scheduler configuration constants
 # ============================================================
@@ -663,6 +679,9 @@ class GenerateWorker(QThread):
             "torch_dtype": dtype,
             "safety_checker": None,
         }
+        _cache = _hf_cache_dir()
+        if _cache:
+            kwargs["cache_dir"] = _cache
 
         # Check if it's a single file (.safetensors / .ckpt)
         p = Path(model_path)
@@ -899,9 +918,13 @@ class GenerateWorker(QThread):
                 f"Downloading full {model_type} pipeline from {base_repo} "
                 f"(this may take a while)...")
             try:
-                pipe = diffusers.DiffusionPipeline.from_pretrained(base_repo, **kwargs)
+                p3_kwargs = dict(kwargs)
+                p3_cache = _hf_cache_dir()
+                if p3_cache:
+                    p3_kwargs["cache_dir"] = p3_cache
+                pipe = diffusers.DiffusionPipeline.from_pretrained(base_repo, **p3_kwargs)
             except Exception as e:
-                self._emit(self.error, 
+                self._emit(self.error,
                     f"Failed to load base pipeline from {base_repo}: {e}\n\n"
                     f"Make sure you have internet access for the first download, "
                     f"or point to a diffusers-format model folder."
@@ -948,8 +971,12 @@ class GenerateWorker(QThread):
         """
         import diffusers
         try:
+            cache_dir = _hf_cache_dir()
+            load_kwargs = {**kwargs, "local_files_only": True}
+            if cache_dir:
+                load_kwargs["cache_dir"] = cache_dir
             pipe = diffusers.DiffusionPipeline.from_pretrained(
-                base_repo, local_files_only=True, **kwargs
+                base_repo, **load_kwargs
             )
             log.info("Loaded base pipeline from cache: %s", base_repo)
             return pipe
@@ -997,7 +1024,7 @@ class GenerateWorker(QThread):
             log.debug("huggingface_hub not available; cannot do partial download")
             return None
 
-        cache_dir = os.environ.get("HF_HOME")
+        cache_dir = _hf_cache_dir()
         self._emit(self.progress, 17, 100,
             f"Downloading {model_type} components "
             f"(VAE + text encoder + configs — skipping transformer, using local file)...")
