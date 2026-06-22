@@ -239,19 +239,40 @@ class _BaseEngine:
         if repo is None:
             return
         try:
-            import torch
             from diffusers import AutoencoderTiny
 
             key = (repo, str(self.dtype))
             tiny = _tiny_vae_cache.get(key)
             if tiny is None:
                 tiny = AutoencoderTiny.from_pretrained(repo, torch_dtype=self.dtype)
-                tiny = tiny.to(self.device)
                 _tiny_vae_cache[key] = tiny
             pipe.vae = tiny
+            if not self._has_cpu_offload(pipe):
+                tiny.to(self.device)
             log.info("Real-time: using TAESD tiny VAE (%s)", repo)
         except Exception as exc:  # noqa: BLE001
             log.warning("TAESD tiny VAE unavailable (keeping full VAE): %s", exc)
+
+    @staticmethod
+    def _has_cpu_offload(pipe) -> bool:
+        return hasattr(pipe, "_all_hooks") and len(getattr(pipe, "_all_hooks", [])) > 0
+
+    def _rearm_cpu_offload(self, pipe) -> None:
+        """Re-register model-cpu-offload hooks after swapping components.
+
+        When the pipeline was loaded with enable_model_cpu_offload (VRAM < 16 GB)
+        and we swap the VAE for TAESD, the new VAE has no offload hook, so
+        diffusers never moves it to GPU and the forward call crashes. Calling
+        enable_model_cpu_offload again re-registers hooks for all components
+        including the new VAE.
+        """
+        if not self._has_cpu_offload(pipe):
+            return
+        try:
+            pipe.enable_model_cpu_offload()
+            log.info("Real-time: re-armed cpu_offload hooks after component swap")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not re-arm cpu_offload: %s", exc)
 
     def _maybe_channels_last(self, pipe) -> None:
         """Put the UNet/VAE in channels_last layout (~10-20% on conv-heavy nets)."""
@@ -323,6 +344,7 @@ class LeanRealtimeEngine(_BaseEngine):
         self._maybe_use_tiny_vae(target)
         self._maybe_channels_last(target)
         self._maybe_compile_unet(target)
+        self._rearm_cpu_offload(target)
         self._pipe = target
 
     def process(self, frame):
@@ -391,6 +413,7 @@ class StreamBatchEngine(_BaseEngine):
         self._maybe_use_tiny_vae(self._pipe)
         self._maybe_channels_last(self._pipe)
         self._maybe_compile_unet(self._pipe)
+        self._rearm_cpu_offload(self._pipe)
         sched = self._pipe.scheduler
         n = max(1, self.params.steps)
         sched.set_timesteps(n, device=self.device)
