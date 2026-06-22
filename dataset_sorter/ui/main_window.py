@@ -1104,7 +1104,7 @@ class MainWindow(QMainWindow):
         self._section_dropdown_pages: dict[str, set[str]] = {
             "workflow": {"dataset", "train", "_train3", "generate"},
             "library":  {"library"},
-            "tools":    {"batch", "compare", "merge"},
+            "tools":    {"batch", "compare", "merge", "live"},
             "analyze":  {"cluster", "settings"},
         }
         _section_defs = [
@@ -1119,6 +1119,7 @@ class MainWindow(QMainWindow):
                 ("batch",   "Batch Generate"),
                 ("compare", "A/B Compare"),
                 ("merge",   "Merge Models"),
+                ("live",    "Live Filter (camera)"),
             ]),
             ("analyze",  "Analyze  ▾", [
                 ("cluster",  "Latent Space (Cluster)"),
@@ -1511,6 +1512,22 @@ class MainWindow(QMainWindow):
         self.help_tab = HelpTab()
         self._content_stack.addWidget(self.help_tab)  # index 9
 
+        # Page 10: Live Filter (real-time camera + diffusion)
+        try:
+            from dataset_sorter.ui.live_filter_tab import LiveFilterTab
+            self.live_filter_tab = LiveFilterTab()
+        except ImportError as _e:
+            log.warning("Live Filter unavailable: %s", _e)
+            self.live_filter_tab = QLabel(
+                "Live Filter requires opencv-python.\n"
+                "Install with: pip install \".[realtime]\""
+            )
+            self.live_filter_tab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.live_filter_tab.setStyleSheet(
+                f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;"
+            )
+        self._content_stack.addWidget(self.live_filter_tab)  # index 10
+
         main_content_layout.addWidget(self._content_stack, 1)
         self._content_splitter.addWidget(main_content)
 
@@ -1686,12 +1703,14 @@ class MainWindow(QMainWindow):
             "dataset": 0, "train": 1, "generate": 2,
             "batch": 3, "compare": 4, "merge": 5,
             "library": 6, "cluster": 7, "settings": 8, "help": 9,
+            "live": 10,
         }
         nav_to_title = {
             "dataset": "", "train": "", "generate": "",
             "batch": "Batch Generate", "compare": "A/B Compare", "merge": "Merge",
             "library": "Library", "cluster": "Latent Space Visualizer",
             "settings": "Settings", "help": "Help",
+            "live": "Live Filter",
         }
         # Stepper step_id → stepper highlight mapping
         nav_to_stepper = {
@@ -2324,9 +2343,11 @@ class MainWindow(QMainWindow):
             btn.setText("2. Configure *" if modified else "2. Configure")
 
     def _on_generate_worker_ready(self, worker):
-        """Pass the loaded GenerateWorker to batch and comparison tabs."""
+        """Pass the loaded GenerateWorker to batch, comparison and live tabs."""
         self.batch_tab.set_generate_worker(worker)
         self.comparison_tab.set_generate_worker(worker)
+        if hasattr(self, "live_filter_tab") and hasattr(self.live_filter_tab, "set_generate_worker"):
+            self.live_filter_tab.set_generate_worker(worker)
 
     def _setup_shortcuts(self):
         """Register global keyboard shortcuts."""
@@ -2350,6 +2371,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+5"), self, lambda: self._switch_nav("batch"))
         QShortcut(QKeySequence("Ctrl+6"), self, lambda: self._switch_nav("compare"))
         QShortcut(QKeySequence("Ctrl+7"), self, lambda: self._switch_nav("merge"))
+        QShortcut(QKeySequence("Ctrl+8"), self, lambda: self._switch_nav("live"))
         # Discoverability: show all shortcuts (Ctrl+/ — Linear/Notion convention)
         QShortcut(QKeySequence("Ctrl+/"), self, self._show_shortcuts_help)
         QShortcut(QKeySequence("Ctrl+?"), self, self._show_shortcuts_help)
@@ -2892,6 +2914,16 @@ class MainWindow(QMainWindow):
                     ct._comparison_worker.stop()
                 if ct._comparison_worker.isRunning():
                     ct._comparison_worker.wait(3000)
+
+        # Stop live filter worker — releases the camera and ends the capture
+        # loop before the shared pipeline/QApplication tears down.
+        if hasattr(self, 'live_filter_tab'):
+            lt = self.live_filter_tab
+            if hasattr(lt, '_worker') and lt._worker is not None:
+                if hasattr(lt._worker, 'stop'):
+                    lt._worker.stop()
+                if lt._worker.isRunning():
+                    lt._worker.wait(3000)
 
         # Stop merge worker — without this, a running merge would continue
         # writing to the output .safetensors file after QApplication exits,

@@ -94,6 +94,15 @@ export = [
     "gguf>=0.10",
 ]
 
+# Real-time camera filtering (Live Filter tab). opencv handles capture;
+# pygrabber gives friendly DirectShow device names on Windows (e.g. the
+# Canon R5 via EOS Webcam Utility). Both are optional — the tab degrades
+# gracefully (generic device names / disabled) when absent.
+realtime = [
+    "opencv-python>=4.8",
+    "pygrabber>=0.2; platform_system == 'Windows'",
+]
+
 # Nunchaku INT4 / NVFP4 inference (SVDQuant, ICLR 2025). Ships custom
 # CUDA kernels — gated to Linux+CUDA and Windows+CUDA. macOS / ROCm
 # users get no behaviour change because the integration silently
@@ -127,7 +136,7 @@ cuda = [
 # above — incompatible packages are silently skipped by pip. Includes
 # nunchaku on CUDA-eligible platforms (no-op marker on macOS / ARM Linux).
 all = [
-    "dataset-sorter[training,optimizers,speed,analysis,export,nunchaku]",
+    "dataset-sorter[training,optimizers,speed,analysis,export,nunchaku,realtime]",
 ]
 
 [project.scripts]
