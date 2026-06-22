@@ -64,6 +64,26 @@ def _hf_cache_dir() -> str | None:
     return os.environ.get("HF_HOME")
 
 
+# transformers 5.x removed CLIPTextModel.text_model, which diffusers'
+# single-file loader still accesses. The result is a cryptic AttributeError
+# that otherwise sends us into a slow (and, for LDM-format checkpoints,
+# incorrect) base-repo download. Detect it and tell the user how to fix it.
+_TRANSFORMERS5_HINT = (
+    "Cannot load this single-file checkpoint: your installed transformers "
+    "version is too new for the single-file loader.\n\n"
+    "Fix it by downgrading in your environment:\n"
+    "    pip install \"transformers<5\"\n\n"
+    "(transformers 5.x removed an internal CLIP attribute that diffusers' "
+    "from_single_file still needs. A diffusers-format model folder loads fine "
+    "either way.)"
+)
+
+
+def _is_transformers5_clip_incompat(exc: Exception) -> bool:
+    """True if *exc* is the transformers-5 CLIPTextModel.text_model breakage."""
+    return isinstance(exc, AttributeError) and "text_model" in str(exc)
+
+
 # ============================================================
 # SECTION: Model and scheduler configuration constants
 # ============================================================
@@ -738,6 +758,9 @@ class GenerateWorker(QThread):
                     try:
                         pipe = pipe_cls.from_single_file(model_path, **kwargs)
                     except Exception as e:
+                        if _is_transformers5_clip_incompat(e):
+                            self._emit(self.error, _TRANSFORMERS5_HINT)
+                            return None
                         log.warning(
                             "%s.from_single_file failed: %s. "
                             "Trying base repo fallback...", pipe_cls.__name__, e,
@@ -767,6 +790,9 @@ class GenerateWorker(QThread):
                 try:
                     pipe = pipe_cls.from_single_file(model_path, **kwargs)
                 except Exception as e:
+                    if _is_transformers5_clip_incompat(e):
+                        self._emit(self.error, _TRANSFORMERS5_HINT)
+                        return None
                     log.debug("from_single_file retry without safety_checker failed: %s", e)
                     pipe = self._load_single_file_custom(
                         model_path, model_type, dtype, kwargs

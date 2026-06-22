@@ -5,7 +5,9 @@ numpy>=1.24
 torch>=2.1
 torchvision>=0.16
 diffusers>=0.28
-transformers>=4.38
+# <5: transformers 5.x broke diffusers' single-file checkpoint loader
+# (CLIPTextModel.text_model removed). See pyproject.toml for details.
+transformers>=4.38,<5
 accelerate>=0.27
 safetensors>=0.4
 peft>=0.10
