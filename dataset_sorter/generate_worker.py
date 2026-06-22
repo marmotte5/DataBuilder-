@@ -854,6 +854,10 @@ class GenerateWorker(QThread):
 
         # Base model repos for all architectures
         BASE_REPOS = {
+            "sd15":     "stable-diffusion-v1-5/stable-diffusion-v1-5",
+            "sd2":      "stabilityai/stable-diffusion-2-1",
+            "sdxl":     "stabilityai/stable-diffusion-xl-base-1.0",
+            "pony":     "stabilityai/stable-diffusion-xl-base-1.0",
             "zimage":   "Tongyi-MAI/Z-Image",
             "flux2":    "black-forest-labs/FLUX.2-dev",
             "chroma":   "lodestone-horizon/chroma",
