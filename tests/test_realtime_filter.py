@@ -233,6 +233,39 @@ class TestTinyVAE:
         eng._maybe_use_tiny_vae(pipe)  # no TAESD repo for kolors → unchanged
         assert pipe.vae == "ORIGINAL_VAE"
 
+    def test_resolve_dtype_maps_generate_worker_string(self):
+        """GenerateWorker stores dtype as a string; the engine must map it to a
+        real torch.dtype or the tiny VAE loads float32 and mismatches bf16."""
+        import torch
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+
+        class FakePipe:
+            unet = None
+        assert _BaseEngine._resolve_dtype("torch.bfloat16", FakePipe()) is torch.bfloat16
+        assert _BaseEngine._resolve_dtype("torch.float16", FakePipe()) is torch.float16
+        assert _BaseEngine._resolve_dtype("torch.float32", FakePipe()) is torch.float32
+
+    def test_resolve_dtype_passes_through_real_dtype(self):
+        import torch
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+
+        class FakePipe:
+            unet = None
+        assert _BaseEngine._resolve_dtype(torch.bfloat16, FakePipe()) is torch.bfloat16
+
+    def test_resolve_dtype_falls_back_to_pipeline(self):
+        """An unknown/None dtype falls back to the model's actual dtype."""
+        import torch
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+
+        unet = torch.nn.Linear(2, 2).to(torch.float16)
+
+        class FakePipe:
+            pass
+        pipe = FakePipe()
+        pipe.unet = unet
+        assert _BaseEngine._resolve_dtype(None, pipe) is torch.float16
+
 
 # ── Text-encoder offload (makes SDXL fit on 8 GB) ────────────────────────────
 
