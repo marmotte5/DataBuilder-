@@ -741,6 +741,12 @@ class MainWindow(QMainWindow):
         )
         api_keys_action.triggered.connect(self._show_api_keys_dialog)
 
+        download_dir_action = settings_menu.addAction("&Download folder…")
+        download_dir_action.setStatusTip(
+            "Choose where model downloads are cached (e.g. a drive with more space)"
+        )
+        download_dir_action.triggered.connect(self._show_download_folder_dialog)
+
         # ── Help menu ──────────────────────────────────────────────────
         help_menu = menubar.addMenu("&Help")
         about_action = help_menu.addAction("&About DataBuilder")
@@ -753,6 +759,28 @@ class MainWindow(QMainWindow):
         from dataset_sorter.ui.api_keys_dialog import APIKeysDialog
         dlg = APIKeysDialog(parent=self)
         dlg.exec()
+
+    def _show_download_folder_dialog(self) -> None:
+        """Pick where HuggingFace model downloads are cached.
+
+        Persisted to AppSettings.huggingface_cache and exported as HF_HOME on
+        the next launch (HF reads HF_HOME at import time, so a restart is
+        required for it to take effect)."""
+        settings = AppSettings.load()
+        current = str(settings.huggingface_cache)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose model download / cache folder", current
+        )
+        if not chosen:
+            return
+        settings.huggingface_cache = Path(chosen)
+        settings.save()
+        QMessageBox.information(
+            self,
+            "Download folder updated",
+            f"Model downloads will be cached in:\n{chosen}\n\n"
+            "Restart DataBuilder for this to take effect.",
+        )
 
     def _show_about_dialog(self) -> None:
         """Display a small About dialog with version + marmot branding."""
