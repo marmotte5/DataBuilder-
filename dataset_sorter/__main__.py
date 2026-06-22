@@ -53,6 +53,19 @@ import logging
 # (symlinks require Developer Mode or admin privileges; the warning is noise).
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
+# Redirect model downloads to the user-configured cache folder (Settings →
+# Download folder…). Must run before huggingface_hub is imported, since it
+# reads HF_HOME at import time. Respects an HF_HOME already set in the real
+# environment; otherwise applies the saved path (default: ~/.cache/huggingface).
+try:
+    from dataset_sorter.app_settings import AppSettings as _AppSettings
+    _hf_cache = _AppSettings.load().huggingface_cache
+    if _hf_cache:
+        os.environ.setdefault("HF_HOME", str(_hf_cache))
+    del _AppSettings, _hf_cache
+except Exception:
+    pass
+
 # Configure root logger early so startup diagnostics are captured
 logging.basicConfig(
     level=logging.INFO,
