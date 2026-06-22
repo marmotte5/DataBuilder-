@@ -45,6 +45,7 @@ class RealtimeWorker(QThread):
         self._lock = threading.Lock()
 
         self._camera_index = 0
+        self._camera_backend = 0               # 0 = auto-detect
         self._params = RealtimeParams()
         self._prompt = StreamPrompt()
         self._stream_batch = False
@@ -60,6 +61,7 @@ class RealtimeWorker(QThread):
         self,
         *,
         camera_index: int,
+        camera_backend: int = 0,
         params: RealtimeParams,
         positive: str,
         negative: str,
@@ -69,6 +71,7 @@ class RealtimeWorker(QThread):
     ) -> None:
         with self._lock:
             self._camera_index = camera_index
+            self._camera_backend = camera_backend
             self._params = params
             self._stream_batch = stream_batch
             self._ssf_threshold = ssf_threshold
@@ -125,12 +128,13 @@ class RealtimeWorker(QThread):
     def _open_camera(self) -> None:
         with self._lock:
             idx = self._camera_index
+            backend = self._camera_backend
         # Capture at the device's NATIVE resolution (pass 0,0): EOS Webcam
         # Utility and many capture cards deliver a fixed stream and choke when
         # asked for an arbitrary size. The engine resizes each frame to the
         # processing resolution anyway, so forcing capture size only risks a
         # failed open or a black frame.
-        self._camera = CameraSource(idx, 0, 0)
+        self._camera = CameraSource(idx, 0, 0, backend=backend)
         self._camera.open()
         # Warm-up: the Canon virtual cam emits a few empty/auto-exposing frames
         # on start. Drain them so the first displayed frame isn't black.

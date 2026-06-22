@@ -253,12 +253,12 @@ class LiveFilterTab(QWidget):
             log.warning("Camera enumeration failed: %s", exc)
             devices = []
         if not devices:
-            self._cam_combo.addItem("(no camera found — is EOS Webcam Utility running?)", -1)
+            self._cam_combo.addItem("(no camera found — is EOS Webcam Utility running?)", None)
             self._cam_combo.setEnabled(False)
         else:
             self._cam_combo.setEnabled(True)
             for d in devices:
-                self._cam_combo.addItem(d.label, d.index)
+                self._cam_combo.addItem(d.label, d)
 
     # ── parameter assembly ───────────────────────────────────────────────
 
@@ -288,8 +288,8 @@ class LiveFilterTab(QWidget):
                 action_callback=lambda: getattr(self.window(), "_switch_nav", lambda _x: None)("generate"),
             )
             return
-        cam_index = self._cam_combo.currentData()
-        if cam_index is None or cam_index < 0:
+        cam_device = self._cam_combo.currentData()
+        if cam_device is None:
             show_toast(self, "No camera selected", "warning")
             return
 
@@ -297,7 +297,8 @@ class LiveFilterTab(QWidget):
 
         self._worker = RealtimeWorker(gw, self)
         self._worker.configure(
-            camera_index=cam_index,
+            camera_index=cam_device.index,
+            camera_backend=cam_device.backend,
             params=self._current_params(),
             positive=self._prompt_edit.toPlainText().strip(),
             negative=self._neg_edit.text().strip(),
