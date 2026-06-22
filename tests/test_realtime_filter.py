@@ -266,6 +266,65 @@ class TestTinyVAE:
         pipe.unet = unet
         assert _BaseEngine._resolve_dtype(None, pipe) is torch.float16
 
+    def test_img2img_steps_survive_low_strength(self):
+        """diffusers img2img runs int(steps*strength) denoising steps; at the
+        real-time defaults (2 steps, 0.45 strength) that floors to 0, giving an
+        empty latent batch and an empty images list. The helper must inflate
+        num_inference_steps so the effective count is always >= 1."""
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+
+        cases = [(2, 0.45), (1, 0.45), (2, 0.5), (1, 0.05), (4, 0.3), (8, 0.45)]
+        for desired, strength in cases:
+            n = _BaseEngine._img2img_steps(desired, strength)
+            effective = int(n * max(0.05, min(1.0, strength)))
+            assert effective >= 1, (
+                f"steps={desired} strength={strength}: effective={effective} "
+                f"(would yield empty images)"
+            )
+            # And it must actually deliver the requested forward count.
+            assert effective >= max(1, desired)
+
+    def test_img2img_steps_default_params(self):
+        """The exact crash report: RealtimeParams defaults must not floor to 0."""
+        from dataset_sorter.realtime.stream_engine import (
+            _BaseEngine, RealtimeParams,
+        )
+        p = RealtimeParams()
+        n = _BaseEngine._img2img_steps(p.steps, p.strength)
+        assert int(n * p.strength) >= 1
+
+    def test_stream_batch_prepare_nonempty_queue_at_defaults(self):
+        """StreamBatch.prepare() must build a non-empty timestep queue even at
+        the low-strength defaults that previously collapsed it to empty."""
+        import torch
+        from dataset_sorter.realtime.stream_engine import (
+            StreamBatchEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakeSched:
+            def __init__(self):
+                self.alphas_cumprod = torch.linspace(0.999, 0.001, 1000)
+                self.timesteps = torch.arange(999, -1, -1)
+
+            def set_timesteps(self, n, device=None):
+                self.timesteps = torch.linspace(999, 0, n).long()
+
+        class FakePipe:
+            def __init__(self):
+                self.scheduler = FakeSched()
+                self.unet = None
+                self.vae = None
+
+        eng = StreamBatchEngine(
+            FakePipe(), "sd15", "cpu", torch.float32, StreamPrompt(),
+            RealtimeParams(use_lcm_scheduler=False, tiny_vae=False,
+                           channels_last=False, compile_unet=False),  # defaults: steps=2, strength=0.45
+        )
+        eng.prepare()
+        assert eng._timesteps is not None
+        assert len(eng._timesteps) >= 1
+
     def test_stream_batch_coefficients_match_latent_dtype(self):
         """Stream Batch's LCM coefficients must be cast to the latent dtype,
         else bf16/fp16 latents get promoted to fp32 and the UNet forward
@@ -480,3 +539,96 @@ class TestLiveFilterTab:
         tab = LiveFilterTab()
         assert tab._tiny_vae_check.isChecked() is True
         assert tab._current_params().tiny_vae is True
+
+
+# ── CPU-offload detection across pipelines ──────────────────────────────────
+
+class TestCpuOffloadDetection:
+    """When enable_model_cpu_offload was used on the source pipeline, the
+    img2img target built via cls(**src.components) does NOT inherit _all_hooks.
+    The engine must detect offload on the SOURCE and re-arm on the target."""
+
+    def _make_engine(self, src_has_hooks):
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakePipe:
+            vae = "ORIGINAL_VAE"
+            unet = None
+
+        src = FakePipe()
+        if src_has_hooks:
+            src._all_hooks = ["hook1"]
+        return LeanRealtimeEngine(
+            src, "sd15", "cpu", None, StreamPrompt(),
+            RealtimeParams(tiny_vae=False),
+        )
+
+    def test_has_cpu_offload_detects_source_hooks(self):
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+        eng = self._make_engine(src_has_hooks=True)
+        assert _BaseEngine._has_cpu_offload(eng.src_pipe) is True
+
+    def test_rearm_fires_when_source_has_hooks(self):
+        eng = self._make_engine(src_has_hooks=True)
+        rearm_called = []
+
+        class TargetPipe:
+            vae = "ORIGINAL_VAE"
+
+            def enable_model_cpu_offload(self):
+                rearm_called.append(True)
+
+        target = TargetPipe()
+        eng._rearm_cpu_offload(target)
+        assert rearm_called, "_rearm_cpu_offload should fire when source has hooks"
+
+    def test_rearm_noop_when_no_hooks(self):
+        eng = self._make_engine(src_has_hooks=False)
+        rearm_called = []
+
+        class TargetPipe:
+            def enable_model_cpu_offload(self):
+                rearm_called.append(True)
+
+        eng._rearm_cpu_offload(TargetPipe())
+        assert not rearm_called, "_rearm_cpu_offload should be a no-op without hooks"
+
+    def test_tiny_vae_skips_to_device_when_source_offloaded(self):
+        """When the source pipeline has cpu_offload, _maybe_use_tiny_vae must
+        NOT call tiny.to(device) — the offload hooks will manage placement."""
+        from dataset_sorter.realtime.stream_engine import (
+            LeanRealtimeEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakePipe:
+            vae = "ORIGINAL_VAE"
+            unet = None
+
+        src = FakePipe()
+        src._all_hooks = ["hook1"]
+
+        eng = LeanRealtimeEngine(
+            src, "sd15", "cpu", None, StreamPrompt(),
+            RealtimeParams(tiny_vae=True),
+        )
+        target = FakePipe()
+        to_calls = []
+
+        class FakeTiny:
+            def to(self, *a, **k):
+                to_calls.append((a, k))
+                return self
+
+        import dataset_sorter.realtime.stream_engine as se
+        orig_cache = se._tiny_vae_cache.copy()
+        se._tiny_vae_cache[("madebyollin/taesd", str(eng.dtype))] = FakeTiny()
+        try:
+            eng._maybe_use_tiny_vae(target)
+            assert not to_calls, "tiny.to() should NOT be called when source has offload"
+        finally:
+            se._tiny_vae_cache.clear()
+            se._tiny_vae_cache.update(orig_cache)

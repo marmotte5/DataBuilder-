@@ -278,7 +278,7 @@ class _BaseEngine:
                 tiny = AutoencoderTiny.from_pretrained(repo, torch_dtype=self.dtype)
                 _tiny_vae_cache[key] = tiny
             pipe.vae = tiny
-            if not self._has_cpu_offload(pipe):
+            if not self._has_cpu_offload(pipe) and not self._has_cpu_offload(self.src_pipe):
                 tiny.to(self.device)
             log.info("Real-time: using TAESD tiny VAE (%s)", repo)
         except Exception as exc:  # noqa: BLE001
@@ -296,8 +296,11 @@ class _BaseEngine:
         diffusers never moves it to GPU and the forward call crashes. Calling
         enable_model_cpu_offload again re-registers hooks for all components
         including the new VAE.
+
+        We check the SOURCE pipeline for hooks, not the target — the img2img
+        pipeline built via cls(**src.components) doesn't inherit _all_hooks.
         """
-        if not self._has_cpu_offload(pipe):
+        if not self._has_cpu_offload(pipe) and not self._has_cpu_offload(self.src_pipe):
             return
         try:
             pipe.enable_model_cpu_offload()
@@ -337,6 +340,23 @@ class _BaseEngine:
                 log.info("Real-time: UNet compiled (first few frames will be slower)")
         except Exception as exc:  # noqa: BLE001
             log.warning("torch.compile of UNet skipped: %s", exc)
+
+    @staticmethod
+    def _img2img_steps(desired_steps: int, strength: float) -> int:
+        """Scheduler steps to request so img2img actually runs ``desired_steps``.
+
+        diffusers img2img only denoises ``int(num_inference_steps * strength)``
+        steps. At the real-time defaults (2 steps, 0.45 strength) that floors to
+        0, leaving an empty latent batch and an empty ``images`` list (the
+        infamous ``out.images[0]`` IndexError). Invert the relation so the
+        user's requested forward count survives any strength — this also keeps
+        the per-frame cost at exactly ``desired_steps`` UNet forwards.
+        """
+        import math
+
+        desired = max(1, desired_steps)
+        strength = max(0.05, min(1.0, strength))
+        return max(desired, math.ceil(desired / strength))
 
     def prepare(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -393,7 +413,7 @@ class LeanRealtimeEngine(_BaseEngine):
         call = {
             "image": frame,
             "strength": max(0.05, min(1.0, p.strength)),
-            "num_inference_steps": max(1, p.steps),
+            "num_inference_steps": self._img2img_steps(p.steps, p.strength),
             "guidance_scale": p.guidance_scale,
             "prompt_embeds": enc.prompt_embeds,
             "output_type": "pil",
@@ -446,7 +466,10 @@ class StreamBatchEngine(_BaseEngine):
         self._maybe_compile_unet(self._pipe)
         self._rearm_cpu_offload(self._pipe)
         sched = self._pipe.scheduler
-        n = max(1, self.params.steps)
+        # Request enough scheduler steps that the strength cut still leaves the
+        # user's desired step count — otherwise int(n*strength) floors to 0 and
+        # the queue is empty (same trap as the lean engine's empty images).
+        n = self._img2img_steps(self.params.steps, self.params.strength)
         sched.set_timesteps(n, device=self.device)
 
         # img2img start index from strength (same rule diffusers uses).
