@@ -17,9 +17,15 @@ backends to make sure nothing is missed.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from typing import Optional
+
+# Virtual cameras (EOS Webcam Utility, OBS, etc.) often open successfully under
+# MSMF but then fail to deliver frames when hardware transforms are enabled.
+# Must be set before the first cv2 import anywhere in the process.
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 
 log = logging.getLogger(__name__)
 
