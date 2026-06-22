@@ -8,6 +8,7 @@ theme toggle, and progress persistence across restarts.
 
 import json
 import logging
+import os
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -763,9 +764,9 @@ class MainWindow(QMainWindow):
     def _show_download_folder_dialog(self) -> None:
         """Pick where HuggingFace model downloads are cached.
 
-        Persisted to AppSettings.huggingface_cache and exported as HF_HOME on
-        the next launch (HF reads HF_HOME at import time, so a restart is
-        required for it to take effect)."""
+        Persisted to AppSettings.huggingface_cache. Also updates HF_HOME in the
+        current process so subsequent downloads land in the new folder without
+        requiring a restart."""
         settings = AppSettings.load()
         current = str(settings.huggingface_cache)
         chosen = QFileDialog.getExistingDirectory(
@@ -775,11 +776,11 @@ class MainWindow(QMainWindow):
             return
         settings.huggingface_cache = Path(chosen)
         settings.save()
+        os.environ["HF_HOME"] = chosen
         QMessageBox.information(
             self,
             "Download folder updated",
-            f"Model downloads will be cached in:\n{chosen}\n\n"
-            "Restart DataBuilder for this to take effect.",
+            f"Model downloads will now be cached in:\n{chosen}",
         )
 
     def _show_about_dialog(self) -> None:
