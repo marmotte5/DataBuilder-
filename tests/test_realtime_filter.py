@@ -266,6 +266,43 @@ class TestTinyVAE:
         pipe.unet = unet
         assert _BaseEngine._resolve_dtype(None, pipe) is torch.float16
 
+    def test_stream_batch_coefficients_match_latent_dtype(self):
+        """Stream Batch's LCM coefficients must be cast to the latent dtype,
+        else bf16/fp16 latents get promoted to fp32 and the UNet forward
+        crashes with a dtype mismatch."""
+        import torch
+        from dataset_sorter.realtime.stream_engine import (
+            StreamBatchEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakeSched:
+            def __init__(self):
+                self.alphas_cumprod = torch.linspace(0.999, 0.001, 1000)
+                self.timesteps = torch.arange(999, -1, -1)
+
+            def set_timesteps(self, n, device=None):
+                self.timesteps = torch.linspace(999, 0, n).long()
+
+        class FakePipe:
+            def __init__(self):
+                self.scheduler = FakeSched()
+                self.unet = None
+                self.vae = None
+
+        for dt in (torch.bfloat16, torch.float16, torch.float32):
+            eng = StreamBatchEngine(
+                FakePipe(), "sd15", "cpu", dt, StreamPrompt(),
+                # disable the swaps so prepare() only builds the coefficients
+                RealtimeParams(use_lcm_scheduler=False, tiny_vae=False,
+                               channels_last=False, compile_unet=False, steps=4),
+            )
+            eng.prepare()
+            assert eng._alpha_sqrt.dtype == dt
+            assert eng._beta_sqrt.dtype == dt
+            assert eng._c_skip.dtype == dt
+            assert eng._c_out.dtype == dt
+
 
 # ── Text-encoder offload (makes SDXL fit on 8 GB) ────────────────────────────
 

@@ -457,17 +457,20 @@ class StreamBatchEngine(_BaseEngine):
 
         # Precompute the LCM consistency coefficients per queued timestep so the
         # batched update is a pure vectorised op (no stateful scheduler.step).
+        # Computed in fp32 for precision, then cast to the latent dtype so the
+        # arithmetic in process() doesn't promote bf16/fp16 latents to fp32 and
+        # then feed a mismatched dtype into the UNet.
         alphas_cumprod = sched.alphas_cumprod.to(self.device)
         sigma_data = 0.5
         ts = timesteps.long()
         alpha_prod = alphas_cumprod[ts]                       # (k,)
-        self._alpha_sqrt = alpha_prod.sqrt().view(-1, 1, 1, 1)
-        self._beta_sqrt = (1 - alpha_prod).sqrt().view(-1, 1, 1, 1)
+        self._alpha_sqrt = alpha_prod.sqrt().view(-1, 1, 1, 1).to(self.dtype)
+        self._beta_sqrt = (1 - alpha_prod).sqrt().view(-1, 1, 1, 1).to(self.dtype)
         # LCM scaled timestep (the 0.1 follows the LCM paper / LCMScheduler).
         scaled = ts.float() * 0.1
         denom = scaled.pow(2) + sigma_data ** 2
-        self._c_skip = (sigma_data ** 2 / denom).view(-1, 1, 1, 1)
-        self._c_out = (scaled * sigma_data / denom.sqrt()).view(-1, 1, 1, 1)
+        self._c_skip = (sigma_data ** 2 / denom).view(-1, 1, 1, 1).to(self.dtype)
+        self._c_out = (scaled * sigma_data / denom.sqrt()).view(-1, 1, 1, 1).to(self.dtype)
         self._buffer = None
 
     def _is_tiny_vae(self) -> bool:
