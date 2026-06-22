@@ -266,6 +266,65 @@ class TestTinyVAE:
         pipe.unet = unet
         assert _BaseEngine._resolve_dtype(None, pipe) is torch.float16
 
+    def test_img2img_steps_survive_low_strength(self):
+        """diffusers img2img runs int(steps*strength) denoising steps; at the
+        real-time defaults (2 steps, 0.45 strength) that floors to 0, giving an
+        empty latent batch and an empty images list. The helper must inflate
+        num_inference_steps so the effective count is always >= 1."""
+        from dataset_sorter.realtime.stream_engine import _BaseEngine
+
+        cases = [(2, 0.45), (1, 0.45), (2, 0.5), (1, 0.05), (4, 0.3), (8, 0.45)]
+        for desired, strength in cases:
+            n = _BaseEngine._img2img_steps(desired, strength)
+            effective = int(n * max(0.05, min(1.0, strength)))
+            assert effective >= 1, (
+                f"steps={desired} strength={strength}: effective={effective} "
+                f"(would yield empty images)"
+            )
+            # And it must actually deliver the requested forward count.
+            assert effective >= max(1, desired)
+
+    def test_img2img_steps_default_params(self):
+        """The exact crash report: RealtimeParams defaults must not floor to 0."""
+        from dataset_sorter.realtime.stream_engine import (
+            _BaseEngine, RealtimeParams,
+        )
+        p = RealtimeParams()
+        n = _BaseEngine._img2img_steps(p.steps, p.strength)
+        assert int(n * p.strength) >= 1
+
+    def test_stream_batch_prepare_nonempty_queue_at_defaults(self):
+        """StreamBatch.prepare() must build a non-empty timestep queue even at
+        the low-strength defaults that previously collapsed it to empty."""
+        import torch
+        from dataset_sorter.realtime.stream_engine import (
+            StreamBatchEngine, RealtimeParams,
+        )
+        from dataset_sorter.realtime.stream_prompt import StreamPrompt
+
+        class FakeSched:
+            def __init__(self):
+                self.alphas_cumprod = torch.linspace(0.999, 0.001, 1000)
+                self.timesteps = torch.arange(999, -1, -1)
+
+            def set_timesteps(self, n, device=None):
+                self.timesteps = torch.linspace(999, 0, n).long()
+
+        class FakePipe:
+            def __init__(self):
+                self.scheduler = FakeSched()
+                self.unet = None
+                self.vae = None
+
+        eng = StreamBatchEngine(
+            FakePipe(), "sd15", "cpu", torch.float32, StreamPrompt(),
+            RealtimeParams(use_lcm_scheduler=False, tiny_vae=False,
+                           channels_last=False, compile_unet=False),  # defaults: steps=2, strength=0.45
+        )
+        eng.prepare()
+        assert eng._timesteps is not None
+        assert len(eng._timesteps) >= 1
+
     def test_stream_batch_coefficients_match_latent_dtype(self):
         """Stream Batch's LCM coefficients must be cast to the latent dtype,
         else bf16/fp16 latents get promoted to fp32 and the UNet forward
