@@ -86,19 +86,40 @@ def list_camera_devices(max_probe: int = 8) -> list[CameraDevice]:
     if names:
         return [CameraDevice(i, n) for i, n in enumerate(names)]
 
+    # pygrabber available but returned nothing → trust it, no devices exist.
+    # Only fall through to the expensive probe when pygrabber itself isn't
+    # installed (missing optional dep).
+    if sys.platform == "win32" and _pygrabber_available():
+        log.debug("pygrabber reports no capture devices — skipping probe")
+        return []
+
     # Probe fallback: open each index, keep the ones that yield a frame.
     backend = _default_backend()
     devices: list[CameraDevice] = []
     for idx in range(max_probe):
-        cap = cv2.VideoCapture(idx, backend)
+        try:
+            cap = cv2.VideoCapture(idx, backend)
+        except Exception:  # noqa: BLE001 — some backends raise on bad index
+            continue
         try:
             if cap.isOpened():
                 ok, _ = cap.read()
                 if ok:
                     devices.append(CameraDevice(idx, f"Camera {idx}"))
+        except Exception:  # noqa: BLE001 — assertion failures inside DShow
+            pass
         finally:
             cap.release()
     return devices
+
+
+def _pygrabber_available() -> bool:
+    """True if pygrabber can be imported (it's an optional [realtime] dep)."""
+    try:
+        from pygrabber.dshow_graph import FilterGraph  # type: ignore  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 class CameraSource:
@@ -116,6 +137,12 @@ class CameraSource:
 
         backend = _default_backend()
         cap = cv2.VideoCapture(self.index, backend)
+        # Some virtual cameras (including some EOS Webcam Utility versions)
+        # register with MSMF but not DirectShow. Try MSMF as fallback.
+        if not cap.isOpened() and sys.platform == "win32" and backend != cv2.CAP_MSMF:
+            cap.release()
+            log.info("DirectShow open failed for index %d — trying MSMF", self.index)
+            cap = cv2.VideoCapture(self.index, cv2.CAP_MSMF)
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(
